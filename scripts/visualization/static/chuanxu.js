@@ -3,6 +3,9 @@
   "use strict";
   var root = document.documentElement;
   var build = root.dataset || {};
+  var identityNode = document.getElementById("cx-product-identity");
+  var productIdentity = identityNode ? JSON.parse(identityNode.textContent || "{}") : {};
+  var productBrand = productIdentity.brand_en || "Chuanxu";
   function readPreference() {
     try { return window.localStorage; } catch (_) { return null; }
   }
@@ -10,8 +13,8 @@
   var query = new URLSearchParams(window.location.search);
   var queryLang = query.get("cx_lang");
   var queryTheme = query.get("cx_theme");
-  var savedLang = queryLang || (storage && (storage.getItem("cx-lang") || storage.getItem("lang")));
-  var savedTheme = queryTheme || (storage && (storage.getItem("cx-theme") || storage.getItem("theme")));
+  var savedLang = queryLang || (storage && (storage.getItem("cxLang") || storage.getItem("cx-lang") || storage.getItem("lang")));
+  var savedTheme = queryTheme || (storage && (storage.getItem("cxTheme") || storage.getItem("cx-theme") || storage.getItem("theme")));
   var lang = savedLang === "en" ? "en" : "zh";
   var theme = savedTheme === "dark" ? "dark" : "light";
   var valueLabels = {
@@ -112,11 +115,20 @@
     return '<svg aria-hidden="true"><use href="/static/chuanxu-icons.svg#' + name + '"></use></svg>';
   }
   function chosenLogo(onDark) {
+    if (productIdentity.brand_key === "agentx") return productIdentity.logo;
     if (onDark || theme === "dark") return asset(lang === "zh" ? "chuanxu-logo-zh-on-dark.svg" : "chuanxu-logo-en-on-dark.svg");
     return asset(lang === "zh" ? "chuanxu-logo-zh.svg" : "chuanxu-logo-en.svg");
   }
+  function markAgentxLogo(image) {
+    if (productIdentity.brand_key === "agentx") image.classList.add("cx-agentx-lockup");
+    return image;
+  }
   function syncLogos() {
-    document.querySelectorAll(".cx-lockup, .cx-auth-lockup").forEach(function (img) {
+    var selector = productIdentity.brand_key === "agentx"
+      ? ".cx-lockup, .cx-auth-lockup, .portal-lockup, .login-brand img"
+      : ".cx-lockup, .cx-auth-lockup";
+    document.querySelectorAll(selector).forEach(function (img) {
+      markAgentxLogo(img);
       img.src = chosenLogo(!!img.closest(".sidebar"));
     });
   }
@@ -124,7 +136,7 @@
     lang = next === "en" ? "en" : "zh";
     root.setAttribute("data-lang", lang);
     root.setAttribute("lang", lang === "zh" ? "zh-CN" : "en");
-    try { if (storage) { storage.setItem("cx-lang", lang); storage.setItem("lang", lang); } } catch (_) {}
+    try { if (storage) { storage.setItem("cxLang", lang); storage.setItem("cx-lang", lang); storage.setItem("lang", lang); } } catch (_) {}
     document.querySelectorAll("[data-zh]").forEach(function (el) { el.hidden = lang !== "zh"; });
     document.querySelectorAll("[data-en]").forEach(function (el) { el.hidden = lang !== "en"; });
     document.querySelectorAll("[data-ph-zh]").forEach(function (el) {
@@ -143,8 +155,8 @@
   function applyTheme(next) {
     theme = next === "dark" ? "dark" : "light";
     root.setAttribute("data-theme", theme);
+    try { if (storage) { storage.setItem("cxTheme", theme); storage.setItem("cx-theme", theme); storage.setItem("theme", theme); } } catch (_) {}
     try { window.dispatchEvent(new CustomEvent("chuanxu-theme-change", { detail: { theme: theme } })); } catch (_) {}
-    try { if (storage) { storage.setItem("cx-theme", theme); storage.setItem("theme", theme); } } catch (_) {}
     syncLogos();
     document.querySelectorAll(".cx-theme-toggle").forEach(function (button) {
       var label = theme === "dark" ? (lang === "zh" ? "亮色" : "Light") : (lang === "zh" ? "暗色" : "Dark");
@@ -154,11 +166,33 @@
     });
   }
   function addLogo() {
+    if (productIdentity.brand_key === "agentx") {
+      document.querySelectorAll(".sidebar-brand, .cx-chat-brand").forEach(function (container) {
+        if (container.querySelector(".cx-agentx-brand")) return;
+        var brand = document.createElement("span");
+        brand.className = "cx-agentx-brand";
+        var logo = document.createElement("img");
+        logo.className = "cx-lockup cx-agentx-lockup";
+        logo.src = chosenLogo(false);
+        logo.alt = "OpenTenBase";
+        var name = document.createElement("strong");
+        name.className = "cx-agentx-product-name";
+        name.textContent = productBrand;
+        brand.appendChild(logo);
+        brand.appendChild(name);
+        container.insertBefore(brand, container.firstChild);
+      });
+      document.querySelectorAll(".login-brand, .portal-brand").forEach(function (container) {
+        container.classList.add("cx-agentx-auth-brand");
+      });
+      return;
+    }
     var sidebar = document.querySelector(".sidebar-brand");
     if (sidebar && !sidebar.querySelector(".cx-lockup")) {
       var image = document.createElement("img");
       image.className = "cx-lockup";
-      image.alt = "Chuanxu";
+      markAgentxLogo(image);
+      image.alt = productBrand;
       image.src = chosenLogo(true);
       sidebar.insertBefore(image, sidebar.firstChild);
     }
@@ -166,7 +200,8 @@
     if (chatBrand && !chatBrand.querySelector(".cx-lockup")) {
       var chatLogo = document.createElement("img");
       chatLogo.className = "cx-lockup";
-      chatLogo.alt = "Chuanxu";
+      markAgentxLogo(chatLogo);
+      chatLogo.alt = productBrand;
       chatLogo.src = chosenLogo(false);
       chatBrand.insertBefore(chatLogo, chatBrand.firstChild);
     }
@@ -174,7 +209,8 @@
     if (auth && !auth.querySelector(".cx-auth-lockup")) {
       var authLogo = document.createElement("img");
       authLogo.className = "cx-auth-lockup";
-      authLogo.alt = "Chuanxu";
+      markAgentxLogo(authLogo);
+      authLogo.alt = productBrand;
       authLogo.src = chosenLogo(false);
       // Keep the localized product name rendered by the template below the logo.
       auth.insertBefore(authLogo, auth.firstChild);
@@ -188,7 +224,9 @@
     var db = build.cxDb || "Chuanxu";
     var tier = build.cxTier || "";
     var version = build.cxVersion || "";
-    meta.textContent = [db, tier, version ? "v" + version : ""].filter(Boolean).join(" / ");
+    meta.textContent = (productIdentity.brand_key === "agentx"
+      ? [version ? "v" + version : ""]
+      : [db, tier, version ? "v" + version : ""]).filter(Boolean).join(" / ");
     bar.appendChild(meta);
   }
   function addPlatformName() {
@@ -257,7 +295,9 @@
   };
   // Compatibility pages use the same authorized directory as the Dashboard.
   function agentSelect(input) {
-    if (input.dataset.agentPicker) return;
+    // React owns its exact hidden selected identity. Replacing it duplicates
+    // the selector and breaks controlled state and form submission.
+    if (input.type === 'hidden' || input.closest('#root') || input.dataset.agentPicker) return;
     input.dataset.agentPicker = '1';
     var wrap = document.createElement('div');
     var search = document.createElement('input');

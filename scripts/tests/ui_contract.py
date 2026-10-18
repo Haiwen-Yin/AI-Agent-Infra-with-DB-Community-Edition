@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html.parser
+import json
 import re
 import subprocess
 import tempfile
@@ -146,13 +147,19 @@ def validate_template(path: Path, static_dir: Path, generated: bool = False) -> 
         if value and not _resolve_local_asset(static_dir, value):
             issues.append(f"{name}: non-local {tag} asset {value}")
     scripts = re.findall(
-        r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script>",
+        r"<script\b(?![^>]*\bsrc=)([^>]*)>(.*?)</script>",
         text,
         flags=re.DOTALL | re.IGNORECASE,
     )
-    for index, script in enumerate(scripts, 1):
+    for index, (attributes, script) in enumerate(scripts, 1):
         if script.strip():
-            issues.extend(_check_javascript(script, f"{name}#script{index}"))
+            if re.search(r'type=[\"\x27]application/json[\"\x27]', attributes, flags=re.I):
+                try:
+                    json.loads(script)
+                except ValueError:
+                    issues.append(f"{name}#script{index}: invalid JSON data block")
+            else:
+                issues.extend(_check_javascript(script, f"{name}#script{index}"))
     return issues
 
 

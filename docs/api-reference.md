@@ -1,1186 +1,180 @@
-# API Reference - AI Agent Infra with DB v4.5.2
-
-## Runtime Host Provisioning APIs
-
-- `POST /api/platform/managed-nodes` registers a managed host. Set
-  `trust_mode=ONE_USE_PASSWORD` to submit an `ssh_password` for this request
-  only; the service validates presence and never persists or audits the secret.
-- `GET /api/platform/runtime-hosts` lists credential-free Host Manager and
-  bootstrap status.
-- `POST /api/platform/managed-nodes/{node_id}/runtime-preflight` records
-  structured Host Manager evidence and its digest.
-- `POST /api/platform/managed-nodes/{node_id}/complete-runtime-bootstrap`
-  records verified bootstrap, recovery channel, disabled remote root login,
-  and the reserved UID/GID range.
-- `POST /api/platform/runtime-identity-leases` allocates one non-root runtime
-  identity to an Agent Instance.
-- `DELETE /api/platform/runtime-identity-leases/{lease_id}` releases an
-  identity only after its runtime contract is no longer active.
-
-These endpoints require `hosts.read` or `hosts.manage`. They never expose a
-root credential or arbitrary shell operation.
-
-## v4.4.10 Model Usage And Wallboard APIs
-
-All routes require an authenticated scoped session. The forwarding route uses
-the selected database-backed LLM Provider Profile; callers cannot override its
-provider URL. Usage and wallboard responses omit prompts, generated content,
-provider keys, gateway secrets, and raw audit payloads.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/model-gateway/completions` | POST | Forward a bounded streaming or non-streaming chat completion and record safe usage metadata. |
-| `/api/model-gateway/routing` | GET | Read effective direct/gateway selections and the platform-generated distribution address for a Provider Profile. |
-| `/api/model-gateway/routing` | PUT | Persist independent direct/gateway selections with a required compliance reason; the server ignores client relay addresses. |
-| `/api/model-gateway/credentials` | POST | Issue a scoped gateway credential; plaintext is returned once and only its digest is retained. |
-| `/api/model-gateway/credentials/{credential_id}/revoke` | POST | Revoke a gateway credential with an audit reason. |
-| `/api/model-usage/summary` | GET | Return bounded authorized provider/model Token, provenance, cost, and last-seen aggregates. |
-| `/api/wallboard` | GET | Return the read-only executive projection with runtime totals and 14-day Token/cost trends. |
-
-Set `CX_PUBLIC_BASE_URL` when the externally reachable base differs from the
-request base. The server appends `/api/model-gateway/completions`; routing UI
-displays the resulting address read-only. Direct and gateway modes may both be
-true. Calls made directly to providers remain unobserved unless trusted usage
-evidence is imported through a verified adapter.
-
-External Agent registration accepts `embedding_mode`: `PLATFORM_MANAGED` uses
-the governed platform Embedding gateway after an explicit `embedding.generate`
-grant, while `AGENT_MANAGED` calls an Agent-owned service. Agent-managed
-registration must provide model ID, Contract fingerprint when names differ,
-dimension, distance metric, and normalization; these values are compared with
-the active Contract before credentials are issued. Agent-owned provider URLs
-and secrets are not stored, and Agent-managed identities cannot obtain the
-platform gateway route.
-
-## v4.4.10 Platform Command, Graph, Organization And Knowledge APIs
-
-The v4.4.9 API surface includes the restored entity-relationship graph,
-organization people/Agent projections, and compliance posture state summaries.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/platform/admin-commands/catalog` | GET | Return the database-authoritative command catalog filtered by Principal, Channel, edition, capability, executor, and Security Domain. |
-| `/api/platform/admin-commands/help` | GET | Return deterministic localized help from the command registry without invoking an LLM. |
-
-The protected management Channel projects the same registry into `/platform`
-help and results. Help includes localized name, summary, syntax, required
-parameters, risk, execution mode, and executor state. Direct reads return only
-credential-free control-plane facts. `HEALTH_READ` includes bounded node,
-Agent, LLM, Embedding, runtime, database-dialect, and check-time fields;
-`HEATH_READ` is accepted only as an input alias and is persisted/audited as
-`HEALTH_READ`. Governed proposals return Action Card and approval state but do
-not claim that a mutation ran.
-
-## v4.4.7 Maintenance APIs
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/capabilities` | GET | Return the page and action manifest from one current database authorization snapshot; this is not a permission cache. |
-| `/api/llm-provider-profiles/{profile_id}/probe` | POST | Probe a saved active LLM profile, verify returned model identity, and write `HEALTHY` or `DEGRADED` without returning secrets or provider content. |
-
-## v4.4.3 Security Domain Governance API
-
-All mutations require the authenticated protected Human session, CSRF,
-`domains.manage`, a reason, and an atomic audit record. A Domain binding is
-traceability metadata only; it never grants membership.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/security-domains` | GET/POST | List accessible Domains or create a governed Domain with owner, purpose, classification, and reason. |
-| `/api/security-domains/candidates` | GET | List eligible Human/Agent candidates for explicit membership review. |
-| `/api/security-domains/{id}/members` | GET/POST | Inspect or explicitly set a Domain membership, tier, validity, status, and reason. |
-| `/api/security-domains/{id}/lifecycle` | POST | Activate, suspend, or revoke a Domain with a reason. |
-| `/api/security-domains/{id}/bindings` | GET/POST | Inspect or create an auditable Channel/legacy-group binding. |
-| `/api/security-domains/collaboration-groups` | GET | List active legacy groups and their binding state. |
-| `/api/security-domains/conversion-drafts` | POST | Create a candidate-only conversion draft from one unbound legacy group. |
-| `/api/security-domains/conversion-drafts/{id}` | GET | Read the authorized draft and candidate decisions. |
-| `/api/security-domains/conversion-drafts/{id}/members/{principal}` | POST | Confirm or reject one candidate with a tier, validity, and reason. |
-| `/api/security-domains/conversion-drafts/{id}/apply` | POST | Atomically create the Domain, confirmed memberships, and one active group binding. |
-
-## v4.4.1 Platform Administration API
-
-Platform Administration mutations require the protected Human session, CSRF,
-`platform.manage`, and a reason where indicated. Gateway actions derive the
-Agent and instance exclusively from the authenticated token.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/platform/administration` | GET | Read protected Channel, Admin group, rollout, Skill, and containment state. |
-| `/api/platform/administration/initialize` | POST | Idempotently reconcile legacy bootstrap admin, protected Channel, and default policies. |
-| `/api/platform/admin-enrollments` | GET/POST | List or create separate platform-deployed/external Admin Agent candidates. |
-| `/api/platform/admin-enrollments/{id}/observe` | POST | Bind an identity-proven candidate for observation. |
-| `/api/platform/admin-members/{id}/approve` | POST | Human-approve an observed candidate with a valid distinct weight. |
-| `/api/platform/admin-members/{id}/leader` | POST | Acquire a fenced Leader term for the deterministic eligible candidate. |
-| `/api/platform/session-policies` | GET | Read Dashboard and Portal idle/absolute policy. |
-| `/api/platform/session-policies/{kind}` | PUT | Change one policy with optimistic version and reason. |
-| `/api/platform/containment` | POST | Issue ordered drain/quarantine/termination intent after platform-side isolation. |
-| `/api/platform/upgrades/upload` | POST | Upload a release ZIP. The server validates the manifest, file digests, signature, database, edition, and version, then automatically creates the governed node and Skill distribution plan. |
-| `/api/platform/upgrades/{id}/preflight` | POST | Check verified package compatibility. |
-| `/api/platform/upgrades/{id}/human-approval` | POST | Compatibility route for an explicitly governed high-risk approval flow; the normal upload flow schedules controlled Agent updates automatically. |
-| `/api/platform/upgrades/{id}/rollout` | POST | Compatibility route for manually supplied node plans; the normal upload flow discovers governed nodes automatically. |
-| `/api/platform/upgrades/{id}/nodes/{node}` | POST | Record a permitted node drain/migration/health transition. |
-| `/api/platform/upgrades/{id}/skill-distribution` | POST | Queue safe-point Skill distribution facts. |
-| `/api/gateway/upgrades/vote` | POST | Submit a current-term, current-fence Admin Agent vote. |
-| `/api/gateway/upgrades/skill-pending` | GET | Return only the authenticated Agent's verified Skill update metadata; package contents and secrets are never returned. |
-| `/api/gateway/upgrades/skill-ack` | POST | Acknowledge verified Skill staging and safe-point activation. |
-| `/api/gateway/containment` | GET | Retrieve the caller instance's newest actionable containment command. |
-| `/api/gateway/containment/ack` | POST | Record one bounded cleanup/stop acknowledgement. |
-
-## v4.4.0 Native SDD And Delivery API
-
-All SDD mutations require an authenticated protected session, CSRF, role and
-security-domain checks, an explicit reason where required, and an atomic audit
-record. OpenSpec CLI is optional after baseline handoff.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/sdd/changes` | GET/POST | List or create database-native Changes. |
-| `/api/sdd/changes/{id}` | GET | Read the authorized Change, revision, clauses and evidence. |
-| `/api/sdd/revisions/{id}/clauses` | POST | Add a typed requirement, scenario, acceptance criterion or task clause. |
-| `/api/sdd/clauses/{id}/patch` | POST | Apply an expected-version protected clause patch. |
-| `/api/sdd/revisions/{id}/baseline` | POST | Validate and approve an immutable execution baseline. |
-| `/api/sdd/revisions/{id}/runs` | POST | Compile an approved revision and create a bounded SDD Run. |
-| `/api/sdd/revisions/{id}/graph` | GET | Inspect the deterministic execution-graph projection. |
-| `/api/sdd/evidence` | POST | Record independent Worker/CI evidence and an artifact digest. |
-| `/api/sdd/scm` | POST | Register a local Git/GitHub repository and credential reference. |
-
-Credential values, model reasoning and unrestricted source payloads are not
-returned by these routes. Large code, logs and packages stay in SCM/object
-storage and are referenced by digest.
-
-## v4.3.7 Deployment And Embedding API
-
-Deployment status and evidence are read-only operational views. They do not
-expose arbitrary DDL execution. All mutations require the current protected
-Human session, CSRF, an explicit reason where applicable, scope checks, and
-atomic audit writes.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/platform/deployment/status` | GET | Read sanitized Bootstrap deployment, readiness, and handoff state. |
-| `/api/platform/deployment/verify` | POST | Run postflight verification only; it cannot execute arbitrary SQL. |
-| `/api/embedding/profiles` | GET | Read redacted Profiles. Profile writes are internal to verified platform activation. |
-| `/api/embedding/contracts` | GET | Read immutable Contract versions. Contract writes are internal to verified platform activation. |
-| `/api/embedding/spaces` | GET | Inspect logical vector Spaces. Space writes are internal to verified platform activation. |
-| `/api/embedding/bindings` | GET | Inspect effective bindings. Binding writes are internal to verified platform activation. |
-| `/api/embedding/profiles/{profile_id}/probe` | POST | Run a bounded platform-side compatibility probe. |
-| `/api/gateway/embedding/profiles/{profile_id}/probe` | POST | Accept an authenticated Agent-side direct-mode probe. |
-| `/api/gateway/v1/embeddings` | POST | Generate OpenAI-compatible vectors through the authenticated Agent's effective platform-managed Embedding Binding. Requires the short-lived `embedding.generate` Agent-token scope. |
-| `/api/embedding/access-grants` | GET/POST | List or publish explicit Agent, template, organization, or security-domain Embedding gateway grants. External Agents are denied without a matching active grant. |
-| `/api/gateway/database-endpoint` | GET | Return the authenticated external Agent's scoped database target metadata; the access-token response also carries `database_endpoint`. No password or key is returned. |
-| `/api/gateway/channels/{channel_id}/memory-candidates` | POST | Submit an Agent-owned Channel Memory Candidate. Requires `memory.propose`; durable Artifact promotion remains a Human-governed operation. |
-| `/api/gateway/knowledge` | POST | Create knowledge as the authenticated Agent. Requires `knowledge.write`; defaults to Agent-private and rejects direct `PUBLIC_COMPANY` publication. |
-| `/api/gateway/knowledge/{entity_id}` | GET | Read one knowledge entity through database-authoritative visibility. Requires `knowledge.read`; cross-Agent private reads are denied. |
-| `/api/embedding/access-grants/{grant_id}` | DELETE | Revoke a grant with a reason and invalidate affected Agent access tokens. |
-| `/api/embedding/jobs` | GET | Inspect automated ingestion or re-embedding work. Job creation is internal to verified activation and migration orchestration. |
-| `/api/embedding/jobs/{job_id}` | GET | Read authorized queued, claimed, retry, or terminal job state. |
-
-The local `scripts/embedding_worker.py` claims jobs by database lease and
-fencing token. It accepts only verified writable `PLATFORM_MANAGED` and
-`ENTERPRISE_PROXY` targets; direct and imported vectors are validated at their
-respective write boundary.
-
-An active external Agent requests a short-lived gateway token with the
-`embedding.generate` scope, then uses the token as an OpenAI-compatible API
-key. The client cannot supply a provider URL or change its effective model:
-
-```http
-POST /api/gateway/token
-Content-Type: application/json
-
-{
-  "agent_id": "<registered-agent-id>",
-  "client_secret": "<registered-client-secret>",
-  "security_domain_id": "<authorized-security-domain-id>",
-  "node_id": "<external-agent-node-id>",
-  "scopes": ["embedding.generate"]
-}
-```
-
-The registration Client Secret is displayed once when issued but remains the
-long-lived credential used for token exchange until rotation, expiry, or
-revocation. If the Agent already has an active instance, send its
-`instance_id` instead of asking the token exchange to create one. The response
-contains the new or existing `instance_id` and a five-minute `access_token`.
-
-```http
-POST /api/gateway/v1/embeddings
-Authorization: Bearer <short-lived-access-token>
-Content-Type: application/json
-
-{"model":"bge-m3:latest","input":["first text","second text"]}
-```
-
-For an OpenAI-compatible SDK, set `base_url` to the platform address ending in
-`/api/gateway/v1`, use the short-lived Agent access token as `api_key`, and use
-the model identity from the effective Embedding Contract. Production external
-traffic MUST terminate TLS before reaching the Web service.
-
-External Agent work tokens may additionally request `memory.propose`,
-`knowledge.read`, and `knowledge.write`. Organization-scoped knowledge is
-resolved from the producing Agent owner's current organization closure and
-preserves `hierarchy_depth`. A Channel membership does not grant knowledge
-visibility, and an Agent cannot promote its own Memory Candidate or publish
-company-wide knowledge directly.
-
-## v4.3.6 Native Agent API
-
-The native Agent page requires the database `agent_provisioning` capability
-and the corresponding action permission. Mutations require CSRF, an explicit
-reason, and server-side scope checks.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/platform/native-bootstrap` | GET/POST | Inspect or idempotently run platform-native bootstrap. |
-| `/api/native-agents` | GET | Read scoped native Agent inventory. |
-| `/api/agent-templates` | GET | Read published locked templates. |
-| `/api/native-manifests` | GET | Read versioned, digest-checked built-in Skill/Tool manifests. |
-| `/api/llm-provider-profiles` | GET/POST | Read redacted or create encrypted LLM profiles. |
-| `/api/llm-provider-profiles/{profile_id}/probe` | POST | Probe one saved active profile, verify the returned model identity, and write `HEALTHY` or `DEGRADED` without returning credentials or provider content. |
-| `/api/llm-provider-profiles/{profile_id}` | DELETE | Retire an LLM profile after dependency checks; requires an audited reason and revokes its stored API key ciphertext. This is a logical retirement, not physical deletion. |
-| `/api/platform/managed-nodes/{node_id}` | DELETE | Retire a managed node after runtime, onboarding, storage-binding, Admin HA, and execution dependency checks; requires an audited reason. Bootstrap system nodes cannot be retired. |
-| `/api/deployment-targets` | GET | Read deployment targets and reference adapter contracts. |
-| `/api/agent-provision-requests` | GET/POST | Read scoped requests or submit a human request. |
-| `/api/agent-provision-requests/{id}/decision` | POST | Approve or reject with separated approval and reason. |
-| `/api/native-agents/{id}/activate` | POST | Bind an approved LLM profile and activate an Agent. |
-| `/api/native-agents/{id}/execute` | POST | Queue a bounded execution unit. |
-| `/api/native-executions/{id}` | GET | Read the caller's authorized execution state/result. |
-| `/api/platform/external-agent-registration` | GET/PUT | Inspect or change the new external Skill-first registration policy. |
-
-The protected Platform Administration Channel also accepts the closed typed
-command `/platform AGENT_DRAIN <source_node_id> <destination_node_id>
-<reason>`. It creates an Action Card and requires the configured approval path.
-An approved command marks the source `DRAINING`, rejects new claims, and may
-requeue only expired retryable executions to an active destination. Running
-executions are not forcibly terminated. Retirement is a separate audited
-logical transition; retired resources stay in history but are omitted from
-active inventory.
-
-## v4.3.5 Platform Capability API
-
-The protected Dashboard page uses these endpoints. Both require an
-authenticated Principal with `platform.manage`; mutations also require CSRF,
-a non-empty reason, and the current `expected_version`.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/platform/capabilities` | GET | Read the database-authoritative effective capability state and recent history. |
-| `/api/platform/capabilities/{capability_key}` | PUT | Enable or disable one optional capability with dependency and optimistic-lock checks. |
-
-The backend returns `409 CAPABILITY_DISABLED` for a disabled mapped entry
-point. Package edition availability is checked before database state, so a
-Community database row cannot activate Enterprise code absent from the
-package. Identity, authorization, security, audit writing, Agent identity,
-user management, and capability configuration are mandatory.
-
-## v4.3.4 Agent Compliance API
-
-Enterprise-only compliance endpoints use the authenticated Human session and
-the same `agents.*` authorization/scope checks as Agent inventory. Scoped
-callers receive only their visible Agents; the summary does not disclose
-global counts or Controller queue details. Gateway evidence and remediation
-routes authenticate the calling Agent's current token and instance instead.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/gateway/activate` | POST | Complete pending-Agent credential proof and bind a server-derived baseline. |
-| `/api/gateway/evidence` | POST | Submit bounded, attributed Gateway evidence for the authenticated instance. |
-| `/api/gateway/remediations/{case_id}/respond` | POST | Submit structured remediation evidence; chat text is not an acknowledgement. |
-| `/api/agents/{agent_id}/posture` | GET | Read an authorized Agent's independent registration, runtime, posture, control, and evidence-strength states. |
-| `/api/compliance/summary` | GET | Read scope-filtered posture/finding counts and, for global administrators, Controller health. |
-| `/api/compliance/findings` | GET | List authorized deterministic findings. |
-| `/api/compliance/profiles` | GET/POST | Inspect Profiles or create a constrained draft. |
-| `/api/compliance/profiles/{profile_version_id}` | GET/PATCH | Read original/effective controls, parent sources and mutation schema; edit a draft with `content`, `expected_digest` and `reason`. |
-| `/api/compliance/profiles/{profile_version_id}/validate` | POST | Validate candidate `content` against the current `expected_digest`, schema and inherited locks without saving. |
-| `/api/compliance/profiles/{profile_version_id}/clone` | POST | Create a new draft with `profile_key`, `display_name`, `content`, `expected_digest` and `reason`; preserve source inheritance and reject existing target keys. |
-| `/api/compliance/profiles/{profile_version_id}/publish` | POST | Publish an immutable validated Profile version with a reason. |
-| `/api/agents/{agent_id}/compliance-profile` | POST | Assign a published Profile and reset posture for reactivation. |
-| `/api/agents/{agent_id}/compliance-control` | POST | Apply an authorized, reasoned control state with optimistic version checking. |
-| `/api/compliance/exceptions` | GET/POST | Inspect or request a scoped, expiring exception with compensating controls. |
-| `/api/compliance/exceptions/{exception_id}/{decision}` | POST | A distinct active Human approves, rejects, or revokes an exception with a reason. |
-
-Community packages omit the Enterprise compliance workspace, routes, migration
-steps, Controller, Profile automation, exception, and remediation APIs.
-
-`/api/compliance/summary` posture rows are aggregates keyed by
-`(posture_state, control_state)`. The UI presents these as evidence assessment,
-visible Agent count, and platform enforcement, not as three unrelated metrics.
-`UNKNOWN` means evidence is insufficient for a compliant or violation
-conclusion; only deterministic rules with verified evidence may produce
-`NON_COMPLIANT`.
-
-## v4.3.2 Versioned Memory API
-
-`GET /api/memory` remains compatible and returns only current,
-ordinary-retrievable versions. It never returns archived, quarantined, or
-logically unavailable history by default. All IDs are opaque.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/memory` | GET/POST | List current Memory or create a Family/version one. |
-| `/api/memory/{family_id}` | GET | Read current Family; `?history=true` requests authorized history. |
-| `/api/memory/{family_id}/chain` | GET | Return a bounded authorized relation chain. |
-| `/api/memory/{family_id}/versions` | POST | Publish immutable successor with `expected_version_id`. |
-| `/api/memory/{family_id}/unavailable` | POST | Reasoned logical unavailability; never routine physical deletion. |
-| `/api/memory/{family_id}/quarantine` | POST | Administrator-only fail-closed security quarantine with a required reason. |
-| `/api/memory/{family_id}/candidates` | POST | Submit governed semantic candidate. |
-| `/api/memory/{family_id}/jobs` | POST | Create bounded dry-run or governed organization work. |
-| `/api/memory/snapshots/{snapshot_id}/refresh` | POST | Create a reasoned successor snapshot; the existing Run context remains immutable. |
-| `/api/memory/snapshots/{snapshot_id}/resolve` | GET | Resolve pinned members against immediate security state and governed expiry outcomes. |
-| `/api/memory/candidates/{candidate_id}/activate` | POST | Administrator-only, reasoned activation of an approved candidate as a successor Version. |
-| `/api/memory/jobs/run-once` | POST | Administrator-only execution of one database-leased deterministic job. |
-| `/api/memory/jobs/{job_id}/cancel` | POST | Administrator-only reasoned cancellation of queued or running Job Items. |
-| `/api/memory/jobs/{job_id}/retry` | POST | Administrator-only reasoned requeue of failed or cancelled Job Items. |
-| `/api/memory/jobs` | GET | List authorized Memory jobs. |
-| `/api/memory/candidates` | GET | List authorized review candidates. |
-| `/api/memory/policies` | GET | Read safe effective policy metadata. |
-| `/api/memory/projections/metrics` | GET | Read relational projection backlog and lag-safe health metrics. |
-| `/api/memory/projections/rebuild` | POST | Administrator-only bounded projection rebuild request with a reason. |
-
-Mutation derives actor identity from the authenticated session. Content,
-model output, and client-provided actor fields do not grant authority.
-
-## v4.3.1 Organization Governance
-
-Authenticated organization reads are available at `/api/organization/roots`,
-`/api/organization/graph`, `/api/organization/search`, and
-`/api/organization/nodes/{organization_id}`. Authorization and scope filtering
-occur before nodes, edges, counts, or identifiers are returned.
-
-Semantic drafts use `/api/organization/changes`, the operations endpoint, and
-the `undo`, `redo`, `validate`, `publish`, `submit`, and `withdraw` action
-endpoints. `publish` only accepts validated low-risk changes and requires
-`organizations.changes.publish`. `withdraw` is limited to the author of a
-pending request and atomically restores its unchanged snapshot to `VALIDATED`.
-For a pre-repair orphan whose pending approval row is absent, the same endpoint
-allows only the original author to restore the change and records
-`ORG_CHANGESET_WITHDRAW_ORPHAN_RECOVERY`; it never fabricates an approval
-decision or changes organization facts.
-History and
-directory conflicts use `/api/organization/history` and
-`/api/organization/sync/conflicts`. Mutations require a Human Session, CSRF,
-explicit `organizations.*` permission, and server-side scope validation. See
-`organization-governance.md`.
-
-`submit` returns the durable `approval_id`. Organization requests appear in
-`GET /api/approvals`; `GET /api/approvals/{approval_id}` adds bounded semantic
-operations, validation, impact, risk, reason, and author context. The existing
-`approve` and `reject` endpoints dispatch `ORGANIZATION_CHANGE` decisions to the
-organization service. An ordinary author cannot decide the request; inventory
-rows return `can_decide` and `decision_blocker` so clients can explain that
-boundary before submission. The database-identified protected bootstrap
-`admin` is the only break-glass exception and every self-decision writes
-dedicated emergency audit evidence. Approval publishes the organization
-version in the same transaction; rejection atomically marks both records
-rejected.
-
-> This is a technical document for **Chuanxu (川序)**, the **AI Agent
-> Management Platform**. `AI Agent Infra with DB` is the unified technical project
-> name; database-specific package names identify the adapter and edition.
-
-## v4.3.0 Authentication Contract
-
-`/api/health`, login, and explicit bootstrap endpoints are public. Other API
-and MCP operations require an authenticated session or Bearer identity;
-administrative operations also require the Admin role. Acting Agent identity
-comes from the authenticated context, not a body or query `agent_id`.
-
-## Canonical And Legacy Entry Points
-
-The canonical v4.3.0 network entrypoint is the authenticated FastAPI
-application (`web_app:app`). New integrations should use `/api/auth/*`,
-Principal-aware `/api/users`, `/api/agents`, `/api/enrollment`, `/api/channels`,
-`/api/barriers`, `/api/gateway`, `/api/graphs`, `/api/graph-*`, and
-`/api/governance` routes, or the equivalent documented MCP and Skill workflow.
-The `/app/{page}` shell obtains its page and operation visibility from the same
-Principal capability response.
-
-Existing Dashboard, Portal, and Agent paths that are not claimed by a
-canonical FastAPI route are served through the request-local compatibility
-bridge to `visualization/server.py`. This includes historical login, Portal,
-Agent, and Agent Protocol entry points used by older packages. The bridge keeps
-session, CSRF, Agent identity, and coarse permission checks; it does not open a
-second listener, grant direct database access, or replace the canonical policy
-decision. New clients must not use a legacy route as an authorization bypass.
-
-## Registered Agent And Governance API
-
-Registration is the admission boundary for platform-hosted and external
-Agents. An administrator uses the registration endpoint to issue a one-time
-credential; the Agent then authenticates with `X-Agent-Id` and
-`X-Agent-Token` or the equivalent Skill/MCP credential flow.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/admin/agent/register` | POST | Register or idempotently refresh an Agent |
-| `/api/admin/agent/heartbeat` | POST | Validate an active registration and refresh last-seen time |
-| `/api/agents/registry` | GET | List safe registration metadata |
-| `/api/governance/probe` | GET | Verify Enterprise governance objects |
-| `/api/governance/resources` | GET/POST | Manage the governed resource catalog |
-| `/api/governance/policies` | GET/POST | Manage versioned resource policies |
-| `/api/governance/decide` | POST | Recompute an authorization decision |
-| `/api/governance/approvals` | GET/POST | Create and list N-of-M requests |
-| `/api/governance/approvals/{id}/decision` | POST | Record an authenticated approval decision |
-| `/api/governance/grants` | GET/POST | Issue and list bounded grants |
-| `/api/governance/grants/{id}/revoke` | POST | Revoke a grant with a required reason |
-| `/api/governance/emergency` | GET/POST | Start or inspect emergency control |
-| `/api/governance/emergency/{id}/retry` | POST | Retry only incomplete emergency steps |
-| `/api/governance/audit` | GET | Read governed decision evidence |
-| `/api/governance/evidence/export` | GET | Export scoped, hashed, redacted evidence |
-
-The server derives actor, role, and group claims from the authenticated
-session. Fields such as `approver`, `actor_id`, `role`, or `groups` in a
-request body never authorize a decision. A terminal approval response includes
-`duplicate: true`, `idempotent: true`, `terminal: true`, and
-`result: "ALREADY_TERMINAL"`; repeated individual decisions are similarly
-deduplicated by the database key.
-
-### Human Registration, Enrollment, And Collaboration
-
-The v4.3.0 FastAPI surface resolves the authenticated session to a Human
-Principal. Registration may be `CLOSED`, `APPROVAL`, `INVITE_ONLY`, `DIRECTORY`,
-or `OPEN` according to deployment policy; a newly registered user never gains
-administrative permissions implicitly.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/auth/register` | POST | Submit a human registration request. |
-| `/api/auth/me` | GET | Read the current Principal and effective access summary. |
-| `/api/users` | GET | List only users within the authenticated administrator scope. |
-| `/api/users/{principal_id}/roles` | GET/POST | Inspect or assign a delegated role with a required reason. |
-| `/api/users/{principal_id}/entry-access` | GET/POST | Inspect or set Portal-only versus Portal-and-App admission; changes require a reason and revoke active Sessions. |
-| `/api/organization/options` | GET | Return active organizations within the caller's membership-management scope for governed assignment forms. |
-| `/api/registration/requests/{request_id}/approve` | POST | Approve a registration with a reason and required `organization_id`; account and primary membership commit atomically. |
-| `/api/enrollment/grants` | GET/POST | Create or list one-time Agent Enrollment grants. |
-| `/api/enrollment/redeem` | POST | Redeem a token once and bind the Agent owner and domain. |
-| `/api/channels` | GET/POST | List or create Security Domain-bound Channels. |
-| `/api/channels/{channel_id}/messages` | GET/POST | Read or post attributable messages. |
-| `/api/channels/{channel_id}/members` | GET/POST | Inspect or add active members with a reason. |
-| `/api/barriers` | GET/POST | List or create governed collaboration barriers. |
-| `/api/barriers/{barrier_id}` | GET | Read an authorized barrier and its arrivals. |
-| `/api/barriers/{barrier_id}/decision` | POST | Release or reject with a reason. |
-| `/api/gateway/token` | POST | Exchange an Agent credential for an instance-scoped token. |
-| `/api/gateway/events/claim` | POST | Claim durable Channel deliveries with fencing. |
-| `/api/gateway/events/{delivery_id}/ack` | POST | Acknowledge or fail a claimed delivery. |
-
-Framework-neutral OpenClaw and Hermes request/response conversion is documented
-in [`framework-agent-gateway.md`](framework-agent-gateway.md). The adapter only
-maps these existing routes and never replaces Gateway authentication or
-authorization.
-
-Channel membership never widens database, API, Skill, Tool, model, memory,
-Artifact, or export permissions. Agents must be active registered Principals,
-and external runtimes such as OpenClaw or Hermes use the same Enrollment and
-Gateway contract.
-
-## Execution Control API
-
-```python
-enqueue_job(job_type, agent_id, payload, idempotency_key, requires_approval, max_attempts) -> dict
-get_job(job_id) -> dict | None
-decide_job(job_id, approved, decided_by, reason) -> bool
-cancel_job(job_id, requested_by) -> bool
-claim_job(worker_id, lease_seconds) -> dict | None
-renew_lease(job_id, lease_token, lease_seconds) -> bool
-complete_job(job_id, lease_token, result) -> bool
-fail_job(job_id, lease_token, error, retryable) -> bool
-run_worker_once(worker_id) -> dict | None
-```
-
-Side-effect endpoints return a durable job ID and current approval/execution
-state. The web request does not run an arbitrary command or HTTP call inline.
-
-## Skill Package API
-
-```python
-discover_skills(agent_id, skill_type, runtime, keyword, limit) -> list
-acquire_skill_text(skill_id) -> dict | None
-acquire_skill_full(skill_id, agent_id, session_id) -> dict | None
-materialize_skill(skill_id, install_root) -> dict | None
-```
-
-An uploaded ZIP must contain `SKILL.md`. Versions are immutable; complete
-Markdown, nested paths, package SHA-256, and per-file SHA-256 values are
-preserved. Materialization verifies the installed tree and writes read-only
-files/directories. Equivalent authenticated operations are exposed through
-MCP Skill tools.
-
-## Python API (scripts/lib/)
-
-### memory_api.py
-
-```python
-create_memory(title, content, category, importance, summary, source_agent, owned_by_agent, visibility) -> str
-get_memory(entity_id) -> dict | None
-update_memory(entity_id, **kwargs) -> bool
-delete_memory(entity_id) -> bool
-search_memories(keyword, category, visibility, owned_by_agent, limit, offset) -> list
-get_agent_memories(agent_id, limit) -> list
-count_memories(category) -> int
-add_memory_tags(entity_id, tag_names) -> int
-get_memory_tags(entity_id) -> list
-remove_memory_tag(entity_id, tag_id) -> bool
-```
-
-- `entity_id` is `str` (VARCHAR2(64) via RAWTOHEX(SYS_GUID()))
-- `title` replaces v2.0 `name`; `importance` replaces `priority` (1-10)
-- Removed: `metadata`, `accessible_to`, `tags` (JSON) — use ENTITY_TAGS table
-- Added: `summary`, `source_agent`, `retrieval_count` fields on return dicts
-
-### knowledge_api.py
-
-The authenticated web surface applies the v4.4.10 organization-aware policy
-before returning Knowledge inventory, a single record, graph nodes/edges, or
-retrieval results:
-
-| Route | Method | Purpose |
-|---|---|---|
-| `/api/knowledge/{entity_id}/access-policy` | GET | Inspect the current database policy for an already-authorized record. |
-| `/api/knowledge/{entity_id}/access-policy` | PUT | Set company, organization-subtree, organization-level, or Principal-private scope with an audit reason. |
-| `/api/knowledge/access-options` | GET | Return organization targets visible to the current actor; this is not an authorization bypass. |
-| `/api/knowledge/organization-groups/{organization_id}` | GET | Return governed knowledge policies associated with one authorized organization. |
-
-`ORGANIZATION_SUBTREE` and `ORGANIZATION_LEVEL` evaluate current organization
-closure on every read. `PRINCIPAL_PRIVATE` accepts one Human or Agent Principal.
-Unknown scope, missing required references, stale organization membership, or
-an unauthorized item fails closed.
-
-```python
-create_knowledge(title, content, domain, topic, difficulty, category, importance, summary, owned_by_agent, visibility) -> str
-get_knowledge(entity_id) -> dict | None
-update_knowledge(entity_id, **kwargs) -> bool
-delete_knowledge(entity_id) -> bool
-search_knowledge(domain, topic, keyword, difficulty, limit, offset) -> list
-get_due_reviews(limit) -> list
-record_review(entity_id) -> bool
-add_edge(source_id, source_type, target_id, edge_type, strength, confidence, metadata) -> str
-get_edges(entity_id, direction) -> list
-count_knowledge(domain) -> int
-add_knowledge_tags(entity_id, tag_names) -> int
-get_knowledge_tags(entity_id) -> list
-remove_knowledge_tag(entity_id, tag_id) -> bool
-```
-
-- `add_edge` now requires `source_type` parameter (composite FK)
-- Edge IDs prefixed with `E_`: `'E_' || RAWTOHEX(SYS_GUID())`
-- `source_type` is the ENTITY_TYPE of the source entity (e.g., 'KNOWLEDGE', 'MEMORY')
-- KNOWLEDGE_META fields: domain, topic, difficulty, review_count, last_reviewed, next_review
-- Spaced review: `NEXT_REVIEW = CURRENT_TIMESTAMP + LEAST(POWER(2, REVIEW_COUNT + 1), 30)`
-
-### graph_api.py
-
-```python
-get_neighbors(entity_id, direction, edge_type, min_strength, limit) -> list
-get_reachable(entity_id, max_hops, edge_type, limit) -> list
-get_shortest_path(source_id, target_id, max_hops) -> list | None
-find_similar_entities(entity_id, max_hops, limit) -> list
-get_entity_context(entity_id, depth) -> dict
-get_graph_stats() -> dict
-get_subgraph(entity_ids, include_intermediate) -> dict
-find_communities(entity_type, min_connections, limit) -> list
-graph_search(keyword, entity_type, category, min_importance, limit) -> list
-```
-
-All functions use the `GRAPH_TABLE` SQL operator against `ORACLE_MEMORY_GRAPH`:
-
-| Function | GRAPH_TABLE Pattern | Use Case |
-|----------|-------------------|----------|
-| `get_neighbors` | `MATCH (a)-[e]->(b)` or `MATCH (a)<-[e]-(b)` | One-hop adjacency |
-| `get_reachable` | `MATCH (a)-[e]->{1,N}(v)` | Multi-hop reachability |
-| `get_shortest_path` | `MATCH (a)-[e1]->(v1)-[e2]->...(vn)` | Path finding (max 6 hops) |
-| `find_similar_entities` | `MATCH (a)-[e]->{1,N}(v)` | Graph-proximity similarity |
-| `get_entity_context` | Direct SQL + `get_neighbors` | Full entity context with grouped neighbors |
-| `get_graph_stats` | Direct SQL on ENTITIES/ENTITY_EDGES | Graph statistics and distributions |
-| `get_subgraph` | Direct SQL with IN-list | Subgraph extraction with optional intermediate nodes |
-| `find_communities` | Direct SQL with JOIN | Highly-connected entity clusters |
-| `graph_search` | `MATCH (a) WHERE ...` | Graph-aware search with filtering |
-
-### agent_api.py
-
-```python
-register_agent(agent_id, agent_name, agent_type, description, capabilities, config) -> str
-get_agent(agent_id) -> dict | None
-update_agent(agent_id, **kwargs) -> bool
-decommission_agent(agent_id) -> bool
-heartbeat(agent_id) -> bool
-create_session(agent_id, wm_entity_id, context, owner_user_id, workspace_id, predecessor_session_id) -> str
-end_session(session_id) -> bool
-checkpoint_session(session_id, context_data) -> bool
-get_session_chain(session_id, limit) -> list
-get_active_sessions(agent_id) -> list
-log_access(agent_id, entity_id, access_type, session_id) -> str
-get_access_log(entity_id, agent_id, limit) -> list
-create_collaboration(source_agent_id, target_agent_id, col_type, entity_id, context, strength) -> str
-get_collaborations(agent_id, limit) -> list
-```
-
-- Session IDs: `'SES_' || RAWTOHEX(SYS_GUID())`
-- Access log IDs: `'LOG_' || RAWTOHEX(SYS_GUID())`
-- Collaboration IDs: `'COL_' || RAWTOHEX(SYS_GUID())`
-- AGENT_SESSION is partitioned (LIST+RANGE), ROW MOVEMENT enabled
-- AGENT_COLLABORATION has STRENGTH (0-1) field
-- `create_session` new parameters: `owner_user_id` (session owner), `workspace_id` (workspace binding), `predecessor_session_id` (handoff chain)
-- `checkpoint_session`: Saves a CHECKPOINT context to the session's workspace via `workspace_api.save_context()`
-- `get_session_chain`: Traverses PREDECESSOR_SESSION_ID backwards to return the full session handoff chain
-
-### task_plan_api.py
-
-```python
-create_plan(agent_id, goal, priority, strategy) -> str
-get_plan(plan_id) -> dict | None
-update_plan(plan_id, **kwargs) -> bool
-add_step(plan_id, plan_status, description, step_order, tool_name, tool_input) -> str
-update_step(step_id, **kwargs) -> bool
-get_plan_steps(plan_id) -> list
-add_dependency(source_plan_id, target_plan_id, dep_type) -> str
-get_plan_dependencies(plan_id) -> list
-log_tool_call(plan_id, step_id, tool_name, tool_input, tool_output, status, duration_ms) -> str
-save_snapshot(plan_id, snapshot_type, context_data) -> str
-list_plans(agent_id, status, limit) -> list
-delete_plan(plan_id) -> bool
-```
-
-- Plan IDs: `'PLAN_' || RAWTOHEX(SYS_GUID())`
-- Step IDs: `'STEP_' || RAWTOHEX(SYS_GUID())`
-- `add_step` requires `plan_status` parameter — denormalized TASK_PLANS.STATUS for composite FK
-- TASK_PLANS PK is `(PLAN_ID, STATUS)` with ROW MOVEMENT enabled
-- TASK_STEPS PK is `(STEP_ID, PLAN_ID)`, FK `(PLAN_ID, PLAN_STATUS)` references TASK_PLANS
-- Terminal statuses auto-set `COMPLETED_AT = CURRENT_TIMESTAMP`
-
-### harness_api.py
-
-```python
-create_harness_template(title, summary, content, category, input_schema, output_schema, execution_mode, importance, owned_by_agent, visibility) -> str
-get_harness_template(entity_id) -> dict | None
-update_harness_template(entity_id, **kwargs) -> bool
-delete_harness_template(entity_id) -> bool
-list_harness_templates(category, execution_mode, limit, offset) -> list
-get_template_with_variables(entity_id) -> dict | None
-instantiate_harness_template(entity_id, variable_values, agent_id) -> str
-count_harness_templates(category) -> int
-```
-
-- HARNESS_META columns: `TEMPLATE_VERSION`, `INPUT_SCHEMA` (JSON), `OUTPUT_SCHEMA` (JSON), `EXECUTION_MODE`
-- `execution_mode`: SEQUENTIAL, PARALLEL, CONDITIONAL
-- `instantiate_harness_template`: Creates a TASK_OUTPUT entity with `{variable}` substitution in content, adds USES_HARNESS edge
-- `get_template_with_variables`: Extracts variable definitions from INPUT_SCHEMA JSON properties
-
-### security.py
-
-```python
-DataMaskingService(context_level).mask_text(text) -> str
-DataMaskingService(context_level).mask_dict(data) -> dict
-DataMaskingService(context_level).mask_json(json_string) -> str
-ReversibleEncryption(key).encrypt(plaintext) -> str
-ReversibleEncryption(key).decrypt(ciphertext) -> str
-hash_password(password, salt, iterations) -> (hash, salt_hex)
-verify_password(password, stored_hash, salt_hex, iterations) -> bool
-```
-
-### workspace_api.py
-
-```python
-create_workspace(owner_user_id, name, workspace_type, isolation_mode, metadata) -> str
-get_workspace(workspace_id) -> dict | None
-get_user_workspaces(user_id, status) -> list
-update_workspace(workspace_id, **kwargs) -> bool
-save_context(workspace_id, agent_id, context_type, context_data, session_id, parent_context_id, visibility) -> str
-get_context_chain(workspace_id, limit) -> list
-get_latest_context(workspace_id) -> dict | None
-create_handoff_session(workspace_id, new_agent_id, handoff_data) -> str
-recover_workspace(workspace_id) -> dict
-link_task_to_workspace(workspace_id, plan_id) -> bool
-get_workspace_tasks(workspace_id) -> list
-```
-
-- Workspace IDs: `'WS_' || RAWTOHEX(SYS_GUID())`
-- Context IDs: `'CTX_' || RAWTOHEX(SYS_GUID())`
-- `workspace_type`: CONVERSATION (default), PROJECT, ANALYSIS
-- `isolation_mode`: SHARED (default) or ISOLATED
-- `context_type`: SNAPSHOT, CHECKPOINT, HANDOFF, SUMMARY, RECOVERY
-- `create_handoff_session`: Creates a new AGENT_SESSION linked to the predecessor, saves a HANDOFF context entry, and updates WORKSPACES to point to the new agent/session
-- `recover_workspace`: Returns the complete recoverable state — workspace metadata, context chain (latest 5), active tasks, recent sessions, and scoped entities (ISOLATED mode only)
-- `update_workspace` allowed fields: workspace_name, status, isolation_mode, current_agent_id, current_session_id, summary, metadata
-- `save_context` auto-serializes dict/list CONTEXT_DATA to JSON
-- `save_context` visibility parameter: PRIVATE/SHARED/PUBLIC (default SHARED). Controls cross-agent visibility in collab workspaces: PRIVATE blocks other agents from seeing this context, SHARED allows collab group members to see it, PUBLIC allows all agents to see it. The WS_CTX_AGENT_ACCESS Data Grant enforces this at the database level — agents always see their own context regardless of VISIBILITY.
-
-## PL/SQL API (13 packages: 10 in 2_api.sql + 3 in 6_deep_sec_policy.sql)
-
-### MEMORY_FUSION_ENGINE
-- `fuse_similar_memories(category, min_similarity, dry_run)` — Merge similar memories, inserts SIMILAR_TO edges with `RAWTOHEX(SYS_GUID())` IDs, uses `JSON_OBJECT('key' VALUE val)` syntax
-- `extract_knowledge_from_memories(category, min_count)` — Auto-extract knowledge, creates ENTITIES + KNOWLEDGE_META with composite FK
-- `decay_old_memories(days_threshold, decay_factor)` — Reduce IMPORTANCE (not priority) of old memories
-- `get_fusion_stats() RETURN JSON` — Fusion statistics using `JSON_OBJECT` with `VALUE` syntax
-
-### KNOWLEDGE_BASE_API
-- `schedule_review(entity_id, entity_type)` — Schedule next spaced review (requires both PK components)
-- `record_review(entity_id, entity_type)` — Record review with doubling interval (requires both PK components)
-- `get_due_reviews() RETURN SYS_REFCURSOR` — List pending reviews
-- `get_concept_lineage(entity_id, entity_type) RETURN JSON` — Ancestor/descendant graph using `JSON_OBJECT`/`JSON_ARRAYAGG` with `VALUE` syntax, joins on composite `(SOURCE_ID, SOURCE_TYPE)`
-
-### AGENT_PERMISSION_MANAGER
-- `check_entity_access(agent_id, entity_id) RETURN VARCHAR2` — 'GRANTED'/'DENIED' based on PRIVATE/SHARED/PUBLIC visibility
-- `log_access(agent_id, entity_id, access_type, session_id)` — Insert into ENTITY_ACCESS_LOG with `'LOG_' || RAWTOHEX(SYS_GUID())`
-- `cleanup_expired_sessions()` — Close sessions inactive >300min (ROW MOVEMENT moves rows to inactive partition)
-- `process_collaboration_requests()` — Process collaboration requests
-
-### SESSION_CLEANUP
-- `purge_access_logs(days_to_keep)` — Delete old access logs (partition-aware)
-- `purge_inactive_sessions(days_to_keep)` — Delete old closed sessions
-- `archive_old_entities(days_threshold)` — Archive low-importance memories (IMPORTANCE <= 1)
-- `update_tag_counts()` — Reserved for tag count updates
-
-## Deep Sec Connection Functions
-
-- `set_agent_context(agent_id)` — Set agent identity for Deep Sec End User routing. `None` switches to AIADMIN pool.
-- `get_current_agent_id()` — Get current agent context from thread-local storage
-- `get_end_user_connection(agent_id)` — Get End User connection with Data Grant filtering
-- `get_connection()` — Get AIADMIN pool connection (unrestricted by Data Grants)
-
-**v4.1.0 identity boundary**: Business/Portal requests use only the authenticated
-Agent's independent database identity. They never call
-`set_agent_context(None)` to obtain a Schema Owner connection. Admin routes use
-the separately authenticated Admin connection path.
-
-## Admin API (v3.7.0)
-
-Admin API endpoints for Admin/Agent Separation Architecture. Only available in `admin` or `standalone` mode.
-
-### POST /api/admin/agent/register
-
-Register a Business Agent with admin token. Returns encrypted End User credentials.
-
-**Request:**
-```json
-{
-  "admin_token": "<registration-token>",
-  "agent_name": "business-agent-1",
-  "capabilities": {"type": "research", "skills": ["search", "memory"]}
-}
-```
-
-**Response:**
-```json
-{
-  "agent_id": "AGENT_XXX",
-  "encrypted_credentials": "<base64-encrypted-blob>",
-  "schema": "AIADMIN",
-  "dsn": "//db-host:1521/service"
-}
-```
-
-### POST /api/admin/token/generate
-
-Generate a new admin registration token. Requires AIADMIN session.
-
-**Request:** (empty body or `{}`)
-
-**Response:**
-```json
-{
-  "admin_token": "<new-base64-token>",
-  "expires_at": "2026-06-14T13:00:00Z"
-}
-```
-
-### POST /api/admin/token/rotate
-### GET /api/admin/skill/list
-
-List available skills. Requires admin_token as query parameter.
-
-| Parameter | Location | Required | Description |
-|-----------|----------|----------|-------------|
-| admin_token | query | Yes | Admin registration token |
-| type | query | No | Filter by skill type |
-| runtime | query | No | Filter by runtime |
-| keyword | query | No | Search keyword |
-
-Response: `{"skills": [...]}`
-
-### GET /api/admin/skill/{skill_id}/acquire
-
-Acquire skill content. Requires admin_token as query parameter.
-
-| Parameter | Location | Required | Description |
-|-----------|----------|----------|-------------|
-| skill_id | path | Yes | Skill entity ID |
-| admin_token | query | Yes | Admin registration token |
-| resource | query | No | Set to 1 to include resource ZIP (base64 encoded) |
-
-Response: Skill metadata + text_content + optional resource_zip (base64)
-### POST /api/admin/skill/create
-
-Create a new skill. Requires admin_token in request body.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| admin_token | Yes | Admin registration token |
-| title | Yes | Skill title |
-| skill_name | Yes | Skill name |
-| skill_version | No | Version (default 1.0.0) |
-| skill_type | No | Type (default CUSTOM) |
-| skill_format | No | Format (default TEXT) |
-| text_content | No | SKILL.md content |
-| skill_description | No | Description |
-| runtime | No | Runtime (default PYTHON) |
-| visibility | No | PRIVATE/SHARED/PUBLIC |
-
-Response: `{"skill_id": "ENT_xxx", "skill": {...}}`
-
-### POST /api/admin/skill/update
-
-Update an existing skill. Requires admin_token and skill_id in request body.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| admin_token | Yes | Admin registration token |
-| skill_id | Yes | Skill entity ID |
-| title | No | New title |
-| skill_name | No | New skill name |
-| skill_status | No | ACTIVE/DEPRECATED |
-| visibility | No | PRIVATE/SHARED/PUBLIC |
-
-Response: `{"skill_id": "ENT_xxx", "skill": {...}}`
-
-### POST /api/admin/skill/delete
-
-Delete a skill. Requires admin_token and skill_id in request body.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| admin_token | Yes | Admin registration token |
-| skill_id | Yes | Skill entity ID |
-
-Response: `{"skill_id": "ENT_xxx", "deleted": true}`
-
-### POST /api/admin/skill/upload
-
-Upload resource file for a skill. Requires admin_token, skill_id, filename, and content_base64 in request body.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| admin_token | Yes | Admin registration token |
-| skill_id | Yes | Skill entity ID |
-| filename | Yes | Resource filename |
-| content_base64 | Yes | Base64-encoded file content |
-
-Response: `{"skill_id": "ENT_xxx", "upload": {...}}`
-
-Rotate the admin token. Existing Business Agents must re-register with the new token.
-
-**Request:** (empty body or `{}`)
-
-**Response:**
-```json
-{
-  "admin_token": "<rotated-base64-token>",
-  "expires_at": "2026-06-14T14:00:00Z",
-  "previous_token_invalidated": true
-}
-```
-
-### Admin Token Functions (Python API)
-
-```python
-from scripts.lib.agent_admin_api import generate_admin_token, verify_admin_token
-from scripts.lib.agent_admin_api import encrypt_credential_for_distribution, decrypt_credential_from_distribution
-from scripts.lib.agent_bootstrap import save_agent_config, load_agent_config
-
-# Generate admin token
-token = generate_admin_token()
-# Returns: {"token": "<base64>", "expires_at": "..."}
-
-# Verify admin token
-is_valid = verify_admin_token("<provided-token>")
-# Returns: True/False
-
-# Encrypt credential for distribution
-encrypted = encrypt_credential_for_distribution("end_user_password", admin_token)
-# Returns: base64-encoded encrypted blob
-
-# Decrypt credential from distribution
-password = decrypt_credential_from_distribution(encrypted_blob, admin_token)
-# Returns: plaintext credential string
-
-# Save agent config (encrypted)
-save_agent_config(config_dict, admin_token, "/path/to/agent_config.json")
-
-# Load agent config (decrypted)
-config = load_agent_config(admin_token, "/path/to/agent_config.json")
-```
-
-### POST /api/admin/agent/recover
-
-Recover an agent using a one-time recovery code. Resets End User password to prevent dual-active scenarios.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| admin_token | Yes | Admin registration token |
-| agent_id | Yes | Agent identifier to recover |
-| recovery_code | Yes | One-time recovery code (RC-XXXX-XXXX-XXXX) |
-
-Response: `{"agent_id": "...", "recovered": true, "end_user": {"credential_encrypted": "...", "salt": "..."}}`
-
-**Recovery Process:**
-1. Verify admin_token + recovery_code
-2. Check LAST_SEEN_AT — reject if agent may still be active (< 5 min)
-3. Reset End User password — old password invalidated immediately
-4. Return new encrypted credentials
-
-**Dual-Active Prevention:** Old process cannot reconnect (password changed). Functionally dead even if still running.
-
-### POST /api/admin/skill/request-access (ENT only)
-
-Request a one-time skill access token. Token must be consumed to get download URL.
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| admin_token | Yes | Admin registration token |
-| agent_id | Yes | Agent requesting access |
-| skill_id | Yes | Skill entity ID |
-| session_id | No | Session ID for audit |
-
-Response: `{"token_id": "TKN_xxx", "skill_id": "...", "resource_uri": "...", "expires_at": ...}`
-
-### GET /api/admin/skill/dl/{download_token} (ENT only)
-
-Download skill resource using a valid download token. One-time use — token invalidated after download.
-
-| Parameter | Location | Required | Description |
-|-----------|----------|----------|-------------|
-| download_token | path | Yes | Download token from consume_skill_token |
-
-Response: Resource ZIP file (binary)
-
-## v4.3.0 Graph API
-
-The following routes are part of the integrated Graph surface. They use
-the same authenticated session, registered-Agent identity, policy decision,
-and audit boundary as the rest of the platform. Route availability follows the
-database-authoritative capability matrix: core Graph reads and authorized
-inspection are Production, manifest draft import/SLO/checkpoint-fork surfaces
-are `CONTROLLED`, and disabled capabilities return capability-disabled
-responses. Normal callers must use these service routes rather than direct
-`GRAPH_*` table DML.
-
-### Definitions and Versions
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/graphs` | GET/POST | List or create a Graph Definition. |
-| `/api/graphs/{graph_id}` | GET | Read definition metadata. |
-| `/api/graphs/{graph_id}/versions` | GET/POST | List versions or create a Draft topology. |
-| `/api/graphs/{graph_id}/aliases` | GET/POST | Read or set a governed version alias. |
-| `/api/graphs/{graph_id}/import` | POST | Import canonical JSON as a new Draft. |
-| `/api/graph-versions/{version_id}` | GET | Read a version and topology. |
-| `/api/graph-versions/{version_id}/export` | GET | Export canonical JSON with redaction by default. |
-| `/api/graph-versions/{version_id}/compile` | POST | Validate and persist a deterministic Compiler plan. |
-| `/api/graph-versions/{version_id}/publish` | POST | Publish after validation, reason required. |
-| `/api/graph-versions/{version_id}/archive` | POST | Archive an eligible version, reason required. |
-| `/api/graph-types` | GET | List installed node, edge, reducer, evaluator, and codec types. |
-
-### Runs, State, and Evidence
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/graph-runs` | GET/POST | List or start a run from a published version. |
-| `/api/graph-runs/{run_id}` | GET | Read run status, ready work, and runtime summary. |
-| `/api/graph-runs/{run_id}/state` | GET | Recover current state from Events and Checkpoints. |
-| `/api/graph-runs/{run_id}/snapshot` | GET | Read a bounded diagnostic snapshot. |
-| `/api/graph-runs/{run_id}/evidence` | GET | Export a bounded, redacted evidence snapshot; administrator and `reason` query parameter required. |
-| `/api/graph-runs/{run_id}/nodes` | GET | List Node Runs. |
-| `/api/graph-runs/{run_id}/attempts` | GET | List Worker Attempts and fencing state. |
-| `/api/graph-runs/{run_id}/checkpoints` | GET | List logical checkpoints. |
-| `/api/graph-runs/{run_id}/state-events` | GET | List authoritative State Events. |
-| `/api/graph-runs/{run_id}/transitions` | GET | List immutable routing transitions. |
-| `/api/graph-runs/{run_id}/trace` | GET | Read operational control-flow Trace. |
-| `/api/graph-runs/{run_id}/evaluations` | GET | Read registered evaluator results. |
-| `/api/graph-runs/{run_id}/interventions` | GET | Read human controls and reasons. |
-| `/api/graph-runs/{run_id}/pause` | POST | Pause at a safe barrier. |
-| `/api/graph-runs/{run_id}/resume` | POST | Resume after authorization. A fork paused for a non-repeatable effect additionally requires `resolution: {type: APPROVAL, approval_id}` bound to the child Run, or a recorded `COMPENSATION` evidence reference. |
-| `/api/graph-runs/{run_id}/cancel` | POST | Cancel with immutable reason. |
-| `/api/graph-runs/{run_id}/fork` | POST | Create a checkpoint branch. If the compiled plan contains `NON_IDEMPOTENT` nodes, the child is created as `PAUSED` before its first Ready claim and requires governed approval or compensation. |
-| `/api/graph-runs/{run_id}/migrate` | POST | Migrate a quiescent run to a published version. |
-| `/api/graph-worker/{operation}` | POST | Advertise, claim, heartbeat, checkpoint, complete, or fail work. |
-| `/api/graph/workers` | GET | Inspect registered Worker metadata. |
-| `/api/graph/events` | POST | Receive an authenticated idempotent event. |
-| `/api/graph/events/inbox` | GET | Inspect bounded pending inbound events. |
-| `/api/graph/events/outbox` | GET | Inspect pending outbound events. |
-| `/api/graph/capabilities` | GET | Probe the database graph adapter. |
-| `/api/graph-artifacts` | GET/POST | List or store content by hash reference. |
-
-Run control actions require an authenticated actor and non-empty reason. High
-risk changes are routed through the existing Enterprise resource policy and
-N-of-M approval contracts. State recovery uses the database; the web process
-does not become the source of truth.
-
-Run evidence export is an administrator-only GET operation. It requires a
-non-empty URL-encoded `reason` query parameter and accepts `limit=1..1000`
-(default `500`). The response is redacted, hashed, and linked to a Graph
-Governance Event; it is not a replacement for the Enterprise Audit retention
-or legal-hold workflow.
-
-## v4.3.3 Assurance And Preview API
-
-The assurance routes require the same authenticated session and administrator
-scope as the existing protected Graph views. They expose bounded metadata only.
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/api/graph-assurance/invariants` | GET | Read selected runtime integrity findings. |
-| `/api/graph-assurance/evidence` | GET | Read bounded recovery/evidence metadata. |
-| `/api/graph-dynamic/proposals` | GET/POST | List proposals or create a preview Draft child Version. |
-| `/api/a2a/agent-card` | GET | Read the bounded A2A 1.0.1 Agent Card. |
-| `/api/a2a/tasks` | POST | Create a preview A2A Task mapped to one Graph Run. |
-| `/api/a2a/tasks/{task_id}` | GET | Read an authorized mapped Task. |
-| `/api/a2a/tasks/{task_id}/cancel` | POST | Cancel an authorized Task with a reason. |
-| `/api/telemetry/status` | GET | Read the pinned mapping version and enablement state. |
-
-`POST /api/graph-dynamic/proposals` requires `source_version_id`, a non-empty
-canonical `operations` array, and `reason`; optional `run_id`, `checkpoint_id`,
-and `expected_version` supply fences. It creates a new Draft only. High-risk
-proposals require the existing approval workflow again at publication time.
-
-Preview mutations return a capability-disabled response unless the
-database-authoritative matrix enables them. Dynamic Graph migration, framework
-adapter execution, A2A, and telemetry delivery remain `DISABLED` in the current
-release. Read-only status and bounded public-card discovery may remain
-available to describe that disabled state. The current A2A adapter does
-not expose durable streaming, pagination, callback push, or independent client
-conformance. The telemetry adapter does not send to a Collector in this release;
-it only persists the bounded metadata projection. These limitations are
-intentional and must not be treated as production protocol support.
-
-## Skill Workflow
-
-An external Agent reads the adapter `SKILL.md`, registers once, and uses the
-HTTP or MCP operations below. It never receives or edits database credentials:
-
-1. Discover capabilities and registered types.
-2. Create or import a Draft Graph Definition.
-3. Compile, inspect diagnostics and risk, then publish with a reason.
-4. Start a Run and observe state, nodes, Checkpoints, Trace, and budgets.
-5. For Worker execution, advertise capabilities, claim a Lease Token,
-   heartbeat, checkpoint, and complete/fail using the token.
-6. Use intervention or migration only with an authenticated actor, reason,
-   and applicable policy/approval.
-
-The same workflow is framework-neutral and can be driven by OpenClaw, Hermes
-Agent, or another runtime that can consume `SKILL.md`. The internal v4.2.1
-closure is included in v4.3.0 and is not a separately released API contract.
-
-## v4.4.6 Identity Admission APIs
-
-- `GET /api/auth/registration-policy` returns the current public SELF
-  registration field contract and whether a Human Registration Token is
-  required.
-- `POST /api/auth/register` submits the normalized display name, email,
-  mobile, password, and optional Human Registration Token to the configured
-  approval mode.
-- `GET|POST|DELETE /api/registration/tokens` provides authorized inventory,
-  one-time issue, and revoke operations. Raw Token values are returned only by
-  the successful issue response.
-- `GET /api/auth/external/providers`, `POST /api/auth/external/start`, and
-  `POST /api/auth/external/callback` expose the provider-neutral transaction
-  boundary. A validated callback still requires an approved binding and normal
-  MFA, entry, role, scope, and organization admission.
-
-Provider-specific adapters must validate issuer, audience, signature, state,
-nonce, PKCE where supported, exact redirect allowlists, and replay status.
-Unavailable or unvalidated adapters return an unavailable posture and cannot
-create a Session.
-
-Administrative identity controls are exposed separately from public login:
-
-- `GET /api/registration/policy` reads the current field and Token policy.
-- `PUT /api/registration/policy/{context}/{field_key}` changes one field with
-  an expected version and audit reason.
-- `PUT /api/registration/token-policy` changes the one-time registration
-  Token requirement with an expected version and audit reason.
-- `GET /api/users/{principal_id}/portal-connections` returns the bounded
-  connection policy and safe active-session inventory.
-- `PUT /api/users/{principal_id}/portal-connections/policy` changes the
-  per-user Portal limit; `DELETE .../{connection_id}` force-releases one
-  active connection with an audited reason.
-- `GET /api/identity/providers` and `PUT /api/identity/providers` manage the
-  provider-neutral external identity profile. `POST .../{provider_id}/test`
-  returns an unavailable posture until a separately validated adapter is
-  installed. Disabled profiles with no active bindings can be deleted.
-
-## v4.4.10 Model Governance APIs
-
-`POST /api/model-gateway/completions` supports bounded JSON and SSE
-forwarding. Browser calls require CSRF and `model_gateway.forward`; external
-calls use a revocable `cxgw_` Bearer with `model.forward` and optional
-profile/Agent scopes. Quota endpoints manage effective-dated hard or warn-only
-Token/cost policies. An exact successful non-streaming retry replays its
-encrypted snapshot without another Provider dispatch.
-
-`/api/model-finance/*` provides invoice import, reconciliation, append-only
-correction, allocation rules, and idempotent balanced allocation. Chargeback
-requires Enterprise. `/api/model-evidence/*` manages Ed25519 adapter keys and
-accepts signed, ordered, nonce-protected external usage facts.
-
-`/api/wallboard/definitions` manages immutable allow-listed versions. Publish
-and rollback require `wallboard.manage`; `GET /api/wallboard` is read-only and
-returns only the authorized current publication. Every v4.4.10 error contains
-`code`, `message`, `correlation_id`, and `retryable` plus a matching
-`X-Correlation-ID` header.
-
-## v4.4.11 Runtime Isolation And DB4A2A APIs
-
-- `POST /api/runtime-isolation/contracts` validates and records one Agent
-  Instance isolation contract. Verified container/VM claims require all six
-  process, filesystem, IPC, network, resource, and credential boundaries.
-- `GET /api/runtime-isolation/contracts/{agent_id}/{instance_id}` reads the
-  current contract; `POST .../transition` applies version-fenced lifecycle changes.
-- `POST /api/gateway/runtime-heartbeat` compares runtime identity, policy, and
-  rootfs digests. Drift enters `DRAIN`; later Token and work admission fails.
-- `POST|GET /api/db4a2a/dispatches` writes or lists reference-oriented tasks.
-  `POST /api/db4a2a/dispatches/{dispatch_id}/branch` creates a governed child Branch.
-
-A context reference never grants access. The receiver's Principal, Agent
-Instance, organization, Security Domain, and database policies remain active.
-
-## Knowledge and Management APIs
-
-`GET /api/platform/portal-knowledge-policy` requires `platform.manage` and reads
-the database policy and version. `PUT` requires `mode` (`KNOWLEDGE_FIRST` or
-`KNOWLEDGE_ONLY`), boolean `allow_model_supplement`, a list of active model
-`disclosure_profiles`, integer `expected_version`, and a 3-2000 character
-`reason`. Unknown fields and contradictory knowledge-only supplementation are
-rejected. Concurrent changes return 409; mandatory service failures return 503.
-Model disclosure permission never grants access to additional knowledge.
-
-Portal answer behavior is knowledge-first. If the Human and assigned Agent can
-both read matching active Knowledge and the selected profile is approved for
-disclosure, the LLM receives only those authorized sources and returns fresh
-citations (`KNOWLEDGE_GROUNDED`). With no match, `KNOWLEDGE_FIRST` may call the
-model only when supplementation is enabled and labels the answer as general
-model knowledge (`MODEL_SUPPLEMENT`). Without model disclosure approval, matching
-Knowledge remains available as cited extracts (`KNOWLEDGE_EXTRACTS`).
-
-Portal and Channel views render a separate bilingual source notice for
-`MODEL_SUPPLEMENT`, including verifiable history. Channel response metadata is
-derived from authorized persisted execution input, not message references or
-model text; failed and unverifiable executions receive no success label.
-
-Portal pool selection requires an ACTIVE Agent Principal and effective
-`knowledge.read`; a legacy `AGENT_REGISTRY` alias is not enough. Conversation
-removal changes the owned Workspace to `ABANDONED` so retained context and
-audit references remain valid. The client removes a successful deletion from
-the visible list immediately.
-
-Compliance draft mutations reject unknown fields, invalid enum values, null
-controls, duplicate list entries and duplicate aliases. Read the `content_schema`
-in version details for accepted values. Omission means no local override;
-inherited locks remain effective. Validation is a preview, and saving revalidates.
-
-The management command catalog includes `AGENT_DIAGNOSIS_READ`,
-`COMPLIANCE_FINDINGS_READ`, `APPROVAL_STATUS_READ` and `CAPABILITY_CATALOG_READ`.
-The first two require Enterprise compliance capability. Object and Channel
-authorization still applies; finding evidence and Action Card payloads are not
-included in these summaries. Management mutations bind inspection rules and
-content digests to their Action Card and recheck before execution. Cards created
-without this binding must be proposed again. These additions do not constitute
-completion of the full v4.4.13 release acceptance matrix.
+# API reference v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
+
+[简体中文](api-reference_zh.md)
+
+## Authority and current schema
+
+The canonical network application is FastAPI `web_app:app`. Read the running
+service's `/openapi.json` (or `/docs`, where exposed) for exact methods,
+request schemas and response schemas. Retained Dashboard/Portal routes pass
+through the request-local compatibility bridge and do not all appear in the
+FastAPI schema. Their implementation is in
+[visualization/server.py](../scripts/visualization/server.py); canonical routes
+are in [web_app.py](../scripts/web_app.py).
+
+This package supports **oracle, pg, yashandb** and **Community** features. Presence
+of an API name is not authority to invoke it. Every operation rechecks its
+current Principal/instance, resource permissions, Domain and capability state.
+Community physically excludes Enterprise-only implementations.
+
+## Authentication and request conventions
+
+Human login uses `POST /api/auth/login` with `username` and `password`.
+The response and cookie establish a session; `GET /api/auth/me` reports its
+current identity. Retain cookies in a private client and send the returned
+`X-CSRF-Token` for authenticated mutations. Never put credentials in a URL.
+
+`GET /api/auth/registration-policy` reports Human registration policy.
+`POST /api/auth/register` submits the permitted Human application; an accepted
+application is not necessarily an active login. Human registration and external
+Agent Enrollment are independent controls. Logout, password reset, MFA and
+federated login use their dedicated `/api/auth/*` routes.
+
+External Agent calls exchange their issued credential/proof at
+`POST /api/gateway/token` and use the scoped bearer token. Agent and instance
+identity comes from authenticated context, not an arbitrary body identifier.
+Use exact schema fields, content types and bounded inputs. Idempotency keys,
+expected revisions, lease tokens, reasons and approval references are required
+where declared by that operation.
+
+Do not treat an HTTP success as completion of a queued job. Poll the returned
+execution/task identity until a terminal or explicitly unobserved state.
+Permission, conflict, validation and unavailable-capability responses must be
+handled separately; repeated unauthorized calls are not retries.
+
+## Service, identity and administration
+
+| Route or family | Purpose |
+|---|---|
+| `GET /api/health`, `GET /api/ready` | Process product/version versus database/control-plane readiness |
+| `GET /api/capabilities`, `GET /api/runtime/profile` | Current visible identity/edition/runtime capability projection |
+| `/api/platform/capabilities`, `/api/platform/graph-capabilities`, `/api/platform/model-capabilities` | Read and reasoned revision-checked capability management |
+| `/api/platform/administration`, `/api/platform/admin-enrollments` | Protected management membership and enrollment |
+| `/api/platform/session-policies`, `/api/platform/containment` | Session policy and attributed containment outcomes |
+| `/api/platform/upgrades` | Package admission, preflight, separated approval, rollout and Skill distribution |
+| `/api/platform/native-bootstrap` | Native management identity bootstrap/status |
+| `/api/principal-options`, `/api/users`, `/api/organization/*` | Current authorized identity directory and organization projections |
+| `/api/security-domains`, `/api/security-domains/{domain_id}/members` | Domain creation, membership, bindings and lifecycle |
+
+Select Principals by readable name/type; submit the immutable identifier returned
+by the authorized candidate directory. Duplicate display names are not identities.
+Domain membership precedes Channel membership and is not replaced by it.
+
+## External Agent registration and collaboration
+
+1. An authorized Human creates a scoped grant with
+   `POST /api/enrollment/grants`. Read grants at the corresponding GET route.
+2. The external runtime redeems the one-time grant at
+   `POST /api/enrollment/redeem`, storing any one-time secret privately or
+   supplying the configured public-key proof.
+3. Complete credential proof and activation through the advertised Gateway
+   workflow. Request an exact scoped token at `POST /api/gateway/token`.
+   Registration alone does not grant model, tool or data access.
+4. Use `POST /api/gateway/instances` for an authorized Domain/Channel binding.
+   Claim bounded delivery batches with
+   `POST /api/gateway/events/claim` and acknowledge with
+   `POST /api/gateway/events/{delivery_id}/ack` using the claim token.
+5. Send heartbeats, observe containment and handle credential expiry/revocation.
+   Recheck scope before each resource operation.
+
+The root [SKILL.md](../SKILL.md) and
+[framework Gateway guide](framework-agent-gateway.md) explain the client contract.
+A returned external database endpoint is a governed native connection descriptor,
+not a provider key or Schema Owner fallback.
+
+| Route or family | Purpose |
+|---|---|
+| `/api/channels` and `/api/channels/{channel_id}/members` | Authorized Channel inventory, creation and membership |
+| `/api/channels/{channel_id}/messages`, `/threads`, `/summary` | Attributed messages, scoped thread context and summaries |
+| `/api/channels/{channel_id}/actions`, `/api/actions/{action_id}/decision` | Structured proposals and permitted decisions |
+| `/api/barriers`, `/api/barriers/{barrier_id}/arrivals` | Participant snapshots, structured arrival and release |
+| `/api/bridges` | Explicit cross-domain transfer policy |
+| `/api/gateway/channels/{channel_id}/messages` | Agent-token-scoped Channel send |
+| `/api/gateway/barriers/{barrier_id}/arrivals` | Agent-token-scoped arrival report |
+| `/api/gateway/channels/{channel_id}/actions` | Agent-token-scoped structured proposal |
+| `/api/gateway/containment`, `/api/gateway/containment/ack` | Current containment and cooperative cleanup receipt |
+
+Messages that look like an Action or Barrier Arrival do not perform that operation.
+Use the dedicated structured API and its exact idempotency key.
+
+## Work, graph and continuity
+
+| Route or family | Purpose |
+|---|---|
+| `/api/tasks` | Current Task Plan/Step inventory and supported operations |
+| `/api/workspaces`, `/api/branches`, `/api/loops` | Governed work context and bounded iteration |
+| `/api/graphs`, `/api/graph-types`, `/api/graph-versions` | Graph definition/type/version lifecycle |
+| `/api/graph-runs`, `/api/graph-worker`, `/api/graph/events` | Run operations, fenced worker actions and durable events |
+| `/api/graph/all`, `/api/graph/stats`, `/api/graph/search` | Authorized entity relationship projections |
+| `/api/db4a2a/dispatches`, `/api/db4a2a/dispatches/{dispatch_id}/branch` | Reference-oriented dispatch and atomic child Branch |
+| `/api/work-contracts`, `/api/handoffs`, `/api/context/*`, `/api/artifact-candidates`, `/api/context-publications` | Work contracts, sources, handoffs, candidates, review and publication |
+| `/api/agent-extensions/*` | Controlled probes, directory, derivation, graph diagnostics and registered integrations |
+| `/api/native-agents/{agent_id}/execute`, `/api/native-executions/{execution_id}` | Authorized native enqueue and execution status |
+
+A2A/DB4A2A task associations reuse Task Plan/Step and exact execution links,
+fenced attempts, cancellation and unknown-outcome reconciliation. Standard A2A
+transport and database dispatch are independently validated. See
+[DB4A2A](db4a2a.md), [continuity operations](continuity-operations.md),
+[Graph Engineering](graph-engineering.md) and [Agent extensions](agent-extensions.md).
+
+## Knowledge, Memory, Skills and inputs
+
+| Route or family | Purpose |
+|---|---|
+| `/api/knowledge`, `/api/knowledge/inventory` | Authorized Knowledge listing/retrieval |
+| `/api/knowledge/{entity_id}/access-policy` | Current company/organization/private policy and permitted updates |
+| `/api/memory`, `/api/memory/inventory` | Versioned Memory lifecycle and authorized inventory |
+| `/api/memory/{family_id}/versions`, `/chain`, `/candidates` | Immutable successors, provenance traversal and proposals |
+| `/api/memory/snapshots`, `/api/memory/jobs` | Pinned context, bounded durable jobs and recovery |
+| `/api/skills`, `/api/tools` | Authorized immutable Skill versions and tool registry |
+| `/api/tools/{tool_id}/mcp-exposure` | Explicit exposure policy, not execution approval |
+| `/api/platform/builtin-knowledge` | Versioned built-in publication, reindexing and withdrawal |
+| `/api/gateway/knowledge/{entity_id}` | Independent Agent-authorized single Knowledge read |
+
+Candidate creation does not publish truth. Snapshot resolution rechecks current
+sources, digests, validity and authority. Logical unavailability retains history;
+physical erasure is a separate retention/legal-hold workflow. Managed inputs and
+derived context preserve exact source linkage.
+
+## Models, Embedding and governance
+
+| Route or family | Purpose |
+|---|---|
+| `/api/llm-provider-profiles` | Versioned provider configuration and redacted reads |
+| `/api/model-gateway/completions` | Optional governed model forwarding |
+| `/api/model-gateway/credentials`, `/routing`, `/quotas` | Scoped gateway admission, route policy and quotas |
+| `/api/model-usage/summary`, `/api/model-evidence/coverage` | Observed usage and explicit observation gaps |
+| `/api/model-finance/*`, `/api/model-evidence/*` | Attributed financial and verified imported evidence |
+| `/api/wallboard`, `/api/wallboard/definitions` | Read-only management view and separately authorized definitions |
+| `/api/embedding/*` | Profiles, immutable contracts, spaces, bindings and readiness |
+| `/api/gateway/v1/embeddings` | Scoped model-bound Embedding generation |
+| `/api/compliance/*`, `/api/approvals`, `/api/audit` | Enterprise-only policy/evidence/approval/audit-view operations |
+
+Required model and Embedding grants are independent of Agent activation.
+Provider capabilities are demonstrated per configuration revision, not inferred
+from model names. Direct model traffic remains unobserved without validated
+evidence. See [model usage](model-usage-and-wallboard.md) and [security](security.md).
+
+## Portal and compatibility clients
+
+Portal login/chat routes are retained under `/portal/api/*`; the UI is
+`/portal`. Portal allocates eligible local managed Agents and releases its
+own assignments. It does not register external Agents. Portal and Channel
+answers share authorized retrieval and labeled general-model fallback.
+
+Legacy Python APIs are available in `scripts/lib/`. Functions operating on
+private resources require the authenticated context/actor documented by that
+module; importing a function does not grant owner authority. Native stored
+procedures and scheduler SQL differ by backend and are not interchangeable.
+Use the selected package's deployment manifest and native grants.
+
+API behavior must be verified against the current running package. Historical
+route snapshots, older release results and a successful health endpoint do not
+establish current workflow acceptance.
+## Source IP policy
+
+`GET /api/platform/ip-access`, `POST /api/platform/ip-access/preview` and
+`PUT /api/platform/ip-access` require `platform.manage`; writes require CSRF.
+See [policy bodies, source evaluation and recovery](source-ip-access.md).

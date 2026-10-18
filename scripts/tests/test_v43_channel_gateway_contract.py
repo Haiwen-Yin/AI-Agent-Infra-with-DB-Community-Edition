@@ -13,15 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _databases() -> tuple[str, ...]:
     """Use all adapters in the source tree and the one adapter in a package."""
-    manifest = ROOT / "build-manifest.json"
-    if manifest.is_file():
-        try:
-            key = str(json.loads(manifest.read_text(encoding="ascii")).get("database", {}).get("key", ""))
-        except (OSError, ValueError, TypeError):
-            key = ""
-        if key in {"oracle", "pg", "yashandb"}:
-            return (key,)
-    return ("oracle", "pg", "yashandb")
+    from lib.package_layout import databases
+    return databases(ROOT)
 
 
 def _source(path: str) -> str:
@@ -38,7 +31,8 @@ def _source(path: str) -> str:
             if generated_path.is_file():
                 return generated_path.read_text(encoding="utf-8")
     if path.startswith("adapters/") and "/deploy/" in path:
-        generated_path = ROOT / "scripts" / "deploy" / path.split("/deploy/", 1)[1]
+        from lib.package_layout import deployment_dir
+        generated_path = deployment_dir(ROOT, path.split("/")[1]) / path.split("/deploy/", 1)[1]
         if generated_path.is_file():
             return generated_path.read_text(encoding="utf-8")
     raise FileNotFoundError(path)

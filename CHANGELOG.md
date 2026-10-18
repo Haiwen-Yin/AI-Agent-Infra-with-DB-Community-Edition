@@ -1,5 +1,34 @@
 # Changelog
 
+## v5.0.0 - 2026-10-18
+
+- Add administrator-managed IPv4/IPv6 allowlists and denylists with individual
+  IP/CIDR rules, immutable database revisions, atomic audit, direct localhost
+  recovery, explicit proxy trust and generic denial across all web entry points.
+
+- Consolidate Chuanxu Community into one selectable Oracle/PostgreSQL/YashanDB
+  package with shared business code and process-pinned, lazy adapter loading.
+- Introduce independent PostgreSQL-only OpenTenBase AgentX; retain three
+  database-specific Enterprise deliveries, for five packages and seven targets.
+- Use the official OpenTenBase emblem with an adjacent OpenTenBase AgentX name
+  across the independent product's Dashboard, Portal and authentication pages.
+  Keep AgentX authentication footers version-only and omit database edition labels from branding.
+- Bind runtime identity, configuration, offline dependencies, deployment SQL,
+  upgrade compatibility, licensing and file manifests to the product registry.
+- Publish current bilingual product Knowledge without overwriting user-edited
+  historical seeds, and preserve stable JavaScript namespaces across brands.
+- Preserve React Principal selectors when enhancing legacy forms; normalize
+  DB4A2A wire digests to the existing task-continuity ledger contract; restrict
+  POC readiness to explicitly selected, supported backends.
+- Review current model and Agent protocol developments while retaining governed
+  capability decisions, database authorization, typed task continuity and audit.
+- Keep non-member and inactive Channel inspection read-only in the UI while
+  retaining mandatory server authorization for membership and message writes.
+- Synchronize language and theme preferences across Dashboard, Portal and work
+  continuity pages, retaining legacy settings across navigation and reloads.
+- Refresh complete English/Chinese operations, architecture, security and
+  integration guides. Final acceptance and packaging determine the release date.
+
 ## v4.5.2 - 2026-10-06
 
 - Unify standard A2A and database-mediated DB4A2A admissions on the existing

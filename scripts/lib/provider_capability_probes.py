@@ -88,6 +88,12 @@ def observe_json(capability, profile, value):
     message = choices[0].get("message") or {}
     if not isinstance(message, dict):
         raise ValueError("INVALID_COMPLETION")
+    if message.get("refusal"):
+        raise ValueError("PROVIDER_REFUSAL")
+    finish = choices[0].get("finish_reason")
+    allowed_finish = {"stop", "tool_calls"} if capability == "TOOL_PROPOSAL" else {"stop"}
+    if finish not in allowed_finish:
+        raise ValueError("INCOMPLETE_COMPLETION")
     content = message.get("content") or ""
     observation = {"observed_model": str(value["model"]), "finish_reason": str(choices[0].get("finish_reason") or "unknown"),
                    "reasoning_present": bool(message.get("reasoning_content")), "usage": _usage(value.get("usage")),
@@ -126,6 +132,7 @@ def _send(profile, request_payload, timeout, capability):
             return observe_json(capability, profile, json.loads(raw))
         pieces, usage, seen_model = [], {}, ""
         total, first_token_ms, finished, reasoning_present = 0, None, False, False
+        terminal = False
         while True:
             if time.monotonic() - started > timeout:
                 raise TimeoutError("PROBE_DEADLINE")
@@ -143,13 +150,27 @@ def _send(profile, request_payload, timeout, capability):
                 finished = True
                 break
             item = json.loads(data)
+            if not isinstance(item, dict) or item.get("error"):
+                raise ValueError("INVALID_COMPLETION")
+            if item.get("model") and not native_agent_api._llm_model_matches(profile["model_id"], str(item["model"])):
+                raise ValueError("MODEL_MISMATCH")
             seen_model = str(item.get("model") or seen_model)
             usage.update(_usage(item.get("usage")))
             for choice in item.get("choices") or []:
+                if not isinstance(choice, dict) or choice.get("index", 0) != 0:
+                    raise ValueError("INVALID_COMPLETION")
                 delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    raise ValueError("INVALID_COMPLETION")
+                if delta.get("refusal"):
+                    raise ValueError("PROVIDER_REFUSAL")
+                if terminal and (delta.get("content") or delta.get("reasoning_content")):
+                    raise ValueError("INVALID_STREAM_CONTENT")
                 reasoning_present = reasoning_present or bool(delta.get("reasoning_content"))
                 if choice.get("finish_reason"):
-                    finished = True
+                    if choice["finish_reason"] != "stop" or terminal:
+                        raise ValueError("INCOMPLETE_COMPLETION")
+                    terminal = True
                 piece = delta.get("content") or ""
                 if piece:
                     if not isinstance(piece, str):
@@ -163,7 +184,7 @@ def _send(profile, request_payload, timeout, capability):
                         return {"observed_model": seen_model, "first_token_ms": first_token_ms,
                                 "client_stream_closed": True, "provider_cancellation_confirmed": False,
                                 "reasoning_present": reasoning_present}
-        if not finished or not native_agent_api._llm_model_matches(profile["model_id"], seen_model) or "".join(pieces).strip() != "CX_OK":
+        if not finished or not terminal or not native_agent_api._llm_model_matches(profile["model_id"], seen_model) or "".join(pieces).strip() != "CX_OK":
             raise ValueError("STREAM_COMPLETION_MISMATCH")
         return {"observed_model": seen_model, "first_token_ms": first_token_ms, "stream_completed": True,
                 "reasoning_present": reasoning_present, "usage": usage, "output_digest": digest("".join(pieces))}
@@ -205,11 +226,13 @@ def probe(actor, profile_id, capability, parameter_values=None, *, timeout=30):
             # Keep fixed validation codes, never provider output or secrets.
             known = {"MODEL_MISMATCH", "EMPTY_COMPLETION", "INVALID_COMPLETION", "TOOL_PROPOSAL_MISMATCH",
                      "PROBE_ANSWER_MISMATCH", "USAGE_UNAVAILABLE", "STREAM_COMPLETION_MISMATCH",
-                     "RESPONSE_TOO_LARGE", "STREAM_TOO_LARGE", "INVALID_STREAM_CONTENT"}
+                     "RESPONSE_TOO_LARGE", "STREAM_TOO_LARGE", "INVALID_STREAM_CONTENT",
+                     "PROVIDER_REFUSAL", "INCOMPLETE_COMPLETION"}
             code = str(exc) if str(exc) in known else "INVALID_PROBE_RESULT"
         validation_failure = code in {"INVALID_PROBE_RESULT", "MODEL_MISMATCH", "EMPTY_COMPLETION", "INVALID_COMPLETION",
                                      "TOOL_PROPOSAL_MISMATCH", "PROBE_ANSWER_MISMATCH", "USAGE_UNAVAILABLE",
-                                     "STREAM_COMPLETION_MISMATCH", "RESPONSE_TOO_LARGE", "STREAM_TOO_LARGE", "INVALID_STREAM_CONTENT"}
+                                     "STREAM_COMPLETION_MISMATCH", "RESPONSE_TOO_LARGE", "STREAM_TOO_LARGE", "INVALID_STREAM_CONTENT",
+                                     "PROVIDER_REFUSAL", "INCOMPLETE_COMPLETION"}
         observation, status = {"error_code": code}, "UNSUPPORTED" if code.startswith("HTTP_4") or validation_failure else "FAILED"
     observation["latency_ms"] = round((time.monotonic() - started) * 1000)
     def finish(tx):

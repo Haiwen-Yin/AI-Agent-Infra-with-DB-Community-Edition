@@ -1,106 +1,51 @@
-# 川序：Oracle AI Database 26ai 社区版 v4.5.2 中文介绍
+# 川序社区版 v5.0.0
 
-**版本**: v4.5.2
-**日期**: 2026-10-06
-**许可**: Apache License 2.0
+[English](../README.md)
 
-[返回 README](../README.md) · [官方网站](https://db4agent.cn)
+所有版本支持在“平台配置 → 能力与策略 → 访问 IP 限制”中设置 IPv4 / IPv6 白名单或黑名单，支持单个地址及 CIDR 网段，并保留 `127.0.0.1` 本机应急入口。参见[配置与恢复指南](source-ip-access_zh.md)。
 
-## 平台用途
+基于数据库的 AI Agent 管理平台。任务计划、协作关卡、记忆、知识、通用属性图、
+权限和审计记录均以数据库实体保存。外部 Agent 通过受控注册和网关 API 接入；
+Portal 对话分配平台托管的本地 Agent。
 
-合规状态、配置档案、整改例外及恢复流程见[合规操作说明](compliance-operations_zh.md)。
+本包名称为 **AI-Agent-Infra-with-DB-Community-Edition**，版本类型为 **Community**，许可证为
+**Apache-2.0**。支持的数据库标识：**oracle, pg, yashandb**。整合社区版的每个运行
+进程选择一种数据库底座；OpenTenBase AgentX 仅支持 PostgreSQL，三个企业版
+仍分别交付。
 
-工作交接、上下文组装和诊断入口请阅读[完整中文操作说明](continuity-operations_zh.md)，其中包含安装校验、Agent 认证、MCP 配置、命令行操作和当前验收边界。
+## 安装与初始化
 
-川序（Chuanxu）是基于数据库的 AI Agent 管理平台，为企业内部及外部智能体保存身份、组织、知识、记忆、工作上下文、任务状态及治理记录。数据库负责持久状态和数据授权，模型负责推理与生成，Agent 运行进程负责执行。三者凭据和权限分别管理。
+使用 Python 3.14 及以上版本，Linux 的 glibc 不低于 2.34。完整解压软件包并保留
+`vendor/`，在软件包根目录执行以下步骤：
 
-技术项目名为 AI Agent Infra with DB。本包只适配 Oracle AI Database 26ai。社区版与企业版从同一仓库生成，实际可用能力取决于发行版、平台开关和主体权限。
+1. 将 `config.example.json` 复制为仅属主可读写的 `config.json`。整合版应分别
+   选择 `config.oracle.example.json`、`config.pg.example.json` 或
+   `config.yashandb.example.json`。保留明确的 `database.type`，填写数据库连接、
+   会话签名密钥及可选的模型配置。
+2. 执行 `bash scripts/install_offline.sh`。若先安装、后配置，设置
+   `CX_DATABASE_DIALECT` 为受支持的数据库标识。安装器只安装所选底座的驱动
+   依赖和原生客户端。
+3. 将初始管理员密码存入权限为 `0600` 的文件。执行
+   `bash scripts/install_platform.sh initialize --database DB --edition EDITION
+   --version 5.0.0 --config /绝对路径/config.json --admin-password-file
+   /绝对路径/password-file`。将 `DB` 替换为支持的数据库标识，将 `EDITION`
+   替换为 `community` 或 `enterprise`。
+4. 执行 `./start_web_server.sh start`。Dashboard 入口为 `/app/`，Portal 入口
+   为 `/portal`；`/api/health` 返回进程和产品标识，`/api/ready` 检查数据库就绪状态。
 
-## 当前能力说明
+可用 `CX_CONFIG_PATH` 指定外部私有配置文件。`CX_DATABASE_DIALECT` 必须与配置
+一致；缺少选择、选择冲突或数据库不受产品支持时，启动会停止。更换底座需要重启
+并准备独立目标数据库，不会自动搬迁业务数据。
 
-v4.5.2 在 v4.5.1 能力基础上，将标准 A2A 与 DB4A2A 统一关联到数据库任务计划，
-新增幂等 admission、租约与 fencing、未知发送结果（`UNOBSERVED`）恢复、精确上下文
-来源绑定和不可变转换历史。完整使用流程、协议版本、审批和限制见
-[Agent 扩展中文操作说明](agent-extensions_zh.md)。迁移链追加到 101；图的实际副作用
-回放、运行中迁移、任意框架执行与全局自治仍不开放。
+## 使用与扩展
 
-本版本以数据库中的能力矩阵为唯一准入依据，统一管理模型推理、结构化输出、模型工具调用、MCP、A2A 和受控执行。能力状态为 `OFF`（关闭）、`READ_ONLY`（只读）、`PROPOSAL_ONLY`（仅提案）或 `GOVERNED_EXECUTOR`（经治理的执行器），每次变更都需要并发版本和不可变审计记录。MCP 与 A2A 默认关闭；模型生成的写入、策略变更、Agent 控制、外部联系和发布默认只能形成提案，除非当前策略、信任信息和人工审批共同允许。
+- [部署说明](deployment_zh.md)与[迁移指南](migration_zh.md)
+- [架构说明](architecture_zh.md)与[API 参考](api-reference_zh.md)
+- [Agent 扩展](agent-extensions_zh.md)与[DB4A2A](db4a2a_zh.md)
+- [连续性操作](continuity-operations_zh.md)
+- [安全说明](security_zh.md)与[交付验证](release-signing_zh.md)
+- [版本说明](../RELEASE_NOTES_v5.0.0.md)
 
-模型供应商证据采用脱敏、规范化格式，记录模型身份、可见内容、结构化校验、工具调用、用量、延迟、超时、取消、重试和完成状态，不保存隐藏推理内容或完整提示词。直连调用与平台网关可以并存，未被网关观测的直连流量不能被报告为零消耗。各项能力绑定模型配置的确切修订，客户端取消与模型服务确认取消分别记录；具体操作见上述中文说明。
-
-## 功能与边界
-
-| 功能 | 用途 | 使用边界 |
-|---|---|---|
-| 组织与人员 | 组织层级、人员主组织、Agent 责任人和入口权限 | 组织成员关系不授予所有资源权限 |
-| Agent 池 | 模型配置、运行准入、会话分配和健康检查 | 配置记录不等于已有健康执行进程 |
-| 外部 Agent | 一次性注册授权、凭据激活、权限与吊销 | 不分发 schema owner 密码 |
-| 知识 | 全公司、组织子树、组织层级、人员/Agent 私有范围 | 按当前数据库策略过滤，兄弟部门不自动互通 |
-| 记忆 | 稳定族、不可变版本、整理候选和受控遗忘 | 模型输出不是事实或授权证明 |
-| 工作区与分支 | 上下文保存、隔离变化、来源记录和合并 | 合并需要授权与冲突检查 |
-| 任务与循环 | 步骤依赖、工具调用、迭代和停止条件 | 文字计划不能替代执行证据 |
-| 图工程 | 定义、编译、运行、事件、检查点和属性图溯源 | 关系数据保存运行与恢复权威状态 |
-| 安全域与频道 | 明确成员与范围，承载协作消息 | 消息不扩大数据权限 |
-| 协作关卡 | 到达、复核、继续或返工 | 操作按权限和发行版开放 |
-| 模型网关 | 可选转发、用量、配额和账单核对 | 直连与网关可并行，未观测直连不视为零消耗 |
-| 向量嵌入（Embedding） | 统一模型契约、维度、预处理和绑定 | 外部模型须做匹配验证，不只比名称 |
-| 管理大屏 | 登录后只读运行态、模型趋势和覆盖率 | 不提供配置或审批操作 |
-| 企业治理 | 审批、合规姿态、审计及企业身份集成 | 企业版专属模块不作为社区版承诺 |
-
-旧“协作”独立页面已移除。新协作通过安全域、频道、工作区、分支和关卡完成；历史协作组仅为内部兼容记录，不是新授权入口。
-
-## 隔离、图工程与 DB4A2A
-
-本地强隔离运行依赖独立 UID/GID、namespace、cgroup、seccomp 和受保护的 Host Manager。控制面能够启动不等于宿主机通过强隔离准入。阅读 [Linux 兼容性](operations_zh.md) 和 [运行隔离](operations_zh.md)。其他容器、云或 MaaS/SaaS 目标需要适配器与实际环境验证。
-
-DB4A2A 的委派携带上下文引用、版本、摘要和范围，接收 Agent 仍须独立认证授权。它用于共享数据平面的协作，不替代标准 A2A 互操作。具体实现与未完成验证见 [DB4A2A](operations_zh.md) 及发布证据；接口存在不能证明全部不变量均已实测。
-
-图运行时核心和图检查按权限提供。清单草稿导入、SLO 只读及检查点分叉为受控能力；回放、动态图迁移、框架适配器执行、A2A 和 OTLP 当前为禁用状态，不属于本版可启用的交付能力。不能由提示词或 Skill 自动开启。详见 [图工程](operations_zh.md)。
-
-## 数据库适配
-
-向量、全文、Property Graph、关系数据和 PL/SQL；DBA 须准备 PDB、表空间与组件授权。网络加密策略须与 python-oracledb thin/thick 模式匹配。
-
-业务凭据失效时不得回退到部署账户。应用层检查不能替代数据库内部的行级/对象级授权。参见 [最小权限](operations_zh.md)、[安全](operations_zh.md) 和 [架构](operations_zh.md)。不以手工统计的表、函数或索引数量承诺当前能力；实际对象由发行清单和 postflight 核验。
-
-## 从空目标部署
-
-先阅读 [中文运维与部署说明](operations_zh.md)，由 DBA 完成包内 `scripts/deploy/0_oracle_database_prerequisites.sql` 对应的前置操作，准备独立空目标。数据库安装、PDB 创建、恢复与基础设施权限由数据库运维负责。
-
-在解压后的发行包根目录执行：
-
-```bash
-bash scripts/install_offline.sh
-bash scripts/config_wizard.sh
-bash scripts/install_platform.sh initialize \
-  --version 4.5.2 --database oracle \
-  --edition community --config config.json
-bash start_web_server.sh start
-bash start_web_server.sh status
-```
-
-上例适用于社区版；企业版安装包将 `--edition community` 改为 `--edition enterprise`。使用可访问的 Python 3.14 和匹配依赖。初始化按清单执行 SQL、核对迁移记录和部署后检查；不要只运行少数历史 SQL。
-
-配置向导设置数据库连接、Web 监听地址/端口、LLM 地址、模型 ID 和凭据，并执行服务探测。向量嵌入使用统一契约。初始管理员密码由初始化流程输入，不存在通用默认密码；首次初始化不要求客户端备份文件。已有数据按 [中文运维与部署说明](operations_zh.md) 与数据库恢复策略处理。
-
-## Web 与外部接入
-
-使用配置的地址访问管理应用和 Portal。管理页面使用 `/app/monitor` 等 `/app/*` 路由，菜单按发行版和权限显示。不要沿用旧 `/collab`、固定端口或固定登出倒计时。
-
-外部可访问性由监听、反向代理及防火墙共同决定。外部 Agent 按 [SKILL.md](../SKILL.md) 注册；若配置外部数据库地址，注册分发使用对外地址，服务名与目标库一致。公网地址和凭据分别管理，不能包含部署账户密码。
-
-## 运维与进一步阅读
-
-初始化失败应保留脱敏错误、迁移位置和 postflight 结果，按数据库文档修复；不反复清空目标掩盖原因。运行问题先查服务状态、数据库连接、会话、权限和能力开关，再核对模型健康与 Embedding 契约。
-
-数据库、页面、运行隔离分别验收，任何一种通过不能替代其他测试。参见 [中文运维与技术说明](operations_zh.md)。
-
-## 许可与作者
-
-**社区版**：Apache License 2.0
-
-可在 Apache License 2.0 条款下使用、修改和分发。
-
-完整条件见 [LICENSE](../LICENSE)。社区版的 Apache 2.0 不禁止生产使用；企业版商业使用按随包许可确认。企业支持和数据库厂商许可分别确认。
-
-作者：尹海文（Haiwen Yin）。
+模型能力按供应商与模型逐项验证。受控集成继续执行授权、隔离、运行限额及数据库
+审计检查。社区包不包含企业版专属代码和 SQL。人用户自助注册与外部 Agent 注册
+分别配置。

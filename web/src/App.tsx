@@ -55,14 +55,26 @@ import "./app.css";
 import ChannelComposer from "./ChannelComposer";
 import ComplianceProfileDetail from "./ComplianceProfileDetail";
 import PortalKnowledgePolicy from "./PortalKnowledgePolicy";
+import NetworkAccessPolicy from "./NetworkAccessPolicy";
 import ContinuityWorkbench from "./ContinuityWorkbench";
 import PortalContinuity from "./PortalContinuity";
+import { useUIPreferences } from "./uiPreferences";
 
 const GraphRoutePage = lazy(() => import("./pages/GraphPage"));
 
 type Lang = "zh" | "en";
 type Theme = "light" | "dark";
 type Row = Record<string, any>;
+
+const productIdentity: Row = JSON.parse(document.getElementById("cx-product-identity")?.textContent || "{}");
+const productBrand = (lang: Lang) => String(productIdentity[lang === "zh" ? "brand_zh" : "brand_en"] || (lang === "zh" ? "川序" : "Chuanxu"));
+const productLogo = String(productIdentity.logo || "/static/brand/chuanxu-mark.svg");
+const productLogoClass = productIdentity.brand_key === "agentx" ? "cx-product-logo cx-agentx-logo" : "cx-product-logo";
+function ProductWordmark({ lang, theme }: { lang: Lang; theme: Theme }) {
+  return productIdentity.brand_key === "agentx" || lang === "en"
+    ? <strong className={productIdentity.brand_key === "agentx" ? "cx-agentx-name" : undefined}>{productBrand(lang)}</strong>
+    : <img className="cx-brand-wordmark" src={`/static/brand/chuanxu-wordmark-zh${theme === "dark" ? "-on-dark" : ""}.svg`} alt={productBrand(lang)} />;
+}
 
 function choosePrincipal(text: (zh: string, en: string) => string, kind: "" | "HUMAN" | "AGENT" = ""): Promise<string | null> {
   return new Promise(resolve => {
@@ -411,12 +423,7 @@ async function api<T = Row>(
 
 function App() {
   const [page, setPage] = useState(pageFromPath);
-  const [lang, setLang] = useState<Lang>(
-    () => (localStorage.getItem("cxLang") as Lang) || "zh",
-  );
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem("cxTheme") as Theme) || "light",
-  );
+  const { lang, setLang, theme, setTheme } = useUIPreferences();
   const [me, setMe] = useState<Row | null>(null);
   const [capabilities, setCapabilities] = useState<Row | null>(null);
   const [loading, setLoading] = useState(true);
@@ -435,14 +442,6 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("cxTheme", theme);
-  }, [theme]);
-  useEffect(() => {
-    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-    localStorage.setItem("cxLang", lang);
-  }, [lang]);
   useEffect(() => {
     api<Row>("/api/health")
       .then((value) => setReleaseVersion(String(value.version || "")))
@@ -673,7 +672,7 @@ function Header({
   const midpoint = Math.ceil(visibleNav.length / 2);
   const navRows = [visibleNav.slice(0, midpoint), visibleNav.slice(midpoint)];
   return (
-    <header className="cx-header">
+    <header className={`cx-header${productIdentity.brand_key === "agentx" ? " cx-agentx-header" : ""}`}>
       <a
         className="cx-brand"
         href="/app/monitor"
@@ -682,13 +681,13 @@ function Header({
           onNavigate("monitor");
         }}
         aria-label={text(
-          "川序 AI Agent 管理平台",
-          "Chuanxu AI Agent Management Platform",
+          `${productBrand("zh")} AI Agent 管理平台`,
+          `${productBrand("en")} AI Agent Management Platform`,
         )}
       >
-        <img src="/static/brand/chuanxu-mark.svg" alt="" />
+        <img className={productLogoClass} src={productLogo} alt={productIdentity.brand_key === "agentx" ? "OpenTenBase" : ""} />
         <span>
-          {lang === "zh" ? <img className="cx-brand-wordmark" src={`/static/brand/chuanxu-wordmark-zh${theme === "dark" ? "-on-dark" : ""}.svg`} alt="川序" /> : <strong>Chuanxu</strong>}
+          <ProductWordmark lang={lang} theme={theme} />
           <small>
             <span className="cx-brand-product">
               {text("AI Agent 管理平台", "AI Agent Management Platform")}
@@ -885,7 +884,7 @@ function AuthScreen({
   const tokenRequired = Boolean(registrationPolicy?.token_required);
   const registrationClosed = String(registrationPolicy?.mode || "").toUpperCase() === "CLOSED";
   return (
-    <div className={`cx-auth-page${registrationPage ? " registration-page" : ""}`}>
+    <div className={`cx-auth-page${registrationPage ? " registration-page" : ""}${productIdentity.brand_key === "agentx" ? " cx-agentx-auth" : ""}`}>
       <div className="cx-auth-panel">
         <div className="cx-auth-controls">
           <button className="icon-button" type="button" onClick={onTheme} title={text("切换亮暗色", "Toggle theme")} aria-label={text("切换亮暗色", "Toggle theme")}>
@@ -896,9 +895,9 @@ function AuthScreen({
           </button>
         </div>
         <div className="cx-auth-mark">
-          <img src="/static/brand/chuanxu-mark.svg" alt="" />
+          <img className={productLogoClass} src={productLogo} alt={productIdentity.brand_key === "agentx" ? "OpenTenBase" : ""} />
           <div>
-            {lang === "zh" ? <img className="cx-brand-wordmark" src={`/static/brand/chuanxu-wordmark-zh${theme === "dark" ? "-on-dark" : ""}.svg`} alt="川序" /> : <strong>Chuanxu</strong>}
+            <ProductWordmark lang={lang} theme={theme} />
             <span>
               {text("AI Agent 管理平台", "AI Agent Management Platform")}
             </span>
@@ -1009,11 +1008,11 @@ function AuthScreen({
           </div>
         )}
         <p className="cx-auth-foot">
-          {text(
+          {productIdentity.brand_key !== "agentx" && text(
             "身份、上下文、执行和审计边界由数据库持久化。",
             "Database-backed identity, context, execution, and audit boundaries.",
           )}
-          {releaseVersion && <span>{text("版本", "Version")} v{releaseVersion}</span>}
+          {releaseVersion && <span>{productIdentity.brand_key !== "agentx" && `${text("版本", "Version")} `}v{releaseVersion}</span>}
         </p>
       </div>
     </div>
@@ -1091,12 +1090,12 @@ function MfaSetupScreen({
     }
   };
   return (
-    <div className="cx-auth-page">
+    <div className={`cx-auth-page${productIdentity.brand_key === "agentx" ? " cx-agentx-auth" : ""}`}>
       <div className="cx-auth-panel">
         <div className="cx-auth-mark">
-          <img src="/static/brand/chuanxu-mark.svg" alt="" />
+          <img className={productLogoClass} src={productLogo} alt={productIdentity.brand_key === "agentx" ? "OpenTenBase" : ""} />
           <div>
-            {lang === "zh" ? <img className="cx-brand-wordmark" src={`/static/brand/chuanxu-wordmark-zh${theme === "dark" ? "-on-dark" : ""}.svg`} alt="川序" /> : <strong>Chuanxu</strong>}
+            <ProductWordmark lang={lang} theme={theme} />
             <span>
               {text("AI Agent 管理平台", "AI Agent Management Platform")}
             </span>
@@ -1343,12 +1342,13 @@ function PlatformConfigurationPage({
   onCapabilitiesChanged: () => Promise<void>;
   initialSection?: "capabilities" | "deployment" | "operations";
 }) {
-  type CapabilitySection = "capabilities" | "graph" | "registration" | "session";
+  type CapabilitySection = "capabilities" | "graph" | "registration" | "session" | "network-access";
   const capabilitySections: Array<[CapabilitySection, string, string]> = [
     ["capabilities", "功能开关", "Feature switches"],
     ["graph", "图工程配置", "Graph Engineering"],
     ["registration", "外部智能体注册", "External Agent registration"],
     ["session", "会话策略", "Session policies"],
+    ["network-access", "访问 IP 限制", "Source IP access"],
   ];
   type OperationSection = "overview" | "llm-providers" | "model-governance" | "admin-management" | "admission" | "agent-pool" | "upgrade" | "containment";
   const operationSections: Array<[OperationSection, string, string]> = [
@@ -1400,7 +1400,9 @@ function PlatformConfigurationPage({
         {operationSections.map(([key, zh, en]) => <button type="button" role="tab" aria-selected={operationSection === key} className={operationSection === key ? "active" : ""} key={key} onClick={() => setOperationSection(key)}>{text(zh, en)}</button>)}
       </div>}
     </div>
-    {section === "capabilities" && <PlatformCapabilitiesPage lang={lang} text={text} onNotice={onNotice} onCapabilitiesChanged={onCapabilitiesChanged} activeTab={capabilitySection} embedded />}
+    {section === "capabilities" && (capabilitySection === "network-access"
+      ? <NetworkAccessPolicy request={api} text={text} />
+      : <PlatformCapabilitiesPage lang={lang} text={text} onNotice={onNotice} onCapabilitiesChanged={onCapabilitiesChanged} activeTab={capabilitySection} embedded />)}
     {section === "deployment" && <DeploymentModelsPage lang={lang} capabilities={capabilities} text={text} onNotice={onNotice} embedded />}
     {section === "operations" && <PlatformOperationsPage lang={lang} capabilities={capabilities} text={text} onNotice={onNotice} activeTab={operationSection} embedded />}
   </section>;
@@ -6522,6 +6524,10 @@ function Channels({
   const [channelTotal, setChannelTotal] = useState<number | undefined>(undefined);
   const [selected, setSelected] = useState<Row | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useUrlParam("channel");
+  // Global read-all admission does not make this Principal a Channel member.
+  const channelAcceptsWrites = Boolean(selected && String(selected.status).toUpperCase() === "ACTIVE"
+    && selected.member_role && String(selected.member_role).toUpperCase() !== "SYSTEM_ADMIN");
+  const canManageChannelMembers = channelAcceptsWrites && canAction(capabilities, "channels.manage_members");
   const [messages, setMessages] = useState<Row[]>([]);
   const [members, setMembers] = useState<Row[]>([]);
   const [threads, setThreads] = useState<Row[]>([]);
@@ -6737,7 +6743,7 @@ function Channels({
     }
   };
   const send = async (mentions: string[] = []) => {
-    if (!selected || !body.trim() || sendLock.current) return;
+    if (!selected || !channelAcceptsWrites || !body.trim() || sendLock.current) return;
     sendLock.current = true;
     const epoch = channelEpoch.current;
     followLatestRef.current = true;
@@ -6792,7 +6798,7 @@ function Channels({
   };
   const createThread = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || !channelAcceptsWrites || !canAction(capabilities, "channels.write")) return;
     const data = Object.fromEntries(
       new FormData(event.currentTarget).entries(),
     );
@@ -6821,7 +6827,7 @@ function Channels({
   };
   const memberAdd = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || !canManageChannelMembers) return;
     const form = event.currentTarget;
     const data = Object.fromEntries(
       new FormData(form).entries(),
@@ -6849,7 +6855,7 @@ function Channels({
     }
   };
   const memberRemove = async (item: Row) => {
-    if (!selected) return;
+    if (!selected || !canManageChannelMembers) return;
     const reason = askReason(
       text,
       text("移除频道成员", "Remove Channel member"),
@@ -7220,7 +7226,8 @@ function Channels({
             <ChannelComposer key={String(selected.channel_id)} body={body} setBody={setBody}
               members={members} commands={isAdministrationChannel ? commandCatalog : []}
               threads={threads} threadId={threadId} setThreadId={setThreadId}
-              sending={sending} feedback={messageFeedback} lang={lang} text={text} onSend={send} />
+              sending={sending} readOnly={!channelAcceptsWrites || !canAction(capabilities, "channels.write")}
+              feedback={messageFeedback} lang={lang} text={text} onSend={send} />
           </div>
         </div>
       )}
@@ -7287,6 +7294,8 @@ function Channels({
               </p>
               <section className="channel-management-section" aria-label={text("讨论线程", "Discussion threads")}>
               <h3>{text("讨论线程", "Discussion threads")}</h3>
+              {!channelAcceptsWrites && <p className="cx-form-hint channel-readonly-notice">{text("当前频道仅供查看。只有频道处于活动状态且当前用户是有效成员时，才可发送消息或管理讨论与成员。", "This Channel is read-only. Sending messages or managing discussions and members requires an active Channel and current membership.")}</p>}
+              {channelAcceptsWrites && canAction(capabilities, "channels.write") &&
               <form className="channel-thread-form" onSubmit={createThread}>
                 <label className="inline-field">
                   <span>{text("讨论上下文类型", "Discussion context type")}</span>
@@ -7309,7 +7318,7 @@ function Channels({
                   <Plus size={14} />
                   {text("创建讨论线程", "Create discussion thread")}
                 </button>
-              </form>
+              </form>}
               <div className="mini-list">
                 {threads.map((item) => (
                   <button
@@ -7347,7 +7356,7 @@ function Channels({
                     {String(selected.channel_id) === "CH_PLATFORM_ADMINISTRATION" && String(item.principal_type).toUpperCase() === "AGENT" ? (
                       <span className="tag"><ShieldCheck size={12} />{text("不可移除", "Non-removable")}</span>
                     ) : item.member_role !== "OWNER" &&
-                      canAction(capabilities, "channels.manage_members") && (
+                      canManageChannelMembers && (
                         <button
                           className="small-button danger"
                           onClick={() => void memberRemove(item)}
@@ -7358,7 +7367,7 @@ function Channels({
                   </div>
                 ))}
               </div>
-              <div className="channel-member-add">
+              {canManageChannelMembers && <div className="channel-member-add">
               <h4>{text("添加频道成员", "Add Channel members")}</h4>
               <p className="cx-form-hint">{text("按名称搜索已获安全域授权的人员或 Agent，再选择频道角色并填写加入原因。", "Search for people or Agents authorized in this Security Domain, then choose a Channel role and provide an addition reason.")}</p>
               <form className="channel-member-form" onSubmit={memberAdd}>
@@ -7377,7 +7386,7 @@ function Channels({
                   {text("添加", "Add")}
                 </button>
               </form>
-              </div>
+              </div>}
               </section>
             </InfoPanel>
             <InfoPanel title={text("频道优先级", "Channel priority")} text={text}>

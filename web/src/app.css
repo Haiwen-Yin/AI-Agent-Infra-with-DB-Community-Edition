@@ -84,6 +84,11 @@ a {
   height: 39px;
   object-fit: contain;
 }
+.cx-brand img.cx-product-logo.cx-agentx-logo,
+.cx-auth-mark img.cx-product-logo.cx-agentx-logo {
+  flex-shrink: 0;
+  object-fit: contain;
+}
 .cx-brand strong {
   display: block;
   font-size: 23px;
@@ -2927,6 +2932,13 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
   letter-spacing: 2px;
   line-height: 1.05;
 }
+.cx-brand strong.cx-agentx-name,
+.cx-auth-mark strong.cx-agentx-name {
+  font-size: 20px;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+.cx-agentx-auth .cx-auth-mark { padding-top: 42px; }
 .cx-auth-mark span {
   color: var(--muted);
   font-size: 11px;
@@ -2989,6 +3001,7 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
   .cx-auth-return-actions { grid-template-columns: 1fr; }
 }
 .cx-auth-foot { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.cx-agentx-auth .cx-auth-foot { justify-content: center; }
 .cx-form-notice {
   padding: 8px 10px;
   border-left: 3px solid var(--accent);
@@ -3223,6 +3236,10 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
   .cx-brand-product {
     display: none;
   }
+  .cx-agentx-header .cx-brand { gap: 6px; }
+  .cx-agentx-header .cx-brand img.cx-agentx-logo { width: 30px; height: 30px; }
+  .cx-agentx-header .cx-brand strong.cx-agentx-name { font-size: 14px; }
+  .cx-agentx-auth .cx-auth-mark strong.cx-agentx-name { font-size: 18px; }
   .cx-release-version {
     margin-left: 0;
     padding-left: 0;
@@ -3387,4 +3404,46 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 @media (max-width: 780px) {
   .continuity-workbench .operation-explainer-form { grid-template-columns: minmax(0, 1fr); }
   .continuity-workbench .panel, .continuity-workbench fieldset { padding: 14px; }
+}
+/* Source policy forms keep long IPv6 rules and history inside their panel. */
+.ip-access-panel { min-width: 0; }
+.ip-access-panel .configuration-form { grid-template-columns: minmax(0, 1fr); }
+.ip-access-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.ip-access-heading h3 { margin-top: 0; }
+.ip-access-heading p { margin-bottom: 0; }
+.ip-access-heading > button { flex-shrink: 0; }
+.ip-access-recovery { display: flex; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
+.ip-access-recovery > svg { flex-shrink: 0; margin-top: 3px; }
+.ip-access-recovery p { margin: 0; }
+.ip-access-fields { display: grid; gap: 18px; min-width: 0; }
+.ip-access-fields > label, .ip-access-controls > label:not(.checkbox-field) { display: grid; gap: 8px; min-width: 0; }
+.ip-access-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.ip-access-mode-control { grid-template-rows: 24px 40px; }
+.ip-access-enable-toggle { align-self: start; align-items: flex-start; height: 40px; min-height: 40px; gap: 12px; margin-top: 32px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); font-size: 15px; font-weight: 700; line-height: 1.4; }
+.ip-access-enable-toggle > span { line-height: 21px; }
+.ip-access-enable-toggle input[type="checkbox"] { appearance: none; width: 42px; min-width: 42px; max-width: 42px; height: 24px; min-height: 24px; margin: -1px 0 0; padding: 0; flex: 0 0 42px; border: 1px solid var(--line); border-radius: 999px; background: var(--line); position: relative; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.ip-access-enable-toggle input[type="checkbox"]::after { content: ""; position: absolute; width: 18px; height: 18px; top: 2px; left: 2px; border-radius: 50%; background: var(--surface-strong); box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .15s ease; }
+.ip-access-enable-toggle input[type="checkbox"]:checked { border-color: var(--brand); background: var(--brand); }
+.ip-access-enable-toggle input[type="checkbox"]:checked::after { transform: translateX(18px); }
+.ip-access-enable-toggle input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ip-access-fields textarea { width: 100%; box-sizing: border-box; resize: vertical; font-family: ui-monospace, monospace; }
+.ip-access-fields code, .ip-access-source, .ip-access-history td { overflow-wrap: anywhere; }
+.ip-access-guide { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.ip-access-guide-heading { display: grid; gap: 5px; }
+.ip-access-guide-heading h4, .ip-access-guide-heading p { margin: 0; }
+.ip-access-guide-heading p, .ip-access-guide-tip, .ip-access-examples small { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.ip-access-examples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ip-access-examples > div { display: grid; gap: 7px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.ip-access-examples strong { font-size: 13px; line-height: 1.4; }
+.ip-access-examples code { white-space: pre-wrap; padding: 8px; border-radius: 5px; background: #13313a; color: #f0fbff; font: 12px/1.7 var(--font-mono); }
+.ip-access-examples small { display: block; }
+.ip-access-guide-tip { margin: 0; }
+.ip-access-preview { padding: 16px; border: 1px solid var(--line); border-radius: 12px; }
+.ip-access-history { min-width: 0; }
+.ip-access-history summary { cursor: pointer; padding-bottom: 12px; }
+@media (max-width: 700px) {
+  .ip-access-heading { flex-direction: column; }
+  .ip-access-controls { grid-template-columns: minmax(0, 1fr); }
+  .ip-access-enable-toggle { margin-top: 0; }
+  .ip-access-examples { grid-template-columns: minmax(0, 1fr); }
 }

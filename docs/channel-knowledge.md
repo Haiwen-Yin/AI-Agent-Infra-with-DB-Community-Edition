@@ -1,4 +1,6 @@
-# v4.5.2 Channel and Portal knowledge answers
+# v5.0.0 Channel and Portal knowledge answers
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 Portal assigns an approved idle local Agent to a signed-in user; external Agent
 enrollment is a separate workflow. Ordinary Channels dispatch explicit mentions
@@ -23,7 +25,7 @@ Before model dispatch and response publication, source digests, current readers,
 model binding and policy version are rechecked. Historical answers and execution
 results recheck each reader's source access, including newly admitted members.
 Legacy requests lacking policy bindings require a new request, not automatic retry.
-Source regression is not six-edition live or citation-presentation acceptance.
+Source regression does not replace the seven-target database matrix or browser verification of citations.
 
 Diagnose source contents and expiry, both Principals' effective permissions,
 source policy, actual retrieval/input and runtime evidence separately. Replacing
@@ -69,6 +71,7 @@ explicit denials and historical migration checksums. Supply `--plan`,
 `--password-file` and `--reason`; an empty array allows a role-only repair.
 
 Human self-registration and external Agent enrollment are separate controls.
-On the OCI deployment, human accounts are requested from the developer; external
-Agent enrollment remains open under its governed activation/credential flow.
-This is a deployment setting, not a default for all installations.
+An operator may close Human self-registration and require account applications
+while keeping external Agent enrollment open under its governed activation and
+credential flow. Check the current deployment's policy; this is not a universal
+default.

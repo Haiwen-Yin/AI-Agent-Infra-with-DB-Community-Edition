@@ -1,215 +1,127 @@
-# Web Visualization - AI Agent Infra with DB v4.5.2
+# Dashboard and Portal v5.0.0
 
-> This is a technical document for **Chuanxu (川序)**, the **AI Agent
-> Management Platform**. `AI Agent Infra with DB` is the unified technical project
-> name; database-specific package names identify the adapter and edition.
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
-## Server
+[简体中文](visualization_zh.md)
 
-The packaged `web_app:app` serves the Dashboard at `/app`, Portal, and compatibility pages through the authenticated legacy adapter. Start it with the package's `start_web_server.sh`.
+## Start and authenticate
 
-## Selecting people and Agents
+The single FastAPI/Uvicorn entry point `web_app:app` serves Dashboard at
+`/app`, Portal at `/portal`, and authenticated compatibility routes. From an
+initialized package, run `bash start_web_server.sh start`; use `status`,
+`stop`, `restart` or `log` for that installation. Confirm its path and
+port before stopping a service. Configuration and external reachability are
+covered in [deployment](deployment.md).
 
-Operator forms use searchable names and usernames while submitting immutable Principal IDs. Verify the subject type when a person and an Agent share a name. This applies to Channel members, ownership transfer, delegation, branches and other Agent references, including compatibility-page selectors.
+Dashboard and Portal have separate sessions. The login pages link to each
+other and show registration according to the current human-registration
+policy. External Agent registration has an independent policy and lifecycle.
+There is no universal default administrator password. A rejected password and
+an expired authenticated session produce different messages.
 
-Before adding a Channel member, grant membership in that Channel's Security Domain. Then open the Channel management view, search for the member and select the intended person or Agent. Expired, inactive and existing memberships are excluded; Channel admission never grants Domain access. Protected administration Channels retain their management-Agent and role restrictions.
+The shell supports Chinese/English and light/dark themes. Its name, logo,
+edition, database support and version come from the installed product.
+OpenTenBase AgentX has an independent identity and supports PostgreSQL only.
+The Chinese Chuanxu name uses the original vector wordmark. Navigation is
+divided into two ordered rows with balanced destination counts. Narrow
+viewports scroll each row without losing the first destination.
 
-Business Agent owners accept usernames or legacy Principal IDs. Community administrators with the required permission can approve their own requests; Enterprise requires an independent approver. Templates enforce minimum isolation, and approved Agents retain their requested readable names.
+## Dashboard destinations
 
-## Pages
+Destinations are filtered by current server-side capabilities and permissions.
+A missing control never substitutes for an authorization check.
 
-| Page | Route | Description |
-|------|-------|-------------|
-| Knowledge Graph | `/knowledge` | Interactive vis.js graph of KNOWLEDGE entities and edges |
-| Memory Content | `/memory` | Interactive vis.js graph of MEMORY entities and edges |
-| Agent Collaboration | `/agents` | 3-tab dashboard: Agent Registry, Active Sessions, Collaboration Requests |
-| Task Plans | `/tasks` | Status filter, keyword search, accordion plan list with expandable step tables |
-| Property Graph | `/graph` | Graph API explorer for entity context, paths, and communities |
-| Executive Wallboard | `/app/wallboard` | Authenticated read-only platform operating picture with 14-day Token and cost curves |
-| Platform Configuration | `/app/platform` | Platform runtime and inline LLM Provider Profile routing controls |
+| Route | Main operations |
+|---|---|
+| `/app/monitor` | Platform activity and status |
+| `/app/wallboard` | Authenticated read-only operating picture, Token/cost trends and freshness |
+| `/app/agents` | External and native Agent inventory, lifecycle and ownership |
+| `/app/tasks` | Task Plans, Steps, status and execution relationships |
+| `/app/workspaces` | Workspaces and the work-continuity view |
+| `/app/knowledge` | Authorized Knowledge inventory, details and visibility |
+| `/app/memory` | Memory families, versions and lifecycle |
+| `/app/skills` | Skills and the tools catalog |
+| `/app/specs`, `/app/branches`, `/app/loops` | Specifications, branches and iterative work |
+| `/app/graph` | Entity graph, Graph Definitions, Runs and diagnostics |
+| `/app/channels`, `/app/barriers` | Attributable discussions and collaboration decisions |
+| `/app/users`, `/app/organization`, `/app/security-domains` | People, responsibility hierarchy and collaboration grants |
+| `/app/platform` | Capability policies, deployment, model and runtime operations |
+| `/app/approvals`, `/app/compliance`, `/app/audit` | Licensed Enterprise governance views |
 
-All pages share: bilingual UI (zh/en), session auth with auto-logout timer, `/api/stats` sidebar.
+Use `/app/workspaces?view=continuity` for contracts, handoffs, context
+assemblies, candidates and diagnostics. Use `/app/skills?view=tools` for
+tool discovery/import and explicit exposure. [Continuity operations](continuity-operations.md)
+and [Agent extensions](agent-extensions.md) describe complete workflows.
 
-The v4.4.10 executive wallboard combines Agent totals and online/busy/stalled
-state, active Sessions, running Task Plans and Loops, model usage, gateway
-coverage, freshness, and 14-day Token and cost curves. It contains no mutation
-controls. In Platform Configuration, direct and platform-gateway checkboxes are
-independent; a changed row highlights `Confirm`, then requires a compliance
-reason. The platform-generated forwarding address is read-only.
+## People, Agents and Channels
 
-Knowledge uses the same list/graph switch but applies one database-authoritative
-visibility policy to both projections. Opening a Knowledge item exposes the
-company, organization-subtree, organization-level, and Principal-private
-configuration in a wide governed detail drawer. Organization choices come from
-the current organization hierarchy. On narrow screens the operation form
-collapses to one column; no input or action may overflow the drawer.
+Searchable selectors show names, usernames and subject types, and submit exact
+immutable IDs. Same-name subjects require checking their type and username.
+Opening a bounded candidate overlay must not shift the surrounding form.
+Keyboard selection, retry, pagination, removal and stale-search cancellation
+are supported. Typed query text alone is not a valid required selection.
 
-## API Routes
+To add a Channel member, first grant membership in its Security Domain. Then
+open Channel management, search for the eligible member and add it. Expired,
+inactive and existing members are excluded. Threads organize discussions;
+they do not add members or grant Knowledge, model, Skill or Tool access.
+Discussion threads, existing members and member addition have distinct panels.
 
-| Route | Method | Description |
-|-------|--------|-------------|
-| `/api/health` | GET | Health check (no auth required) |
-| `/api/ready` | GET | Database/control-plane readiness; returns 503 until the current schema is usable |
-| `/api/knowledge` | GET | Knowledge graph JSON (nodes + edges) |
-| `/api/knowledge/refresh` | GET | Force refresh knowledge cache |
-| `/api/memory` | GET | Memory graph JSON (nodes + edges) |
-| `/api/memory/refresh` | GET | Force refresh memory cache |
-| `/api/agents` | GET | Agent registry, sessions, collaborations JSON |
-| `/api/tasks` | GET | Task plans + steps JSON (query params: `status`, `keyword`) |
-| `/api/stats` | GET | Entity counts by type + edge count |
-| `/api/login` | POST | Authenticate (form: username + password) |
-| `/api/logout` | GET | Clear session cookie, redirect to login |
-| `/api/graph/neighbors` | GET | Graph neighbors for entity (param: `entity_id`, `direction`) |
-| `/api/graph/path` | GET | Shortest path between entities (params: `source_id`, `target_id`) |
-| `/api/graph/context` | GET | Entity context with grouped neighbors (param: `entity_id`) |
-| `/api/graph/stats` | GET | Graph statistics (vertex/edge counts, distributions) |
-| `/api/graph/search` | GET | Graph-aware search (params: `keyword`, `entity_type`, `category`) |
-| `/api/graph/subgraph` | GET | Subgraph extraction (param: `entity_ids`, `include_intermediate`) |
-| `/api/graph/communities` | GET | Community detection (params: `entity_type`, `min_connections`) |
+An explicit Agent mention requires an eligible, active member with an approved
+model, deployment target and template-required isolation. Platform Agent names
+remain in English for mentions. Enterprise provides a separate Compliance
+Agent. A proposal, queued execution, completed response and failed dispatch are
+different states. The client updates one stable streaming response row and
+retains manual scroll position.
 
-## Graph API Endpoints
+## Portal
 
-The `/api/graph/*` endpoints wrap `graph_api.py` functions, providing Property Graph visualization and analysis:
+Portal assigns an eligible local managed Agent from the available pool.
+External Agent enrollment does not supply the Portal pool. The current user
+and assigned Agent must both be authorized to read each Knowledge source.
+Matched answers carry citations; general-model supplementation is separately
+labeled when policy permits it. Ambiguous or unrelated questions must not be
+answered by copying unrelated product Knowledge.
 
-- **Neighbors**: One-hop adjacency with direction filtering and edge type/strength constraints
-- **Path**: Shortest path between two entities (up to 6 hops) using GRAPH_TABLE
-- **Context**: Full entity view with neighbors grouped by type and edge type
-- **Stats**: Graph-wide statistics including vertex/edge counts, type distributions, average degree
-- **Search**: Graph-aware entity search with importance filtering
-- **Subgraph**: Extract a subgraph by entity ID list, optionally including intermediate nodes
-- **Communities**: Find highly-connected entity clusters
+The user can start a conversation, select an allowed model, inspect authorized
+Knowledge, use work-continuity entry points and release the assigned Agent.
+Exit/logout releases the connection and its slot; expiry follows the
+server-issued lease. See [channel and knowledge answers](channel-knowledge.md).
 
-## UI Column Updates (v3.4.0)
+## Platform configuration
 
-v3.4.0 renamed several columns visible in the UI:
+Capabilities, Graph posture, external registration and session policies have
+separate subviews. Runtime operations cover provider profiles, model usage,
+Admin Agent admission/management, Agent Pool, signed upgrade/Skill distribution
+and emergency containment. Deployment includes model/embedding configuration.
 
-| v2.0 UI Label | v2.1 UI Label | Field |
-|---------------|---------------|-------|
-| Name | Title | ENTITIES.TITLE |
-| Priority | Importance | ENTITIES.IMPORTANCE (1-10) |
-| Tags (JSON) | Tags (table) | TAGS.TAG_NAME via ENTITY_TAGS |
-| Metadata | *(removed)* | No longer displayed |
-| Accessible To | *(removed)* | Replaced by visibility badge |
+Direct and gateway routing switches are independent. Draft changes require an
+explicit confirmation and reason; the generated forwarding address stays
+read-only. Health requires an observed completion from the configured model.
+The wallboard has no mutation controls and distinguishes empty, stale,
+unavailable and partially observed usage.
 
-New columns displayed:
-- **Summary**: Entity summary text
-- **Source Agent**: Creating agent ID
-- **Retrieval Count**: Access counter
-- **Execution Mode**: On harness templates (SEQUENTIAL/PARALLEL/CONDITIONAL)
+Forms keep labels, hints and buttons within their panels. Governed dense
+details use a wider drawer that collapses to one column on narrow screens.
+Long names and IDs wrap or scroll within their own control. Hiding overflow
+does not count as a layout fix. All visible status values have localized labels.
 
-## Agent Collaboration Page
+## APIs, security and diagnostics
 
-Three tabbed sections:
+New clients use authenticated `/api/auth/*`, resource and Gateway contracts
+from the [API reference](api-reference.md). `/api/health` reports the
+process/version; `/api/ready` checks database/control-plane readiness and
+returns 503 while unavailable. Compatibility handlers run in-process with the
+same authorization boundary; they do not start an independent server.
 
-- **Agent Registry** — Table with Agent ID, Name, Type, Status (colored badge), Active Sessions count, Last Seen, Created timestamp
-- **Active Sessions** — Recent 50 sessions with Session ID (truncated), Agent Name, Active (Y/N badge), Start Time
-- **Collaboration Requests** — Recent 50 requests with From/To agent names, Type, Entity ID, Strength, Created timestamp
+Graph traversals use the selected adapter and current visibility policy.
+They must not advertise Oracle syntax as a requirement for every backend.
+A relationship edge is never a data grant.
 
-Status badges: ACTIVE=green, INACTIVE=gray, SUSPENDED=orange, DECOMMISSIONED=red.
-
-## Task Plans Page
-
-- **Top bar**: Status filter dropdown (ALL/PENDING/RUNNING/SUCCESS/FAILED/CANCELLED/BLOCKED), keyword search input, summary stat badges
-- **Plan list**: Accordion-style cards showing Plan Name, Status badge, Goal, Priority, Progress, Created, Completed timestamps
-- **Step details**: Click a plan to expand its step table — Order, Step Name, Action, Status badge, Started, Completed, Error message
-
-## UTF-8 Encoding Fix
-
-oracledb thin mode returns Chinese characters from AL32UTF8 databases with double-encoding (UTF-8 bytes interpreted as Latin-1 code points). The `_fix_encoding()` function auto-detects this:
-
-1. If string contains CJK characters (`ord >= 0x4E00`) → already correct, skip
-2. If string contains Latin-1 range chars (`0x80-0xFF`) but no CJK → apply `bytes([ord(c)]).decode('utf-8')` fix
-3. Fallback: `encode('latin-1', errors='replace').decode('utf-8', errors='replace')`
-
-Applied in `_q()`, `load_entity_data()`, `load_db_stats()`.
-
-## Quick Start
-
-```bash
-# Control script (recommended)
-./start_web_server.sh start    # Start (daemon mode)
-./start_web_server.sh status    # Show status + config
-./start_web_server.sh stop      # Stop server
-./start_web_server.sh restart   # Restart server
-./start_web_server.sh config    # Show full configuration
-./start_web_server.sh log       # View last 50 log lines
-
-# Or run directly
-source scripts/python_runtime.sh
-export PYTHON_BIN="$(cx_resolve_python)"
-cx_prepare_python_environment "$PYTHON_BIN"
-PYTHONPATH=scripts "$PYTHON_BIN" -m uvicorn web_app:app --host 0.0.0.0 --port <WEB_PORT>
-
-# Open http://localhost:18090 in browser
-# No universal default password; use the configured bootstrap/registration flow.
-```
-
-## Configuration
-
-Via `config.json` or environment variables:
-- `MEMORY_SERVER_HOST` (default: 0.0.0.0)
-- `MEMORY_SERVER_PORT` (default: 8000)
-- `MEMORY_SESSION_TIMEOUT` (default: 300 seconds)
-
-## v4.3.0 Graph And Collaboration Views
-
-The integrated Graph page keeps the v4.1 Graph Explorer and adds Graph
-Definitions, Run Monitor, Artifacts, Executor registry, Inbox/Outbox delivery,
-dead-letter replay, and runtime evidence views.
-Definitions use the same canonical JSON contract as the REST and Skill
-interfaces. The page calls the Graph service; it is not a direct database
-editor.
-
-The Definition view supports Draft creation/import, version selection,
-compile/diagnostic inspection, publication, archive, and Run start. The Run
-Monitor shows Node Runs, Trace, current State, and control actions. Artifact
-metadata exposes classification, retention, and legal-hold state without
-loading content by default. Worker, Event, Checkpoint, Transition, evaluator,
-and migration details remain available through the API for bounded diagnostics.
-Run evidence export is an administrator-only operation at
-`/api/graph-runs/{run_id}/evidence`; it requires a URL-encoded reason and a
-limit between 1 and 1000, and records the export in Graph Governance Events.
-
-The `stable-4.1` profile intentionally ships only the legacy Graph Explorer.
-The `production` profile contains the integrated v4.3.0 surface. Current UI
-controls follow the database-authoritative capability matrix: Graph Runtime
-core and authorized inspection are Production; manifest draft import, SLO
-read-only, and checkpoint fork are `CONTROLLED`; replay, Dynamic Graph
-migration, framework-adapter execution, A2A, and OTLP are `DISABLED`. Both the
-stable and integrated profiles use the Chuanxu
-shared shell, bilingual controls, light-first defaults, dark theme, local
-assets, and responsive layouts. The UI never substitutes for database/API
-authorization and does not claim unverified live evidence.
-
-The formal v4.3.0 Web entrypoint is the single FastAPI/Uvicorn process
-(`web_app:app`). New clients should use its authenticated Principal-aware
-`/api/auth/*`, resource, Graph, Channel, Barrier, Gateway, and governance
-routes, plus the HTTP/MCP/Skill contract. The established Dashboard, Portal,
-and Agent routes are loaded from `visualization/server.py` only through an
-in-process compatibility facade while parity evidence is collected; the facade
-does not start a second listener or own a second session, scheduler, or database
-connection. Compatibility routes remain gated and cannot be used as direct
-database APIs.
-
-### Channel And Barrier
-
-Channel is an independent first-level Dashboard view for attributable human
-and Agent collaboration. Its member list, message stream, Action Cards, and
-Barrier summaries are loaded through the same Principal and Session boundary
-as every other page. A Channel does not grant access to data, Skills, Tools,
-models, memory, or exports. Barrier detail shows the participant snapshot,
-arrivals, missing roles, timeout, and one-winner decision; waiting does not
-hold a Worker lease.
-
-## v4.4.10 Model Governance Views
-
-Platform Runtime contains LLM Provider rows, independent direct/gateway
-switches, the generated read-only address, pending-change state, and
-reason-confirmed mutation. Governed panels expose quota status, invoice and
-allocation work, evidence adapters, and wallboard definition publication.
-
-`/app/wallboard` remains read-only. It renders the published allow-listed
-projection, 14-day Token/cost curves, runtime, coverage, budget risk, and
-freshness without configure, approval, export, or invoke controls. Definition
-versions are integers across all adapters. Empty, stale, unavailable,
-scoped-zero, and partial states must not reuse prior authorized data.
+After login the shell reloads with current session/CSRF state. HTML and
+control-plane assets use no-store cache behavior so an upgrade does not leave
+an old bundle active. For failures, record product/version, route, language,
+viewport and sanitized error; never include a session cookie, password or raw
+configuration in screenshots or support reports. Release captures must show
+the authenticated current page after loading, with backend version and served
+asset digests bound to the same package.

@@ -277,8 +277,11 @@ def check_target(database: str, config_path: Path | None, enterprise: bool = Tru
 
 
 def build_report(configs: dict[str, Path | None], enterprise: bool = True,
-                 version: str | None = None) -> dict[str, Any]:
-    results = [check_target(database, configs.get(database), enterprise) for database in SUPPORTED_DATABASES]
+                 version: str | None = None, databases: tuple[str, ...] | None = None) -> dict[str, Any]:
+    selected = SUPPORTED_DATABASES if databases is None else tuple(databases)
+    if not selected or len(set(selected)) != len(selected) or any(item not in SUPPORTED_DATABASES for item in selected):
+        raise ValueError("Select supported, distinct POC database targets")
+    results = [check_target(database, configs.get(database), enterprise) for database in selected]
     return {
         "schema": "ai-agent-infra-poc-readiness/v1",
         "version": _version(version),
@@ -302,10 +305,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, default=Path("poc-readiness.json"))
     args = parser.parse_args(argv)
+    configs = {"oracle": args.oracle_config, "pg": args.pg_config, "yashandb": args.yashandb_config}
+    selected = tuple(key for key, path in configs.items() if path is not None)
+    if not selected:
+        parser.error("Provide a configuration for at least one supported database")
+    from lib.product_identity import identity, package_root
+    product = identity(package_root(__file__))
+    if product["product_key"] != "legacy":
+        if any(key not in product["databases"] for key in selected):
+            parser.error("POC target is not supported by the installed product")
+        if args.edition != str(product["edition"]).lower():
+            parser.error("POC edition does not match the installed product")
     payload = build_report(
-        {"oracle": args.oracle_config, "pg": args.pg_config, "yashandb": args.yashandb_config},
+        configs,
         enterprise=args.edition == "enterprise",
         version=args.version,
+        databases=selected,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii")

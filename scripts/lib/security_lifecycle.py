@@ -209,7 +209,12 @@ def enroll_totp(actor_principal_id: str, target_principal_id: str, reason: str) 
          "secret_ciphertext": encrypt_section({"secret": encoded})},
     )
     _audit(actor_principal_id, "MFA_ENROLL", "MFA_FACTOR", factor_id, "ALLOW", reason)
-    return {"factor_id": factor_id, "factor_type": "TOTP", "secret": encoded, "otpauth_uri": "otpauth://totp/Chuanxu:%s?secret=%s&issuer=Chuanxu" % (target_principal_id, encoded)}
+    from urllib.parse import quote
+    from .product_identity import identity
+    issuer = quote(identity()["brand_en"], safe="")
+    label = quote(target_principal_id, safe="")
+    return {"factor_id": factor_id, "factor_type": "TOTP", "secret": encoded,
+            "otpauth_uri": f"otpauth://totp/{issuer}:{label}?secret={encoded}&issuer={issuer}"}
 
 
 def confirm_totp(target_principal_id: str, factor_id: str, code: str, reason: str = "MFA enrollment confirmation") -> bool:

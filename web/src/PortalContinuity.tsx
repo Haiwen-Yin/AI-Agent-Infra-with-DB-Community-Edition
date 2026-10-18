@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import ContinuityWorkbench from "./ContinuityWorkbench";
+import { useUIPreferences } from "./uiPreferences";
 
 type Row = Record<string, any>;
 
 /** A Portal session remains a Portal session; no Dashboard credential bridge. */
 export default function PortalContinuity() {
-  const [lang, setLang] = useState(localStorage.getItem("cxLang") || "zh");
-  const [theme, setTheme] = useState(localStorage.getItem("cxTheme") || "light");
+  const { lang, setLang, theme, setTheme } = useUIPreferences();
   const [session, setSession] = useState<Row | null>(null);
   const [error, setError] = useState("");
   const expiry = useRef(0);
@@ -32,8 +32,6 @@ export default function PortalContinuity() {
     }
     return result;
   };
-  useEffect(() => { document.documentElement.lang = lang === "zh" ? "zh-CN" : "en"; localStorage.setItem("cxLang", lang); }, [lang]);
-  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("cxTheme", theme); }, [theme]);
   useEffect(() => {
     let active = true;
     void request("/api/session").then(value => { if (active) setSession(value); }).catch(e => { if (active) setError(e.message); });

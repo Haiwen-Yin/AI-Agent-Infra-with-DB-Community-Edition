@@ -1,0 +1,11 @@
+{
+  "version": "5.0.0",
+  "database": "pg",
+  "fresh_install": true,
+  "deployment": "bootstrap-deployment-agent",
+  "required_terminal_migration": "102_v5_0_0_network_access.sql",
+  "historical_chain": "retained-for-audit",
+  "withdrawn_upgrade_sources": [
+    "4.4.8"
+  ]
+}

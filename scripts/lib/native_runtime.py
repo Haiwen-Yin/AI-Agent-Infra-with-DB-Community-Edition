@@ -537,17 +537,21 @@ def _platform_command_result_markdown(command: Dict[str, Any], language: str = "
 
 def _platform_product_markdown(knowledge: Dict[str, Any], language: str = "zh") -> str:
     """Render a signed platform overview without an LLM call."""
+    from .product_identity import identity
+    product = identity()
+    databases = ", ".join({"oracle": "Oracle", "pg": "PostgreSQL", "yashandb": "YashanDB"}.get(key, key) for key in product["databases"])
+    enterprise = product["edition"] == "Enterprise"
     options = knowledge.get("business_template_options") if isinstance(knowledge.get("business_template_options"), list) else []
     if language == "zh":
         return "\n".join([
-            "## 川序 AI Agent 管理平台", "",
-            "这是一个以 Oracle、PostgreSQL 和 YashanDB 为权威控制面的 AI Agent 管理平台。平台将 Agent 身份、组织、频道、知识、记忆、图关系、任务、Skill、审批、合规和审计纳入数据库治理。",
+            f"## {product['brand_zh']} AI Agent 管理平台", "",
+            f"本产品支持 {databases}，以数据库为权威控制面，管理 Agent 身份、组织、频道、知识、记忆、图关系、任务、Skill 和审计。" + ("企业版另提供审批和合规治理。" if enterprise else "社区版不包含企业专属审批和合规模块。"),
             "", "### 当前平台能力",
             "- 可观测：Agent、运行时、关系图和审计状态可查询。",
-            "- 可调度：持久任务、协作关卡、审批和受治理执行形成闭环。",
-            "- 可运维：三数据库适配、离线部署、独立身份、凭据轮换和故障边界清晰。",
+            "- 可调度：持久任务、协作关卡和受治理执行形成闭环。",
+            f"- 可运维：支持的底座为 {databases}，提供离线部署、独立身份、凭据轮换和明确故障边界。",
             "", "### Agent 与安全边界",
-            "- 平台管理 Agent 只处理受保护的平台控制面；业务 Agent 必须经过申请、审批、部署和激活。",
+            "- 平台管理 Agent 只处理受保护的平台控制面；业务 Agent 必须经过申请、授权处理、部署和激活，企业版要求职责分离审批。",
             "- 聊天文本、提示词、Skill、Tool 或 URL 不会自动授予数据库或平台权限。",
             "- 高风险变更必须生成操作卡并由授权人员最终审批。",
             "", "### 可选业务模板",
@@ -556,14 +560,14 @@ def _platform_product_markdown(knowledge: Dict[str, Any], language: str = "zh") 
             str(knowledge.get("missing_capability_answer_zh") or "当前能力以已发布版本和实例授权为准。"),
         ])
     return "\n".join([
-        "## Chuanxu AI Agent Management Platform", "",
-        "A database-governed AI Agent management platform for Oracle, PostgreSQL, and YashanDB. Agent identity, organization, Channels, knowledge, memory, graph relationships, tasks, Skills, approvals, compliance, and audit remain under the database control plane.",
+        f"## {product['brand_en']} AI Agent Management Platform", "",
+        f"A database-governed AI Agent management platform supporting {databases}. Agent identity, organization, Channels, Knowledge, Memory, graph relationships, Tasks, Skills and audit use the database control plane. " + ("Enterprise additionally provides approval and compliance governance." if enterprise else "Community excludes Enterprise-only approval and compliance modules."),
         "", "### Current capabilities",
         "- Observable: Agent, runtime, graph, and audit state are queryable.",
-        "- Schedulable: durable tasks, collaboration gates, approvals, and governed execution form one lifecycle.",
-        "- Operable: three database adapters, offline deployment, independent identities, credential rotation, and explicit failure boundaries.",
+        "- Schedulable: durable tasks, collaboration gates and governed execution form one lifecycle.",
+        f"- Operable: {databases}, offline deployment, independent identities, credential rotation and explicit failure boundaries.",
         "", "### Agent and security boundaries",
-        "- Platform management Agents handle only the protected control plane; Business Agents require request, approval, deployment, and activation.",
+        "- Platform management Agents handle only the protected control plane; Business Agents require request, authorized processing, deployment and activation. Enterprise requires separated approval.",
         "- Chat text, prompts, Skills, Tools, and URLs never grant database or platform authority.",
         "- High-risk changes create an Action Card and require final approval by an authorized human.",
         "", "### Selectable Business templates",

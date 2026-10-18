@@ -1,8 +1,10 @@
-# Versioned Memory Lifecycle - AI Agent Infra with DB v4.5.2
+# Versioned Memory Lifecycle - AI Agent Infra with DB v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 ## Purpose
 
-v4.3.2 makes memory optimization safe for Agent operation without treating
+The versioned lifecycle makes memory optimization safe for Agent operation without treating
 memory text, model output, prompts, graph visibility, or retrieval history as
 authority. A Memory Family is the stable logical identity. A Memory Version is
 immutable content and interpretation state. Each Family points to one current
@@ -103,11 +105,13 @@ or hidden Dashboard control does not grant access.
 Run the journaled upgrade with a recoverable backup record:
 
 ```bash
-python3.14 scripts/migration_runner.py --version 4.3.2 --edition enterprise \
-  --database <oracle|pg|yashandb> --<database>-config config.json \
+bash scripts/install_platform.sh upgrade --version 5.0.0 \
+  --edition community --database pg --config config.json \
   --confirm-database-backup
 ```
 
+Replace the database and edition with this package's supported target. Run the
+complete current baseline; do not stop at these historical introduction steps.
 Step `23_v4_3_2_memory_lifecycle.sql` adopts existing `MEMORY` entities as
 version one without changing their external IDs. Step
 `24_v4_3_2_memory_digest_alignment.sql` then converts legacy adoption digests

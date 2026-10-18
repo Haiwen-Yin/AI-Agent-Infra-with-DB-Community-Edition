@@ -22,7 +22,8 @@ def reference():
     from lib.config import get_config
     cfg = get_config().database
     target = str(getattr(cfg, "dbname", "") or getattr(cfg, "dsn", "")).lower()
-    assert target.rsplit("/", 1)[-1] in {
+    from .release_target import classified_current_target
+    assert classified_current_target() or target.rsplit("/", 1)[-1] in {
         "cxv412com", "cxv412ent", "cxv413com", "cxv413ent", "cxv415com", "cxv415ent",
         "cxv450com", "cxv450ent", "cxv450r2com",
     }, "refusing non-isolated target"

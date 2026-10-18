@@ -70,6 +70,9 @@ def test_another_signing_key_is_not_trusted(signing_key):
 
 def test_client_metadata_cannot_mark_a_package_verified(monkeypatch):
     monkeypatch.setattr(management,'_require_manage',lambda *_:None)
+    from lib import product_identity
+    monkeypatch.setattr(product_identity, 'read_manifest', lambda: {})
+    monkeypatch.setattr(management.connection, 'DATABASE_DIALECT', 'postgresql')
     monkeypatch.setattr(management.connection,'execute',lambda *_:pytest.fail('Metadata must not create trusted plans'))
     with pytest.raises(management.ManagementError):
         management.stage_upgrade('admin','4.4.15','Community','a'*64,'VERIFIED','Synthetic request')
@@ -121,6 +124,11 @@ def test_operator_signing_command_produces_verifiable_archive(signing_key,tmp_pa
 
 
 def test_distinct_archives_of_same_version_keep_separate_trust(signing_key,monkeypatch,tmp_path):
+    from lib import product_identity
+    # This fixture isolates archive trust in a legacy Community/PG database.
+    # Cross-product and cross-edition rejection has its own identity tests.
+    monkeypatch.setattr(product_identity, 'read_manifest', lambda: {})
+    monkeypatch.setattr(management.connection, 'DATABASE_DIALECT', 'postgresql')
     import sqlite3
     db=sqlite3.connect(':memory:')
     db.row_factory=sqlite3.Row

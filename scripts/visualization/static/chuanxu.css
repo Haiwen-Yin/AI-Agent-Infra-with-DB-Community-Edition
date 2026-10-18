@@ -93,6 +93,12 @@ select:focus-visible, textarea:focus-visible {
   object-fit: contain;
   object-position: left center;
 }
+.sidebar-brand .cx-lockup.cx-agentx-lockup {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
 .top-bar .cx-title-lockup {
   width: 94px;
   max-height: 34px;
@@ -103,6 +109,29 @@ select:focus-visible, textarea:focus-visible {
 .cx-sidebar-platform-name {
   display: block; margin-top: 6px; color: rgba(255, 255, 255, .68);
   font-size: 11px; font-weight: 600; line-height: 1.2; white-space: nowrap;
+}
+.cx-agentx-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.cx-agentx-product-name {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.sidebar-brand .cx-agentx-product-name { color: #fff; }
+.cx-chat-brand .cx-agentx-product-name { color: var(--cx-text); font-size: 16px; }
+.cx-chat-brand .cx-agentx-lockup { width: 36px; height: 36px; object-fit: contain; }
+.login-brand.cx-agentx-auth-brand, .portal-brand.cx-agentx-auth-brand {
+  margin-right: 0;
+  padding-top: 42px;
+}
+.login-brand.cx-agentx-auth-brand strong, .portal-brand.cx-agentx-auth-brand strong {
+  font-size: 20px;
+  letter-spacing: 0;
+  line-height: 1.2;
 }
 .sidebar-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 8px !important; }
 .sidebar-nav a, .sidebar-link {
@@ -353,6 +382,12 @@ input::placeholder, textarea::placeholder { color: var(--cx-text-muted) !importa
 }
 .login-card h2, .portal-card h2 { color: var(--cx-text) !important; }
 .login-card h2 .cx-auth-lockup, .portal-card h2 .cx-auth-lockup { display: block; width: 250px; max-width: 100%; height: auto; margin: 0 auto 10px; }
+.login-brand img.cx-agentx-lockup, .portal-brand img.cx-agentx-lockup {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
 .login-card .subtitle, .portal-card .subtitle, .hint-text { color: var(--cx-text-secondary) !important; }
 .form-label, .form-group label { color: var(--cx-text-secondary) !important; }
 .lang-toggle, .admin-link { background: var(--cx-surface) !important; border-color: var(--cx-border) !important; color: var(--cx-text-secondary) !important; }
@@ -656,6 +691,8 @@ html[data-theme="light"] .btn-toggle.active {
   :root { --cx-sidebar-width: 68px; }
   .sidebar-brand { padding: 14px 12px !important; }
   .sidebar-brand .cx-lockup { width: 42px; height: 42px; object-fit: cover; object-position: left; }
+  .sidebar-brand .cx-lockup.cx-agentx-lockup { width: 36px; height: 36px; max-height: 36px; object-fit: contain; }
+  .sidebar-brand .cx-agentx-product-name { display: none; }
   .sidebar-nav a { justify-content: center; padding: 8px !important; }
   .sidebar-nav a > span:not(.icon) { display: none; }
   .sidebar-footer { padding: 8px !important; }

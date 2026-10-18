@@ -1,0 +1,169 @@
+{
+  "CX_IP_ACCESS_REVISIONS": {
+    "check_expressions": [
+      "REVISION>0",
+      "ENABLED IN ('Y','N')",
+      "LIST_MODE IN ('ALLOWLIST','DENYLIST')"
+    ],
+    "checks": 3,
+    "columns": {
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "ENABLED": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1)"
+      },
+      "LIST_MODE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(2000)"
+      },
+      "REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "UPDATED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "immutable_columns": [
+      "REVISION",
+      "ENABLED",
+      "LIST_MODE",
+      "UPDATED_BY",
+      "REASON",
+      "CREATED_AT"
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "REVISION"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX102_REVISIONS"
+  },
+  "CX_IP_ACCESS_RULES": {
+    "check_expressions": [
+      "RULE_NO>=1 AND RULE_NO<=512",
+      "IP_VERSION IN (4,6)"
+    ],
+    "checks": 2,
+    "columns": {
+      "IP_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "NETWORK_CIDR": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "RULE_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "immutable_columns": [
+      "REVISION",
+      "RULE_NO",
+      "NETWORK_CIDR",
+      "IP_VERSION"
+    ],
+    "keys": [
+      [
+        "R",
+        [
+          "REVISION"
+        ],
+        "CX_IP_ACCESS_REVISIONS",
+        [
+          "REVISION"
+        ]
+      ],
+      [
+        "P",
+        [
+          "REVISION",
+          "RULE_NO"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "REVISION",
+          "NETWORK_CIDR"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX102_RULES"
+  },
+  "CX_IP_ACCESS_STATE": {
+    "check_expressions": [
+      "POLICY_KEY='GLOBAL'"
+    ],
+    "checks": 1,
+    "columns": {
+      "POLICY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "immutable_columns": [
+      "POLICY_KEY"
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "POLICY_KEY"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "REVISION"
+        ],
+        "CX_IP_ACCESS_REVISIONS",
+        [
+          "REVISION"
+        ]
+      ]
+    ],
+    "trigger": "CX102_STATE"
+  }
+}

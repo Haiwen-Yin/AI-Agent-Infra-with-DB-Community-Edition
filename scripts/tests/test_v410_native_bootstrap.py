@@ -77,7 +77,8 @@ def _packaged_database(root: Path) -> str:
     manifest = root / "build-manifest.json"
     if not manifest.is_file():
         return "oracle"
-    return str(json.loads(manifest.read_text(encoding="utf-8"))["database"]["key"])
+    from lib.package_layout import active_database
+    return active_database(root)
 
 
 def _packaged_edition(root: Path) -> str:
@@ -93,7 +94,8 @@ def _database_deploy_script(database: str, name: str) -> Path:
     if packaged:
         if _packaged_database(package_root) != database:
             pytest.skip(f"{database} package contract")
-        return package_root / "scripts" / "deploy" / name
+        from lib.package_layout import deployment_dir
+        return deployment_dir(package_root, database) / name
     return package_root / "adapters" / database / "deploy" / name
 
 
@@ -102,7 +104,7 @@ def test_oracle_prerequisite_script_is_bounded_and_pdb_scoped():
     if packaged and _packaged_database(package_root) != "oracle":
         pytest.skip("Oracle-only prerequisite contract")
     path = (
-        runtime_root / "deploy" / "0_oracle_database_prerequisites.sql"
+        _database_deploy_script("oracle", "0_oracle_database_prerequisites.sql")
         if packaged
         else package_root / "adapters" / "oracle" / "deploy" / "0_oracle_database_prerequisites.sql"
     )
@@ -128,7 +130,8 @@ def test_baseline_declares_packaged_version_and_terminal():
     manifest_path = root / "build-manifest.json"
     if manifest_path.is_file():
         package = json.loads(manifest_path.read_text(encoding="utf-8"))
-        databases = (str(package["database"]["key"]),)
+        from lib.package_layout import databases as packaged_databases
+        databases = packaged_databases(root)
         version = package["version"]
     else:
         databases = ("oracle", "pg", "yashandb")
@@ -148,8 +151,10 @@ def test_baseline_declares_packaged_version_and_terminal():
             terminal = "97_v4_4_15_native_context_sources.sql"
         if version == "4.5.1":
             terminal = "100_v4_5_1_framework_rootfs_digest.sql"
-        if version == "4.5.2":
+        if version in {"4.5.2", "5.0.0"}:
             terminal = "101_v4_5_2_task_continuity.sql"
+        if version == "5.0.0":
+            terminal = "102_v5_0_0_network_access.sql"
         baseline = deployment_orchestrator.release_baseline(database, root)
         assert baseline["version"] == version
         assert baseline["deployment"] == "bootstrap-deployment-agent"
@@ -161,7 +166,8 @@ def test_oracle_fresh_baseline_memory_migrations_do_not_require_crypto_grant():
     if (root / "adapters").is_dir():
         deploy = root / "adapters" / "oracle" / "deploy"
     elif _packaged_database(root) == "oracle":
-        deploy = root / "scripts" / "deploy"
+        from lib.package_layout import deployment_dir
+        deploy = deployment_dir(root, "oracle")
     else:
         pytest.skip("Oracle package contract")
     for name in ("23_v4_3_2_memory_lifecycle.sql", "24_v4_3_2_memory_digest_alignment.sql"):
@@ -175,7 +181,7 @@ def test_oracle_v449_security_repair_is_schema_owner_independent():
     if (root / "adapters").is_dir():
         script = root / "adapters" / "oracle" / "deploy" / "50_v4_4_9_security_boundary_repair.sql"
     elif _packaged_database(root) == "oracle":
-        script = root / "scripts" / "deploy" / "50_v4_4_9_security_boundary_repair.sql"
+        script = _database_deploy_script("oracle", "50_v4_4_9_security_boundary_repair.sql")
     else:
         pytest.skip("Oracle package contract")
     source = script.read_text(encoding="utf-8").upper()
@@ -531,11 +537,8 @@ def test_pg_agent_login_creation_keeps_rotation_under_bounded_owner():
     runtime_root, package_root, packaged = _layout()
     if packaged and _packaged_database(package_root) != "pg":
         pytest.skip("PostgreSQL package contract")
-    path = (
-        runtime_root / "lib" / "agent_api.py"
-        if packaged
-        else package_root / "adapters" / "pg" / "agent_api.py"
-    )
+    from lib.package_layout import adapter_file
+    path = adapter_file(package_root, "pg", "agent_api.py")
     source = path.read_text(encoding="utf-8")
     assert "SET LOCAL createrole_self_grant = 'set, inherit'" in source
     assert "CREATE ROLE {} LOGIN PASSWORD %s NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS" in source
@@ -545,7 +548,8 @@ def test_yashandb_prerequisite_and_preflight_require_agent_user_rotation():
     runtime_root, package_root, packaged = _layout()
     if packaged and _packaged_database(package_root) != "yashandb":
         pytest.skip("YashanDB package contract")
-    deploy = runtime_root / "deploy" if packaged else package_root / "adapters" / "yashandb" / "deploy"
+    from lib.package_layout import deployment_dir
+    deploy = deployment_dir(package_root, "yashandb")
     prerequisite = (deploy / "0_yashandb_database_prerequisites.sql").read_text(encoding="utf-8").upper()
     assert "CREATE PROCEDURE, CREATE TRIGGER, CREATE TYPE, CREATE JOB" in prerequisite
     assert "GRANT CREATE USER TO &&SCHEMA_OWNER" in prerequisite
@@ -677,7 +681,10 @@ def test_oracle_enterprise_manifest_executes_deep_security_before_migrations():
 
 def test_oracle_baseline_initializes_crypto_and_uses_runtime_schema_owner():
     root = Path(__file__).resolve().parents[2]
-    deploy = root / "adapters" / "oracle" / "deploy" if (root / "adapters").is_dir() else root / "scripts" / "deploy"
+    if not (root / "adapters").is_dir() and _packaged_database(root) != "oracle":
+        pytest.skip("Oracle package contract")
+    from lib.package_layout import deployment_dir
+    deploy = deployment_dir(root, "oracle")
     if not deploy.is_dir() or _packaged_database(root) != "oracle" and not (root / "adapters").is_dir():
         pytest.skip("Oracle package contract")
     if not (root / "adapters" / "oracle").is_dir() and _packaged_edition(root) != "enterprise":
@@ -820,14 +827,14 @@ def test_first_run_wizard_persists_server_binding(tmp_path):
     try:
         result = subprocess.run(
             ["bash", str(scripts / "config_wizard.sh")], input=answers, text=True,
-            capture_output=True, env=dict(os.environ, PYTHON_BIN=sys.executable), check=False,
+            capture_output=True, env=dict(os.environ, PYTHON_BIN=sys.executable, CX_CONFIG_PATH=str(tmp_path / "config.json")), check=False,
         )
         config = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
         Handler.model = "different-model"
         (tmp_path / "config.json").unlink(missing_ok=True)
         mismatch = subprocess.run(
             ["bash", str(scripts / "config_wizard.sh")], input=answers, text=True,
-            capture_output=True, env=dict(os.environ, PYTHON_BIN=sys.executable), check=False,
+            capture_output=True, env=dict(os.environ, PYTHON_BIN=sys.executable, CX_CONFIG_PATH=str(tmp_path / "config.json")), check=False,
         )
     finally:
         server.shutdown()
@@ -864,7 +871,7 @@ def test_first_run_wizard_rejects_llm_url_without_model_id(tmp_path):
     answers = "Y\naiadmin\ndb-secret\nlocalhost:1521/service\n\n\nhttps://llm.example/v1\n\n"
     result = subprocess.run(
         ["bash", str(scripts / "config_wizard.sh")], input=answers, text=True,
-        capture_output=True, env=dict(os.environ, PYTHON_BIN=sys.executable), check=False,
+        capture_output=True, env=dict(os.environ, PYTHON_BIN=sys.executable, CX_CONFIG_PATH=str(tmp_path / "config.json")), check=False,
     )
     assert result.returncode == 2
     assert "LLM API URL and model ID must be configured together" in result.stderr

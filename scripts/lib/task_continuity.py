@@ -167,9 +167,15 @@ def ensure_task_root(tx: Any, actor: str, task_id: str | None = None, *, goal: s
     # DB4A2A have historically accepted opaque business keys, so only reuse a
     # Task Plan after proving an exact unique match; otherwise create a new
     # canonical root and leave the protocol key on its source row.
+    from .connection import DATABASE_DIALECT
+    pg_identity = DATABASE_DIALECT in {"pg", "postgresql"}
     if task_id:
         value = str(task_id).strip()
-        if value and len(value) <= 64:
+        # Opaque protocol keys are valid inputs but cannot be compared to a
+        # native BIGINT key. Let PostgreSQL generate new keys using its
+        # existing sequence rather than inserting an application UUID.
+        native_key = value.isascii() and value.isdecimal() and 0 < int(value) < (1 << 63)
+        if value and len(value) <= 64 and (not pg_identity or native_key):
             existing = _row(tx.query_one(
                 "SELECT PLAN_ID FROM TASK_PLANS WHERE PLAN_ID=:task FOR UPDATE", {"task": value}))
             if existing:
@@ -192,8 +198,16 @@ def ensure_task_root(tx: Any, actor: str, task_id: str | None = None, *, goal: s
         if not owner:
             raise ContinuityError("TASK_REQUIRED", "A human admission must reference an existing Task Plan")
         agent_id = str(owner["agent_id"])
+    text = str(goal or "Protocol task").strip().encode("utf-8")[:2000].decode("utf-8", errors="ignore") or "Protocol task"
+    if pg_identity:
+        created = _row(tx.query_one(
+            "INSERT INTO TASK_PLANS(AGENT_ID,GOAL,STATUS,PRIORITY,STRATEGY) "
+            "VALUES(:agent,:goal,'RUNNING',5,'PROTOCOL_CONTINUITY') RETURNING PLAN_ID",
+            {"agent": agent_id, "goal": text}))
+        if not created.get("plan_id"):
+            raise ContinuityError("TASK_CREATION_FAILED", "The database did not return a Task Plan identifier")
+        return str(created["plan_id"])
     plan_id = _id("PLAN")[:64]
-    text = str(goal or "Protocol task").strip()[:2000] or "Protocol task"
     tx.execute("INSERT INTO TASK_PLANS(PLAN_ID,AGENT_ID,GOAL,STATUS,PRIORITY,STRATEGY) VALUES(:plan,:agent,:goal,'RUNNING',5,'PROTOCOL_CONTINUITY')",
                {"plan": plan_id, "agent": agent_id, "goal": text})
     return plan_id

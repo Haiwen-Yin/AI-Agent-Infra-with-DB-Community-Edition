@@ -12,13 +12,15 @@ def test_pg_registration_preserves_continuity_native_denials(monkeypatch):
     if getattr(connection,'DATABASE_DIALECT','')!='postgresql':
         pytest.skip('PostgreSQL registration against a generated isolated edition required')
     from lib.config import get_config
-    if str(get_config().database.dbname).lower() not in {'cxv415com','cxv415ent','cxv450com','cxv450ent'}:
+    from .release_target import classified_current_target
+    if not classified_current_target() and str(get_config().database.dbname).lower() not in {'cxv415com','cxv415ent','cxv450com','cxv450ent'}:
         pytest.skip('Continuity registration mutation requires the isolated release database')
     import psycopg2
     from psycopg2 import sql
     from lib.continuity_schema_validation import errors
     root=Path(__file__).resolve().parents[2]
-    facts_path=root/'scripts/deploy/86_v4_4_15_continuity_entities.schema.json'
+    from lib.package_layout import deployment_dir
+    facts_path=deployment_dir(root, 'pg')/'86_v4_4_15_continuity_entities.schema.json'
     assert facts_path.is_file(), 'The generated installation must carry the schema manifest'
     facts=json.loads(facts_path.read_text())
     bindings_path=facts_path.with_name('87_v4_4_15_continuity_bindings.schema.json')

@@ -766,6 +766,7 @@ def is_management_product_request(body: str) -> bool:
         "平台能力", "产品能力", "平台功能", "产品功能", "什么是川序", "川序是什么",
         "platform overview", "product overview", "introduce the platform", "what is chuanxu",
         "what does the platform do", "platform capabilities", "product capabilities",
+        "what is agentx", "what is opentenbase agentx", "介绍agentx", "介绍 agentx", "agentx是什么",
     )
     return any(marker in value for marker in markers)
 

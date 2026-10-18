@@ -1,4 +1,8 @@
-# POC Readiness and Evidence v4.5.2
+# POC Readiness and Evidence v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
+
+[简体中文](poc-readiness_zh.md)
 
 > This is a technical document for **Chuanxu (川序)**, the **AI Agent
 > Management Platform**. `AI Agent Infra with DB` is the unified technical project
@@ -33,14 +37,15 @@ source scripts/python_runtime.sh
 PYTHON_BIN="$(cx_resolve_python)"
 cx_prepare_python_environment "$PYTHON_BIN"
 "$PYTHON_BIN" scripts/poc_readiness.py \
-  --oracle-config /path/to/oracle-config.json \
   --pg-config /path/to/pg-config.json \
-  --yashandb-config /path/to/yashandb-config.json \
-  --edition enterprise \
+  --edition community \
   --output poc-readiness.json
 ```
 
-The report records configuration field presence, owner-only permission state,
+Select only a supported backend and edition. The unified Community package
+can check each backend with its separate configuration; single-backend products
+must not be presented as supporting other databases. Run a separate process
+for each selected adapter. The report records configuration field presence, owner-only permission state,
 driver availability, connectivity, database version, required object counts,
 the `SKILL_META` contract, and remediation steps. It never records credential
 values, DSNs, or raw driver errors. PostgreSQL may use peer, trust, or a
@@ -91,8 +96,9 @@ tenancy, automatic discovery of unregistered Agents, model quality claims,
 exactly-once external side effects, or unrestricted custom development.
 
 Before migration, back up the database/schema, encrypted configuration,
-master-key file, and exact release archive. Rollback stops v4.3.0 services and
-restores the coordinated v4.1.x snapshot/profile. External side effects and
+master-key file, and exact release archive. Rollback restores the coordinated,
+tested database and compatible program snapshot. Never assume a historical
+profile can run against a current schema. External side effects and
 completed credential rotations require separate operational handling.
 
 ## Support Boundary

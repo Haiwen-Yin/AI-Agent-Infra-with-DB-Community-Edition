@@ -1,4 +1,6 @@
-# Release archive signing v4.5.2
+# Release archive signing v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 The upgrade service verifies an Ed25519 signature using the operator-provided
 `CX_RELEASE_SIGNING_PUBLIC_KEY` (URL-safe Base64 of the 32-byte public key).

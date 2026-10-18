@@ -5,11 +5,12 @@ import json
 import pytest
 
 import migration_runner
+from lib.package_layout import active_database, deployment_dir
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_MODE = (PACKAGE_ROOT / "build-manifest.json").is_file() and not (PACKAGE_ROOT / "adapters").is_dir()
 DATABASE_KEY = (
-    str(json.loads((PACKAGE_ROOT / "build-manifest.json").read_text(encoding="ascii"))["database"]["key"])
+    active_database(PACKAGE_ROOT)
     if PACKAGE_MODE else "oracle"
 )
 
@@ -44,7 +45,7 @@ def test_oracle_admin_enrollment_not_null_repair_is_idempotent():
     if DATABASE_KEY != "oracle":
         pytest.skip("Oracle migration contract is validated by Oracle packages")
     script = (
-        PACKAGE_ROOT / "scripts/deploy/35_v4_4_1_admin_ha_upgrade.sql"
+        deployment_dir(PACKAGE_ROOT, "oracle") / "35_v4_4_1_admin_ha_upgrade.sql"
         if PACKAGE_MODE else
         Path(migration_runner.REPO_ROOT) / "adapters/oracle/deploy/35_v4_4_1_admin_ha_upgrade.sql"
     )

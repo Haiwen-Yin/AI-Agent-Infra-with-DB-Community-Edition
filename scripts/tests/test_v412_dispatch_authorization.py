@@ -58,6 +58,16 @@ def test_context_digest_is_json_order_independent():
     assert db4a2a.context_snapshot('{"b":2,"a":1}') == db4a2a.context_snapshot({"a": 1, "b": 2})
 
 
+def test_wire_digest_preserves_algorithm_and_fits_typed_continuity_ledger():
+    wire = db4a2a.context_snapshot({"amount": Decimal("123.4500")})
+    stored = db4a2a._continuity_snapshot_digest(wire)
+    assert len(stored) == 64 and "sha256:" + stored == wire
+    assert stored == db4a2a._continuity_snapshot_digest(db4a2a.context_snapshot('{"amount":123.45}'))
+    for invalid in (wire + "0", "sha512:" + stored, "sha256:stale", stored):
+        with pytest.raises(db4a2a.DB4A2AError, match="unsupported"):
+            db4a2a._continuity_snapshot_digest(invalid)
+
+
 @pytest.mark.parametrize("outcome", ["visible", "hidden", "error"])
 def test_reader_check_restores_identity(monkeypatch, outcome):
     monkeypatch.setattr(connection, "execute_query_one", Mock(

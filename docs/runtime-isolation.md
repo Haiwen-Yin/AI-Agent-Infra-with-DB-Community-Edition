@@ -1,10 +1,14 @@
-# Runtime Isolation Contract v4.5.2
+# Runtime Isolation Contract v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
+
+[简体中文](runtime-isolation_zh.md)
 
 The Linux distribution and qualification matrix is maintained in
 `docs/linux-platform-compatibility.md`. Platform control-plane compatibility
 does not imply verified same-host Agent isolation.
 
-This document records the v4.4.11 isolation boundary. Database authorization
+This document records the current isolation boundary. Database authorization
 and operating-system isolation are separate controls and both are required
 where the deployment policy requires both.
 
@@ -31,12 +35,13 @@ namespaces, cgroup v2 CPU/memory/PID limits, seccomp, no-new-privileges,
 dropped capabilities, a read-only rootfs, and default-deny networking.
 Docker/container sockets and unrestricted hostPath mounts are forbidden.
 
-On Oracle Linux 9.8, the dedicated-host gate verified all six boundaries,
+Historical Oracle Linux 9.8 dedicated-host evidence verified all six boundaries,
 cross-Agent process/workspace/credential negatives, ptrace denial, and revoke
 termination. The adapter returns `VERIFIED` only from evidence collected from
-the actual sandbox process in its cgroup. Missing `bwrap`, libseccomp, cgroup
+the actual sandbox process in its cgroup; the current exact host/package must
+be verified separately. Missing `bwrap`, libseccomp, cgroup
 limits, privileges, or evidence fails closed. A non-empty egress allowlist also
-fails closed until a privileged firewall backend is configured; v4.4.11 proves
+fails closed until a privileged firewall backend is configured; historical evidence proves
 default deny, not selective network allowlisting. Host root and infrastructure administrators are
 outside the process-isolation threat model unless a dedicated VM boundary is
 used.
@@ -60,9 +65,9 @@ Manager or `hosts.manage` APIs.
 
 ## Deferred adapters
 
-Container-managed, VM, MaaS, and SaaS enforcement is a contract only in
-v4.4.11. These adapters will be implemented for the selected target
-environment and must provide equivalent signed evidence before use.
+Container-managed, VM, MaaS, and SaaS enforcement remains a deployment-adapter
+contract. Implementations for the selected target
+environment must provide equivalent signed evidence before use.
 
 ## MaaS/SaaS policy
 

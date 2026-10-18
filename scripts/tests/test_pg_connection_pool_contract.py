@@ -9,15 +9,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_MODE = (ROOT / "build-manifest.json").is_file() and not (ROOT / "adapters").is_dir()
-DATABASE_KEY = (
-    str(json.loads((ROOT / "build-manifest.json").read_text(encoding="ascii"))["database"]["key"])
-    if PACKAGE_MODE else "pg"
-)
+from lib.package_layout import active_database, adapter_file
+DATABASE_KEY = active_database(ROOT) if PACKAGE_MODE else "pg"
 
 
 def _source_path(name: str) -> Path:
     if PACKAGE_MODE:
-        return ROOT / "scripts" / "lib" / name
+        return adapter_file(ROOT, "pg", name)
     source_name = "config_db.py" if name == "config.py" else name
     return ROOT / "adapters" / "pg" / source_name
 

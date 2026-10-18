@@ -1,4 +1,4 @@
-"""AI Agent Infra v4.5.2 - Community Edition - Web Visualization Server
+"""AI Agent Infra v5.0.0 - Community Edition - Web Visualization Server
 
 Lightweight HTTP server providing session-based auth, page routing,
 and JSON API endpoints for knowledge, memory, agents, tasks, workspaces,
@@ -58,7 +58,7 @@ if edition_features.has_feature('governance'):
 else:
     governance_api = None
 
-VERSION = "4.5.2"
+VERSION = "5.0.0"
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
@@ -243,6 +243,11 @@ def _product_database_display():
 
 def _product_tier():
     return str(getattr(edition_features, 'EDITION', 'Enterprise') or 'Enterprise')
+
+
+def _product_display_name():
+    from lib.product_identity import identity
+    return identity()['name_en']
 
 
 def _parse_bounded_limit(value, *, default=500, maximum=1000):
@@ -2396,7 +2401,7 @@ class VisHandler(BaseHTTPRequestHandler):
             elif path == '/api/a2a/agent-card':
                 principal = self._authenticated_principal()
                 self._send_json(a2a_gateway.agent_card(
-                    {'agent_name': 'Chuanxu Graph Gateway', 'skills': []}, authenticated=bool(principal),
+                    {'agent_name': _product_display_name() + ' Graph Gateway', 'skills': []}, authenticated=bool(principal),
                 ))
             elif path.startswith('/api/a2a/tasks/'):
                 principal = self._authenticated_principal()
@@ -4626,7 +4631,19 @@ class VisHandler(BaseHTTPRequestHandler):
                 if session_data:
                     agent_id = session_data[1].get('agent_id', '')
                     if agent_id:
-                        agent = agent_api.get_agent(agent_id)
+                        # Portal Agent status is session metadata owned by the
+                        # control plane.  The request arrives with the
+                        # business Agent context already installed, but the
+                        # legacy registry is intentionally unavailable to an
+                        # End User connection (Oracle reports ORA-00942).
+                        # Read this one control-plane row as the schema owner,
+                        # then restore the business context for the caller.
+                        previous_agent_id = connection.get_current_agent_id()
+                        try:
+                            connection.set_agent_context(None)
+                            agent = agent_api.get_agent(agent_id)
+                        finally:
+                            connection.set_agent_context(previous_agent_id)
                         self._send_json(_clean_row(agent) if agent else {'error': 'Agent not found'})
                     else:
                         self._send_json({'has_agent': False})
@@ -4974,8 +4991,8 @@ class VisHandler(BaseHTTPRequestHandler):
             with open(filepath, 'r', encoding='utf-8') as f:
                 html = f.read()
             timeout = _session_timeout()
-            html = html.replace('4.5.2', VERSION)
-            html = html.replace('2026-10-06', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
+            html = html.replace('5.0.0', VERSION)
+            html = html.replace('2026-10-18', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
             html = html.replace('{{DB_DISPLAY}}', _product_database_display())
             html = html.replace('{{EDITION_TIER}}', _product_tier())
             html = html.replace(
@@ -5394,7 +5411,7 @@ def _generate_sim_reply(message, agent_id, sess):
 def main():
     from lib.connection_crypto import auto_encrypt_config
     from pathlib import Path
-    config_path = Path(__file__).resolve().parent.parent.parent / "config.json"
+    config_path = Path(os.environ.get('CX_CONFIG_PATH') or str(Path(__file__).resolve().parent.parent.parent / "config.json"))
     if config_path.exists():
         auto_encrypt_config(config_path)
 
@@ -5433,7 +5450,7 @@ def main():
     # listener port without exporting MEMORY_SERVER_PORT.
     os.environ['MEMORY_SERVER_PORT'] = str(port)
     server = ThreadingHTTPServer((host, port), VisHandler)
-    print("[server] AI Agent Infra v{} Community Edition visualization server".format(VERSION))
+    print("[server] {} v{} {} Edition visualization server".format(_product_display_name(), VERSION, _product_tier()))
     print("[server] Listening on http://{}:{}".format(host, port))
     try:
         server.serve_forever()

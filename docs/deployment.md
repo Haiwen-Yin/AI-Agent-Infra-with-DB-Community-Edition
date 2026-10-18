@@ -1,1139 +1,134 @@
-# Deployment Guide - AI Agent Infra with DB v4.5.2
+# Deployment guide v5.0.0
 
-## Startup Mode And Database Governance
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
-监控页分别显示“实例启动模式”和“平台治理配置状态”。启动模式来自
-`CX_RUNTIME_PROFILE`，未设置时使用发行包的 `PROFILE`；生产部署应设置为
-`production`。该值仅描述本进程的启动模式，不修改数据库治理记录，也不代表
-已经通过生产验收。
+[简体中文](deployment_zh.md)
 
-平台治理配置来自数据库 `CX_PLATFORM_CAPABILITIES`：记录完整且必需能力和
-依赖一致时显示“配置正常”，必需能力关闭或依赖不一致显示“配置异常”，数据库
-不可达、记录缺失或字段无效显示“不可用”。监控页仅保留状态摘要；有平台配置
-权限的用户可通过“查看治理配置”链接直接进入“平台配置 → 能力与策略 → 功能开关”，
-查看和管理具体能力。“配置正常”只表示治理配置检查通过，不是生产就绪认证。
-图工程的细分能力仍由 `CX_GRAPH_CAPABILITY_MATRIX` 控制；其中 `PRODUCTION`
-是图工程治理配置键，不是整个部署环境的认证记录。环境变量不能扩大数据库、
-发行版本或当前身份允许的权限。
+## Product and database selection
 
-`GET /api/runtime/profile` returns `startup_mode` (with the legacy `profile`
-alias) and `governance: {source: "database", status: ...}`. Governance status is
-`available`, `degraded`, or `unavailable`. The legacy `production_ready` field
-is `null`: this endpoint does not certify production readiness. `/api/health`
-checks process liveness; `/api/ready` checks database readiness.
+v5.0.0 delivers five packages with seven database acceptance targets. Unified
+Chuanxu Community selects Oracle, PostgreSQL or YashanDB in one package.
+OpenTenBase AgentX supports PostgreSQL only. The three Enterprise packages each
+support their named backend. This package supports **oracle, pg, yashandb** and is
+licensed under **Apache-2.0**. Enterprise-only modules and SQL are physically
+excluded from Community packages.
 
-Before selecting a Linux host, apply the two-level baseline in
-`docs/linux-platform-compatibility.md`: a host may support the Web/database
-control plane while remaining ineligible for `VERIFIED` local Agent execution.
-Oracle Linux 9.8 x86_64 is the only strong-isolation host currently verified by
-this project; other distributions require the packaged gate on their exact
-image and patch level.
+Tasks, Steps, Memory, Knowledge, property graphs, identities, grants and audit
+remain database entities. Changing the backend is not an online switch and does
+not copy application data. Prepare a separate target and restart the process.
 
-Use the selected package's sole `scripts/deploy/baseline_v*.json` as the
-current new-install contract. v4.5.2 ends at migration 99 across all three
-databases; v4.4.14 ended at 82. The runner verifies the exact ordered chain.
-Historically, v4.4.10 added optional model forwarding, usage/cost accounting,
-per-profile routing and the read-only wallboard through migration 65. Its
-source template filename is not the current generated deployment contract.
-v4.4.8 is withdrawn and must not be used as an upgrade source. Existing historical
-SQL remains retained for audit/reference, while fresh deployment uses the ordered
-manifest and does not require customer upgrade compatibility.
+## Prepare the environment
 
-For the shared development environment, use the single connection catalog at
-`docs/development-database-catalog.md`. It is the canonical reference for the
-three test database configuration paths and service endpoints.
+Use Python 3.14+ and supported Linux with glibc 2.34+. Control-plane compatibility
+does not prove that the host can isolate local Agents; see
+[platform compatibility](linux-platform-compatibility.md) and
+[runtime isolation](runtime-isolation.md).
 
-Approved Enterprise demonstration databases may be populated with
-`scripts/tools/seed_v410_enterprise_demo_data.py`. The idempotent utility keeps
-Principal ownership, organization, `AGENT_REGISTRY`, active Sessions, running
-Task Plans, and running Loops coherent so wallboard acceptance tests do not
-mistake disconnected fixtures for an empty platform. Never use demo data as a
-production initialization step.
+Keep the complete package, including offline dependencies in `vendor/`.
+YashanDB requires the matching bundled native client. Database versions and
+bounded owner privileges are described in [minimum privileges](minimum-privileges.md).
+Oracle and YashanDB use dedicated PDBs; PostgreSQL uses a dedicated database and
+non-superuser Schema Owner. Do not put host root or database SYS credentials in
+the platform's runtime configuration.
 
-Set `CX_PUBLIC_BASE_URL=https://platform.example.com` when the service is behind
-a reverse proxy or its externally reachable address differs from the incoming
-request base URL. The platform appends `/api/model-gateway/completions` and
-distributes that address read-only in the LLM Provider Profile table. Do not
-configure a user-supplied relay URL. Existing profiles start with direct mode
-enabled and gateway mode disabled; an administrator may enable either or both
-and must provide a compliance reason when confirming the change.
+## Configure and install
 
-The current maturity boundary is deliberate. Production includes the stable
-Graph Runtime core and authorized Graph inspection. Manifest draft import,
-SLO read-only views, and checkpoint fork require controlled authorization and
-fresh evidence. MCP 2026-07-28 negotiation and `server/discover`, independent
-A2A 1.0.1 conformance, replacement-Worker resume and stream de-duplication,
-sandbox/approval replay, bounded tool-result compaction, OTLP Collector
-delivery, and authorization-filtered GraphRAG projections remain research
-items. Do not enable or sell them as production capabilities merely because a
-module, protocol version, Skill, or metadata record exists.
+1. Extract into a trusted directory and work from the package root. Copy
+   `config.example.json` to `config.json`. For the unified package, instead
+   select `config.oracle.example.json`, `config.pg.example.json` or
+   `config.yashandb.example.json`.
+2. Set configuration permissions to `0600`. Enter explicit `database.type`,
+   connection details, `security.secret_key`, model/Embedding settings and the
+   server listener. PostgreSQL uses `host/port/dbname`; Oracle and YashanDB
+   use `dsn`.
+3. Run `bash scripts/install_offline.sh` to create the package's `.venv`.
+   `PYTHON_BIN` selects Python and `CX_VENV_DIR` selects the environment.
+   To install before configuring, set `CX_DATABASE_DIALECT=pg` or another
+   supported backend. Only that backend's native requirements are selected.
+4. Set `CX_CONFIG_PATH=/absolute/path/config.json` for an external private
+   configuration. `CX_DATABASE_DIALECT` must agree with configuration.
+   Missing, unsupported or conflicting selection is rejected before driver
+   import. The process pins its selected backend.
 
-> This is a technical document for **Chuanxu (川序)**, the **AI Agent
-> Management Platform**. `AI Agent Infra with DB` is the unified technical project
-> name; database-specific package names identify the adapter and edition.
+`server.host` controls the bind address and `server.port` the port. External
+access also requires appropriate routing and firewall rules. With a reverse
+proxy, configure HTTPS, trusted forwarding and `CX_PUBLIC_BASE_URL`. Do not
+use an unverified forwarded address as a model gateway endpoint.
 
-## Supported Targets
+## Initialize a prepared empty target
 
-| Adapter | Validated database | Business Agent account |
-|---|---|---|
-| Oracle | Oracle AI Database 26ai | Native End User |
-| PostgreSQL | PostgreSQL 18 | Dedicated LOGIN role |
-| YashanDB | YashanDB 23.5.4+ | Dedicated database user |
+A database administrator first prepares the dedicated empty PDB/database,
+tablespaces, extensions and bounded owner privileges according to the selected
+`0_*_database_prerequisites.sql`. Deployment privileges are different from
+ordinary Agent privileges. Business Agents cannot fall back to owner credentials.
 
-Use any accessible Python 3.14+ runtime. Set `PYTHON_BIN` when the chosen
-interpreter is not on `PATH`. Run `bash scripts/install_offline.sh` from the
-package root before starting the service. It creates a package-local `.venv`
-from the selected interpreter and installs only the verified local `vendor/`
-wheelhouse; `start_web_server.sh` automatically prefers that `.venv`. This
-avoids global pip writes on PEP 668 managed installations. For a clean installation, deploy the base schema
-and phase scripts, then apply the required versioned Graph/lifecycle migrations
-through the migration runner. For an existing schema, run each versioned
-migration only through the runner so its checksum and ledger record are
-verified. Then run the application with the minimum documented privileges.
-Business Agent configuration must contain only its independent login and must
-never contain a fallback schema-owner credential.
+A single-backend package has one `scripts/deploy/baseline_v*.json`; the unified
+package has one per backend under `scripts/deploy/<database>/`. v5.0.0 retains
+the complete checksum-bound entity schema chain through
+`102_v5_0_0_network_access.sql`. Historical filenames and applied checksums
+are not renamed.
 
-The first-run `scripts/config_wizard.sh` prompt includes the Web listen address
-and port. It reads the defaults from the selected package, accepts an explicit
-override, rejects empty addresses and ports outside `1-65535`, and prints the
-resolved binding after writing `config.json`.
-
-## Platform-native Full Deployment
-
-This is the recommended path when a new installation has no existing external
-Agent. It uses the package's deterministic Bootstrap Deployment Agent and then
-the platform-native Admin Agent. An external Agent, an LLM, and `SKILL.md` are
-not required to create the database schema or the initial management identity.
-LLM configuration is required only when the native management Agents need model
-reasoning after the authoritative bootstrap has completed.
-
-### 1. Prepare the target and deployment boundary
-
-The customer DBA prepares the database service, PDB or database, tablespaces,
-database account, network ACLs, backup policy, and any database-specific
-extension or privilege prerequisites. Oracle Text prerequisites, PostgreSQL
-extensions such as Apache AGE, and YashanDB client libraries are checked by the
-corresponding adapter. The platform does not silently create PDBs, tablespaces,
-high-privilege database accounts, database clusters, or customer firewall rules.
-
-For Oracle Enterprise, the DBA must apply the schema-owner grants documented
-in `docs/minimum-privileges.md` before initialization. Preflight checks the
-complete End User, Data Role, Data Grant, context, and `SET USE DATA GRANTS
-ONLY` privilege set, in addition to `Partitioning=TRUE`, Oracle Text, writable
-tablespaces, and ordinary schema DDL privileges. A partial Deep Data Security
-grant set is blocked before any platform table is created.
-
-Choose one target database and edition, record the target identifier, and keep
-the database owner credential separate from every Runtime or Business Agent
-credential. Confirm that the package checksum and the local Python 3.14+
-runtime are trusted before continuing.
-
-#### Oracle Enterprise database operations before installation
-
-Run these operations as the customer DBA before `config_wizard.sh` or
-`install_platform.sh`. They are database preparation, not application
-migrations:
-
-1. Create and open a dedicated PDB/service. Save its open state and verify the
-   application DSN resolves to that PDB; deployment to `CDB$ROOT` is blocked.
-2. Verify Oracle AI Database 26ai, `Partitioning=TRUE`, Oracle Text `VALID`,
-   and `AL32UTF8`. Confirm the default and temporary tablespaces have enough
-   capacity for tables, vector/graph data, indexes, audit retention, and test
-   fixtures.
-3. Create a dedicated Schema Owner using the customer's secret-management
-   process. Do not reuse `SYS`, `SYSTEM`, a Business Agent End User, or an
-   application administrator password.
-4. In the target PDB, review the definitions at the top of
-   `scripts/deploy/0_oracle_database_prerequisites.sql`, set the actual owner,
-   application tablespace, and a DBA-approved finite quota, then run it as
-   SYSDBA. It grants bounded schema
-   creation, Oracle Text, direct package, dictionary evidence, and Oracle 26ai
-   Deep Data Security privileges, and idempotently prepares the bounded
-   `DEEP_SEC_SESSION_ROLE` required for End User login. It does not create the
-   Schema Owner or expose a password.
-   The DBA must also verify that the Oracle AI Database DATA ROLEs
-   `admin_data_role`, `agent_data_role`, and `pool_agent_data_role` exist in
-   this PDB. If the historical policy script silently ignored a role-creation
-   privilege error, create these roles as SYSDBA and grant
-   `DEEP_SEC_SESSION_ROLE` to the Agent roles before running v4.4.10 migration
-   63. Ordinary `GRANT SELECT ... TO agent_data_role` statements are not valid
-   for DATA ROLEs; migration 63 creates the required row-filtered DATA GRANTs.
-5. Decide the transport encryption path before testing connectivity. The
-   packaged default is python-oracledb Thin Mode. A database that requires
-   Oracle Native Network Encryption on TCP produces `DPY-3001`. Use either a
-   DBA-approved TCPS listener/wallet policy that permits the Thin connection,
-   or a separately installed and validated Oracle Client Thick Mode path. Do
-   not set encryption/integrity to `REJECTED` merely to make installation pass.
-6. If database-side `UTL_HTTP` calls are enabled, create a least-privilege
-   network ACL for only the approved model/Embedding hosts and ports. Python
-   gateway egress is governed separately by host firewall/provider allowlists.
-7. Confirm listener/firewall reachability from the platform host, then run the
-   package preflight. Do not run schema SQL manually after a partial failure;
-   restore/clean the target or resume through the deployment journal.
-
-DBA inspection examples, run in the target PDB:
-
-```sql
-SELECT SYS_CONTEXT('USERENV','CON_NAME') AS con_name FROM dual;
-SELECT banner_full FROM v$version FETCH FIRST 1 ROW ONLY;
-SELECT value FROM v$option WHERE parameter = 'Partitioning';
-SELECT comp_id, status, version FROM dba_registry WHERE comp_id = 'CONTEXT';
-SELECT value FROM nls_database_parameters WHERE parameter = 'NLS_CHARACTERSET';
-SELECT username, default_tablespace, temporary_tablespace
-  FROM dba_users WHERE username = UPPER('<SCHEMA_OWNER>');
-SELECT tablespace_name, max_bytes FROM dba_ts_quotas
-  WHERE username = UPPER('<SCHEMA_OWNER>');
-```
-
-Apply the reviewed grants with SQLcl/SQL*Plus or the packaged deployer:
-
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py --sysdba <SYS_USER> '<SYS_PASSWORD>' \
-  <DB_HOST>:1521/<PDB_SERVICE> \
-  scripts/deploy/0_oracle_database_prerequisites.sql
-```
-
-Avoid placing real passwords in shell history in production; use the site's
-approved protected prompt/secret injection mechanism. The command above shows
-argument positions only.
-
-### 2. Install the package and run preflight
-
-Install the offline wheelhouse into the package-local environment, load the
-adapter configuration, and run the deployment preflight. Preflight checks the
-Python/runtime compatibility, database connectivity, edition and target
-version, required privileges, schema state, migration ledger, storage
-capacity, and database-specific prerequisites. A partial or unknown schema
-fails closed; it is not treated as an empty installation.
-
-```bash
-source scripts/python_runtime.sh
-export PYTHON_BIN="$(cx_resolve_python)"
-cx_prepare_python_environment "$PYTHON_BIN"
-"$PYTHON_BIN" scripts/migration_runner.py --preflight \
-  --version 4.5.2 --database <oracle|pg|yashandb> \
-  --edition <community|enterprise> --<adapter>-config config.json
-```
-
-The preflight result is an auditable deployment record. It contains redacted
-configuration and capability results, never plaintext passwords, API keys, or
-recovery codes.
-
-Encrypted database configuration is opened through the same master-key
-resolver as the Web runtime. Preserve the owner-only
-`~/.ai-agent-infra/master.key` with `config.json`; do not create a second key
-under the retired `~/.oracle-infra` directory to work around a migration
-error. A current package accepts the current path directly and retains only a
-bounded legacy read-and-migrate fallback.
-
-### 3. Let Bootstrap Deployment Agent create the platform
-
-After preflight, the package-local Bootstrap Deployment Agent executes the
-verified base schema and additive migrations through the adapter. It records
-each step, checksum, transaction boundary, warning, and verification result;
-supports resume and status; and retires after handing control to the platform
-management layer. It does not interpret arbitrary LLM output as SQL or
-authorization, and it does not depend on an external Agent calling a Skill.
-
-For an interactive installation, the command securely prompts twice for the
-initial `admin` password. The password must contain at least 12 characters. It
-is never placed in an argument, configuration file, journal, or evidence; only
-an Argon2id hash is stored.
+Store the initial administrator password in a private, current-user-owned
+regular file with mode `0600`, then run:
 
 ```bash
 bash scripts/install_platform.sh initialize \
-  --version 4.5.2 --database <oracle|pg|yashandb> \
-  --edition <community|enterprise> --config config.json
+  --database pg --edition community --version 5.0.0 \
+  --config /absolute/path/config.json \
+  --admin-password-file /absolute/path/admin.password
 ```
 
-Non-interactive automation must provide an operator-owned regular password
-file with mode `0600` or stricter. A symlink, a file owned by another user, an
-empty file, or group/other permissions fails closed. Remove the plaintext
-secret file after successful initialization according to the deployment
-environment's secret-handling policy.
+Replace the backend and edition to match this package. Interactive initialization
+can instead prompt for the password; it must meet the existing 12-character
+policy. There is no universal default administrator password.
 
-After `scripts/install_offline.sh` creates the package-local `.venv`, standard
-package entrypoints automatically prefer `.venv/bin/python` when `PYTHON_BIN`
-is unset. This keeps initialization on the same Python 3.14 dependency set
-that passed the offline gate. Set `PYTHON_BIN` only to deliberately select
-another verified Python 3.14 environment.
+Initialization proves the target is empty, executes its manifest and migrations,
+creates the Human administrator and native management identities, publishes
+current product facts, checks readiness and retires the temporary deployment
+identity. An LLM or external Agent is not required for schema initialization.
+
+## Upgrade, resume and verify
+
+An existing database must not be initialized as empty. Confirm database-side
+backup/recovery responsibility before `upgrade --confirm-database-backup`.
+Inspect journals and select the original `--run-id` for `resume` after an
+interrupted, classified deployment. Unknown partial schemas require investigation.
+Do not edit applied SQL or delete the migration ledger. See [migration](migration.md).
+
+Private journals and keys are in `.runtime/deployment/`. Preserve configuration,
+encryption keys and recovery journals before replacing a program directory.
+They must not enter public archives.
 
 ```bash
-bash scripts/install_platform.sh initialize \
-  --version 4.5.2 --database <oracle|pg|yashandb> \
-  --edition <community|enterprise> --config config.json \
-  --admin-password-file /run/secrets/chuanxu-initial-admin
+bash scripts/install_platform.sh verify \
+  --database pg --edition community --version 5.0.0 \
+  --config /absolute/path/config.json
+./start_web_server.sh start
+./start_web_server.sh status
 ```
 
-The runner verifies the final schema, API packages, indexes, jobs, property
-graph objects where supported, identity tables, policy tables, audit tables,
-and the migration ledger before reporting success. A failed step remains
-visible for repair or rollback according to the adapter's documented boundary;
-it is never reported as a successful platform deployment.
-
-### 4. Configure the initial model contracts
-
-Use the protected Dashboard initialization page to configure the platform LLM
-profile and the Embedding profile. Test each endpoint before activation. The
-Embedding test determines the vector dimension and the platform creates the
-database-authoritative Contract, default Space, and Binding. API keys are
-encrypted at rest. Every Agent that writes or searches platform data must use a
-compatible approved Contract; changing model, dimension, metric, or
-normalization creates a new version and requires governed re-embedding rather
-than silently overwriting the old contract.
-
-If the installation has no usable LLM yet, the database bootstrap can still
-finish. Native management identities remain `ACTIVATION_PENDING` until an
-approved LLM profile passes its health test; this state does not weaken schema,
-identity, authorization, or audit controls.
-
-### 5. Activate native management identities
-
-The first platform bootstrap replaces the inert database seed with the
-operator-supplied Argon2id password hash, creates the human `admin` Principal,
-and creates the native
-Platform Admin Agent as separate principals. Enterprise also creates the
-restricted Compliance Admin Agent when that edition is enabled. The protected
-Platform Administration Channel is created with the administrator and enabled
-management Agents only. Business Agents and ordinary users cannot join it.
-
-After the LLM profile is approved, activate the management Agents, verify their
-health and database access, and confirm that a channel request produces an
-auditable response. A model response is never itself an authorization or SQL
-execution boundary; channel commands are parsed into typed, scoped actions and
-high-impact mutations remain subject to approval.
-
-### 6. Configure the platform and add management nodes
-
-Complete the initial Dashboard configuration: session policy, capability
-switches, Security Domain, shared directory purpose, Portal Agent Pool LLM
-allowlist, and external-Agent registration policy. The existing trusted Admin
-Agent is the preferred operator for adding another Admin Agent node. It creates
-the deployment record, connects to the approved target node, installs the
-package, generates the new Agent identity material, and completes enrollment;
-the administrator does not manually copy an Admin identity public key in this
-path. External Admin enrollment remains a separate identity-proof and approval
-flow.
-
-For production management continuity, use three healthy Admin Agents with
-distinct positive weights and require both member-count and weighted
-majorities. Leader leases, terms, and fencing prevent a recovered old Leader
-from issuing stale writes. Shared files may use a local directory or mount in
-the base implementation; NFS, object storage, and unified storage require the
-corresponding customer adapter.
-
-### 7. Verify the deployment and hand over operations
-
-Run a bounded acceptance checklist: admin and ordinary-user login separation,
-Portal/Dashboard session separation, protected-channel membership, LLM and
-Embedding health, authorized Knowledge/Memory retrieval, Graph Runtime recovery,
-audit evidence, pagination, backup evidence, and one controlled Admin Agent
-node recovery. Then record the deployment topology, database endpoint policy,
-credential ownership, Security Domains, enabled capabilities, Agent templates,
-backup/restore procedure, upgrade window, and unresolved risks.
-
-Only after this checklist passes should the installation be treated as a
-production candidate. Database cluster HA, database failover, RPO/RTO,
-customer-specific infrastructure connectors, and host-level process
-termination remain customer-environment responsibilities unless separately
-implemented and verified through adapters.
-
-### 8. Add business Agents through the appropriate path
-
-Platform-created Business Agents begin with a human request containing owner,
-purpose, template, data classification, model, runtime target, isolation, and
-capability reasons. Approval and separation of duties create an independent
-Agent principal and deployment record. Existing external Agents may continue
-to register through Skill-first enrollment using a one-time enrollment token;
-the external-registration policy can be disabled, approval-only, or enabled.
-Neither path grants access beyond the Agent's explicit identity, Security
-Domain, resource grants, approved Skills, Tools, and current policy.
-
-## v4.3.6 Native Agent Deployment
-
-After the v4.3.5 chain, apply the additive v4.3.6 migration and repeat it
-through the runner for idempotency:
-
-```bash
-"$PYTHON_BIN" scripts/migration_runner.py --version 4.3.6 \
-  --database <oracle|pg|yashandb> --edition <community|enterprise> \
-  --<adapter>-config config.json --confirm-database-backup
-```
-
-The migration creates the native bootstrap, templates, Agent inventory, LLM
-profiles, provisioning requests, deployment targets, runtime leases and
-external-registration policy. The application startup then performs the
-database-authoritative bootstrap. Without an LLM profile the built-in Agents
-remain `ACTIVATION_PENDING`; no external Agent is required for initialization.
-Configure an OpenAI-compatible URL and model in the protected Dashboard. API
-keys are encrypted at rest and are never returned by ordinary reads.
-
-`LOCAL_MANAGED`, `REMOTE_WORKER`, `CONTAINER_MANAGED`, and `WEBHOOK_MANAGED`
-are reference lifecycle contracts. They do not provide customer-specific
-virtualization, SaaS, MaaS, or Agent-platform connectors. Such connectors must
-implement prepare, activate, health, cancel, revoke, and evidence without
-granting authority from a remote callback.
-
-YashanDB packages additionally install the bundled CPython-native `yaspy`
-module into the same `.venv` and place the bundled client libraries under
-`.runtime/yashandb-client/lib` by default. The start script exports this path
-only for the service process; it does not change `~/.bashrc`. Set
-`CX_YASHAN_LIB_DIR` only when an approved shared client-library location is
-required.
-
-Install `binutils` before YashanDB client setup (`dnf install binutils` on
-Oracle Linux/RHEL, or `apt-get install binutils` on Debian-derived hosts).
-The installer reads each library's ELF SONAME: the bundled `*.so.1.4.100`
-files require `.so.0` links, not links inferred from the filename's first
-number. It also verifies `ctypes.CDLL('libyascli.so')`; importing `yaspy`
-alone cannot establish client readiness.
-
-For a local validation service, keep the owner-only configuration outside the
-package and export its absolute path as `CX_CONFIG_PATH` before running
-`start_web_server.sh`. Run the package's offline installer first: directly
-starting Uvicorn skips native-client setup. An absent `.runtime` directory in
-a clean archive is not a missing vendor payload; the YashanDB installer creates
-it from `vendor/yaspy/client_lib`. Do not copy another release's runtime or
-place development database credentials into an archive. Require `/api/ready`
-and an authenticated API check, not `/api/health` alone, for acceptance.
-
-When using systemd under SELinux enforcing, use a Python 3.14 environment at
-an approved persistent location. An executable symlink under `/tmp` can be
-denied before Python starts (`203/EXEC`); do not disable SELinux to bypass it.
-
-The offline dependency set contains the upstream
-`cryptography==49.0.0` `manylinux_2_34` wheel. Full functionality requires
-RHEL 9.8+ (Oracle Linux 9.8+) or an equivalent host with glibc 2.34 or newer; RHEL 8 and its
-`manylinux_2_28` compatibility wheel are retired and unsupported.
-The same wheelhouse must include `argon2-cffi==25.1.0`, its mandatory
-`argon2-cffi-bindings` wheel, `annotated-doc==0.0.4`, and `fastapi==0.120.4`.
-The verifier checks wheel metadata, Python/platform compatibility, glibc 2.34+
-host baseline, and RECORD integrity before install.
-
-For upgrades, preserve the stable core and apply the complete additive chain
-through `migration_runner.py --version 4.5.2`. The current `production`
-profile retains the stable Graph Runtime and keeps interoperability extensions
-such as A2A and OpenTelemetry independently bounded. The validated local recovery boundary covers replacement
-runtime processes using database leases, fencing, Runs, and Checkpoints; it
-does not claim database failover, RPO, or RTO. Multi-tenant deployment and
-public Internet exposure remain outside this private single-tenant contract.
-
-### v4.3.4 Compliance Activation
-
-Enterprise deployments add a database-authoritative compliance plane after the
-normal identity and Gateway migration chain. Apply it only after the database
-operator has established the database-native recovery boundary and accepts
-responsibility for it:
-
-```bash
-"$PYTHON_BIN" scripts/migration_runner.py --version 4.3.4 --edition enterprise \
-  --database <oracle|pg|yashandb> --<adapter>-config config.json \
-  --confirm-database-backup
-```
-
-New production or restricted Agents remain `PENDING_ACTIVATION` until they
-prove a registered Gateway credential. Dashboard activation does not replace
-that proof. The Controller marks stale validated evidence as `DEGRADED`; it
-does not infer a violation from idleness, a missing Skill call, a model
-opinion, or an offline external process. Exceptions require a reason,
-compensating controls, expiry, and a distinct active Human approver.
-
-### Historical v4.3.3 Preview Controls
-
-This section records the earlier profile design. In v4.4.7 the
-database-authoritative capability matrix is authoritative: Graph Runtime core
-and authorized inspection are Production; manifest draft import, read-only SLO
-views, and checkpoint fork are `CONTROLLED`; replay, Dynamic Graph migration,
-framework-adapter execution, A2A, and OTLP are `DISABLED`. Do not expose an
-endpoint merely because older deployment profiles recognized it. A2A still
-lacks independent-client conformance and durable stream delivery; OTLP still
-lacks real Collector delivery, retry, and dead-letter evidence. Neither
-extension changes database authority, identity, policy, or audit rules.
-
-Existing v4.0.1 installations must then apply
-`8_portal_node_ownership.sql` before deploying or restarting the web service.
-Fresh schemas already contain the Portal node ownership column and index.
-
-### v4.3.0 Identity And Governance Deployment
-
-Community editions deploy `8_v4_1_0_registration.sql` for the common
-registered-Agent boundary. Enterprise editions deploy
-`8_v4_1_0_governance.sql`, which includes that registration boundary and adds
-the resource, policy, grant, decision, approval, emergency, retention,
-legal-hold, and evidence-export objects. The three adapters expose the same
-observable decisions while using native SQL types, indexes, identity
-mechanisms, RLS or database users, and transaction behavior.
-
-Before enabling a high-risk policy, verify an explicit catalog classification,
-an active policy version, a bounded grant where required, and an approval
-request when the policy requires human approval. Unknown, expired, revoked,
-disabled, or unregistered identities must remain denied.
-
-## Oracle Adapter Deployment Details
-
-## Prerequisites
-
-- Oracle AI Database 26ai version 23.26.2.0.0 or later
-- Python 3.14+ with the bundled `oracledb` wheel
-- Oracle credentials with the privileges documented in `minimum-privileges.md`
-
-## 6-Phase Deployment
-
-At the release root, select the runtime once and reuse it for every command:
-
-```bash
-source scripts/python_runtime.sh
-export PYTHON_BIN="$(cx_resolve_python)"
-cx_prepare_python_environment "$PYTHON_BIN"
-```
-
-### Phase 0: Oracle Text prerequisites (0_oracle_text_prerequisites.sql)
-Oracle editions use an Oracle Text `CONTEXT` index with a
-`MULTI_COLUMN_DATASTORE` preference. A DBA must grant the schema owner the
-creation-only privileges before the schema script runs:
-
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py --sysdba sys your_sys_password host:port/service \
-    scripts/deploy/0_oracle_text_prerequisites.sql
-```
-
-This grants `CTXAPP` and `EXECUTE ON CTXSYS.CTX_DDL`. It does not grant runtime
-data access to Business Agents.
-
-### Phase 1: Schema (1_schema.sql)
-Creates all tables, partitions, indexes, property graph, and JSON duality views.
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py aiadmin your_password host:port/service \
-    scripts/deploy/1_schema.sql scripts/deploy/7_v4_0_1_migration.sql \
-    scripts/deploy/8_v4_1_0_registration.sql
-```
-- **Destructive**: Drops all existing tables before creating new ones (`CASCADE CONSTRAINTS PURGE`)
-- Creates the current core schema and the edition-specific objects declared by the deployment scripts
-- Composite primary keys on ENTITIES, ENTITY_EDGES, KNOWLEDGE_META, ENTITY_EMBEDDINGS, HARNESS_META, ENTITY_TAGS, TASK_PLANS, TASK_STEPS, AGENT_SESSION, WORKSPACES, WORKSPACE_CONTEXT, WORKSPACE_TASKS
-- WORKSPACE_CONTEXT includes VISIBILITY column (PRIVATE/SHARED/PUBLIC, default SHARED) for cross-agent context isolation in collab workspaces
-- Partitioning: LIST+RANGE on ENTITIES (6×7), AGENT_SESSION (2×7), TASK_PLANS (2×7); RANGE+HASH on ENTITY_ACCESS_LOG; REFERENCE on 5 child tables
-- ROW MOVEMENT enabled on AGENT_SESSION, TASK_PLANS, TASK_STEPS
-- Global unique constraints: UK_ENTITIES_ID, UK_EDGES_ID, UK_TASK_PLANS_ID, UK_TASK_STEPS_ID, UK_ACCESS_LOG_ID
-- ~25 local indexes + global indexes on non-partitioned tables
-- 1 property graph, 4 duality views
-- Seeds `SYSTEM_CONFIG` with the current release metadata
-- Verifies that `ENTITIES_MCD` exists and `ENTITIES_SEARCH_CTX` reports both
-  `DOMIDX_STATUS=VALID` and `DOMIDX_OPSTATUS=VALID`
-
-### Phase 2: API Packages (2_api.sql)
-Creates the shared PL/SQL API packages required by the current adapter.
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py aiadmin your_password host:port/service \
-    scripts/deploy/2_api.sql
-```
-- MEMORY_FUSION_ENGINE (uses RAWTOHEX(SYS_GUID()), JSON_OBJECT VALUE syntax, composite FKs)
-- KNOWLEDGE_BASE_API (spaced review, concept lineage with composite key joins)
-- AGENT_PERMISSION_MANAGER (access control, session cleanup with ROW MOVEMENT)
-- SESSION_CLEANUP (purge logs, archive entities, tag counts)
-- WORKSPACE_MANAGER (workspace lifecycle, context chain management, cleanup)
-
-### Phase 3: Scheduler Jobs (3_jobs.sql)
-Creates the scheduler jobs declared by the current adapter.
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py aiadmin your_password host:port/service \
-    scripts/deploy/3_jobs.sql
-```
-
-| Job | Schedule | Action |
-|-----|----------|--------|
-| KNOWLEDGE_EXTRACTION_JOB | Weekly Sunday 06:00 | Extract knowledge from memory patterns |
-| KNOWLEDGE_REVIEW_JOB | Daily 06:00 | Schedule spaced reviews for knowledge entities |
-| SESSION_CLEANUP_JOB | Every 30 min | Clean expired sessions + purge inactive |
-| ACCESS_LOG_PURGE_JOB | Weekly Sun 04:00 | Purge access logs older than 90 days |
-| ENTITY_ARCHIVE_JOB | Weekly Sun 05:00 | Archive low-importance memories older than 180 days |
-| COLLAB_EXPIRY_JOB | Daily 00:30 | Process collaboration requests |
-| WORKSPACE_CLEANUP_JOB | Daily 01:00 | Clean stale workspaces and paused sessions |
-| CONTEXT_ARCHIVE_JOB | Weekly Sun 03:00 | Archive old context entries |
-| STALE_WORKSPACE_DETECT_JOB | Daily 04:00 | Detect stale workspaces |
-| DORMANT_AGENT_JOB | Daily 05:00 | Hibernate dormant agents |
-| CREDENTIAL_CLEANUP_JOB | Daily 06:30 | Clean expired credentials |
-| EMBEDDING_GENERATION_JOB | Daily 03:30 | Generate embeddings for entities |
-| LDAP_SYNC_JOB | Daily 01:30 | Sync LDAP users and groups |
-| SKILL_TOKEN_CLEANUP_JOB | Daily 07:00 | Clean expired skill tokens |
-| CONTEXT_AUDIT_JOB | Daily 00:00 | Audit context access patterns |
-| BRANCH_CLEANUP_JOB | Weekly Sat 02:00 | Archive abandoned branches |
-
-`MEMORY_FUSION_JOB` is a pre-v4.3.2 legacy task and is removed by migration
-`25_v4_3_2_disable_legacy_memory_fusion.sql`. It must not be recreated: direct
-fusion and importance decay bypass immutable Memory versions, review, snapshots,
-and lifecycle audit. Use governed `CX_MEMORY_JOBS` workflows instead.
-
-### Phase 4: Grants (4_grants.sql)
-This is an advanced DBA/runtime-account provisioning script, not a command
-that the fresh initializer runs unchanged. Its `AGENT_API_PASSWORD` definition
-must be replaced through the approved secret workflow before use; a literal
-package placeholder must never become a database password. Before
-initialization, the DBA grants the documented Schema Owner system privileges
-and direct `EXECUTE` on `SYS.DBMS_CRYPTO` and `SYS.UTL_HTTP`. Preflight verifies
-both direct object grants and fails closed when either is absent.
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py --sysdba sys your_password host:port/service \
-    scripts/deploy/4_grants.sql
-```
-- Grants SELECT, INSERT, UPDATE, DELETE on all tables to application role
-- Grants EXECUTE on all PL/SQL packages to application role
-- Idempotent: re-run is safe
-
-### Phase 5: Harness Templates (4_harness_templates.sql)
-Seeds 5 built-in harness templates with HARNESS_META (INPUT_SCHEMA, OUTPUT_SCHEMA, EXECUTION_MODE).
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py aiadmin your_password host:port/service \
-    scripts/deploy/4_harness_templates.sql
-```
-Uses MERGE for idempotent re-runs. Templates: Research Analyst, Code Assistant, Data Analyst, Task Planner, Security Auditor.
-
-### Phase 6: Deep Sec Policy (6_deep_sec_policy.sql)
-Applies Deep Security policies for row-level access control and data masking.
-The v4.4.10 Oracle Enterprise Bootstrap Deployment Agent includes this script
-in its release-bound base manifest. Operators do not run a second manual
-policy command after successful initialization. Migration 50 runs later in the
-same ordered chain and restores the trusted-End-User context-setter boundary.
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py aiadmin your_password host:port/service \
-    scripts/deploy/6_deep_sec_policy.sql
-```
-- Requires Oracle AI Database 26ai version 23.26.2+ (minimum version for Deep Sec)
-- 23 Data Grants, MAC on 7 tables, 3 PL/SQL packages (SET_AGENT_CONTEXT, agent_auth_pkg, END_USER_MANAGER)
-- End User Context with `o:onFirstRead` callback, Data Roles (admin_data_role, agent_data_role, pool_agent_data_role)
-- DEEP_SEC_SESSION_ROLE (CREATE SESSION) for End User login
-- Idempotent: re-run is safe
-
-**v4.1.0 requirement**: Portal APIs use the authenticated Business Agent's
-independent database identity for the entire request. Missing grants or an
-unavailable Business connection fail closed and never fall back to the Schema
-Owner.
-
-### v4.1.0 Registration and Governance
-
-Run `8_v4_1_0_registration.sql` for Community editions. Enterprise editions
-run `8_v4_1_0_governance.sql` instead; it includes the registered-Agent tables
-and adds the resource catalog, policy, grant, approval, emergency, retention,
-legal-hold, and evidence-export objects.
-
-## Python Setup
-
-```bash
-pip install oracledb
-```
-
-## Configuration
-
-Edit `config.json`:
-```json
-{
-  "database": {"user": "aiadmin", "password": "your_password", "dsn": "host:port/service"},
-  "server": {"host": "0.0.0.0", "port": 18090, "session_timeout": 300},
-  "embedding": {"api_url": "http://host:port/v1/embeddings", "model": "text-embedding-bge-m3", "dimension": 1024},
-  "security": {"masking_enabled": true, "pbkdf2_iterations": 100000, "max_login_attempts": 5, "lockout_minutes": 15}
-}
-```
-
-Environment variable overrides: `MEMORY_DB_USER`, `MEMORY_DB_PASSWORD`, `MEMORY_DB_DSN`, `MEMORY_SERVER_PORT`, `MEMORY_SERVER_HOST`, `MEMORY_SESSION_TIMEOUT`, `MEMORY_EMBEDDING_API`
-
-## Running Tests
-
-```bash
-cd <release-root>
-"$PYTHON_BIN" -m pytest scripts/tests/ -q
-```
-
-To target a reusable live test database, set `AIAGENT_TEST_DB` and the
-adapter-specific connection environment variables documented in
-`AGENTS.md`. The release gate requires zero test failures; live database
-contract and governance checks are run separately by the release validators.
-
-## Starting the Web Server
-
-```bash
-# Control script (recommended)
-export PYTHON_BIN=/absolute/path/to/python3.14  # when Python is not on PATH
-./start_web_server.sh start    # Start the FastAPI/Uvicorn service (daemon mode)
-./start_web_server.sh status    # Status + config
-./start_web_server.sh stop      # Stop
-./start_web_server.sh restart   # Restart
-./start_web_server.sh config    # Show configuration
-./start_web_server.sh log       # View log
-
-# Or run directly from the release root. Setting the port is recommended:
-# Dashboard/Portal cookie names include the actual request port in all APIs.
-MEMORY_SERVER_PORT=<WEB_PORT> PYTHONPATH=scripts "$PYTHON_BIN" -m uvicorn web_app:app --host 0.0.0.0 --port <WEB_PORT>
-```
-
-Prefer `start_web_server.sh`, which exports the resolved port automatically.
-The FastAPI and compatibility layers derive the session-cookie suffix from the
-incoming request port, with `MEMORY_SERVER_PORT` and the configured port as
-fallbacks. This keeps login, graph, and compatibility APIs on one session even
-when Uvicorn is started on a custom port or behind a port-forwarding rule.
-
-The release layout serves brand assets from
-`scripts/visualization/static/brand/`. Keep `/static/brand/...` in the Web
-smoke test: a missing packaged-path candidate breaks the login mark before
-authentication and must fail release verification.
-
-For local-account recovery, run the governed interactive utility from the
-release root as `root`: `PYTHONPATH=scripts python3.14
-scripts/tools/reset_local_password.py admin`. It masks both password entries,
-uses the one-time password-reset transaction, updates the identity mirror,
-clears lockout state, revokes existing Sessions, and writes audit evidence.
-Never pass the replacement password as a command-line argument.
-
-## Partitioning Maintenance
-
-### Adding Future Quarterly Subpartitions
-
-When new quarters approach, add subpartitions to LIST+RANGE partitioned tables:
-
-```sql
--- Add Q3 2027 subpartition to ENTITIES (applies to all 6 list partitions)
-ALTER TABLE ENTITIES SPLIT SUBPARTITION SP_FUTURE
-  AT (TO_DATE('2027-10-01','YYYY-MM-DD'))
-  INTO (SUBPARTITION SP_2027Q3, SUBPARTITION SP_FUTURE);
-
--- Same for AGENT_SESSION, TASK_PLANS
-ALTER TABLE AGENT_SESSION SPLIT SUBPARTITION SP_FUTURE
-  AT (TO_DATE('2027-10-01','YYYY-MM-DD'))
-  INTO (SUBPARTITION SP_2027Q3, SUBPARTITION SP_FUTURE);
-
-ALTER TABLE TASK_PLANS SPLIT SUBPARTITION SP_FUTURE
-  AT (TO_DATE('2027-10-01','YYYY-MM-DD'))
-  INTO (SUBPARTITION SP_2027Q3, SUBPARTITION SP_FUTURE);
-```
-
-### Adding Monthly Partitions to ENTITY_ACCESS_LOG
-
-```sql
-ALTER TABLE ENTITY_ACCESS_LOG SPLIT PARTITION P_MAX
-  AT (TO_DATE('2026-08-01','YYYY-MM-DD'))
-  INTO (PARTITION P_202607, PARTITION P_MAX);
-```
-
-## Troubleshooting
-
-- **DPY-3001 (Native Network Encryption)**: the database requires a native
-  encryption mode that the packaged pure-Python connection cannot negotiate.
-  Do not silently disable database security. Use a DBA-approved compatible
-  connection policy or a separately validated Oracle Client deployment path.
-- **ORACLE_PARTITIONING blocked**: the v4.4.10 Oracle baseline requires the
-  active Oracle Home to report `Partitioning=TRUE`. Enable the option under a
-  controlled database restart, reopen/save the PDB state, and rerun status or
-  initialize. If the option is enabled but unverifiable, grant the deployment
-  owner only the required read access to `V$OPTION`.
-- **OWNER_PRIVILEGES blocked**: Oracle Enterprise preflight verifies ordinary
-  schema DDL, including direct `CREATE TRIGGER`, plus the complete End User,
-  Data Role, Data Grant, context, and
-  `SET USE DATA GRANTS ONLY` privilege set. Apply the documented direct grants;
-  privileges available only through a role may not satisfy stored PL/SQL or
-  SQL parsing requirements.
-- **Migration 22 fails with ORA-01031 while creating
-  `TRG_CX_ORG_MEMBER_ACCOUNT`**: replace the package with the current build and
-  rerun preflight. Earlier v4.4.10 prerequisite and preflight lists omitted
-  direct `CREATE TRIGGER`; do not skip the trigger or mark the failed migration
-  applied manually.
-- **ORA-52551 for ADMIN_DATA_ROLE**: use the current v4.4.10 package. Its active
-  security-boundary migration creates the administrative Data Role
-  idempotently before creating Data Grants.
-- **ORA-01917 for AGENT_API during a fresh baseline**: an absent legacy runtime
-  role means no legacy grant can remain. The current migration tolerates this
-  only inside its bounded revoke operation; it does not suppress other errors.
-- **DPY-4008 unknown bind**: use the current v4.4.10 package, which sends exact
-  bind sets for isolation inventory and deployment-state persistence.
-- **PLS-00103 end-of-file in a migration**: do not execute fragments manually.
-  The current parser preserves local procedures/functions and the outer
-  anonymous block through the standalone SQL*Plus slash terminator.
-- **Existing/partial target after a failed initialization**: do not force or
-  blindly resume. Query `AI_SCHEMA_MIGRATION_STEPS`, preserve recovery evidence,
-  and let the DBA restore or precisely clean the target. `initialize` requires
-  `TARGET_EMPTY=PASS`; supported existing targets use `upgrade` or `resume`.
-- **Approved test-environment reset**: `DROP USER ... CASCADE` is not sufficient
-  empty-target evidence on Oracle 26ai because an application Context or Deep
-  Data Security global object can remain. After the destructive reset, the DBA
-  must verify zero Owner objects, tables, Contexts, Data Grants, platform Data
-  Roles, and End Users before recreating the Owner and applying the consolidated
-  prerequisite SQL. This procedure is not an upgrade or production recovery
-  substitute.
-- **ORA-14402**: Updating partition key column causes row movement — ensure ROW MOVEMENT is enabled on AGENT_SESSION, TASK_PLANS, TASK_STEPS. If not: `ALTER TABLE <table> ENABLE ROW MOVEMENT;`
-- **ORA-14650**: Foreign key constraint not compatible with reference partitioning — child table FK must reference the composite PK of the parent, including the partition key column
-- **ORA-00955**: Name already in use — safe_idx/safe_ddl handles this; re-run is safe
-- **ORA-14300**: Partitioning key maps to a partition outside maximum permitted number of partitions — add new subpartitions using SPLIT SUBPARTITION
-- **Connection refused**: Check DSN, ensure listener is running on configured host:port
-- **Pool exhausted**: Increase pool_max in config.json (default: 5)
-- **CLOB fetch**: `oracledb.defaults.fetch_lobs = False` set in connection.py
-- **Chinese garbled text**: oracledb thin mode double-encodes UTF-8; `_fix_encoding()` auto-corrects in viz_server
-- **Server crash on request**: `do_GET` → `_do_GET` wrapper catches exceptions per-request
-- **Port not listening**: Server may take 10-20s to initialize pool; `start_web_server.sh` waits up to 45s
-
-## Pure Python Deployment (deploy_oracle.py)
-
-For Oracle editions, a pure Python deployment tool is available as an alternative to SQLcl. It replaces SQLcl (125MB + Java dependency) with a Python script using the oracledb driver.
-
-Usage:
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py --sysdba <SYS_USER> <SYS_PASSWORD> <DB_HOST>:1521/<DB_SERVICE> \
-    scripts/deploy/0_oracle_text_prerequisites.sql
-
-"$PYTHON_BIN" scripts/deploy_oracle.py <DB_USER> <DB_PASSWORD> <DB_HOST>:1521/<DB_SERVICE> \
-    scripts/deploy/1_schema.sql scripts/deploy/7_v4_0_1_migration.sql \
-    scripts/deploy/2_api.sql scripts/deploy/3_jobs.sql
-```
-
-For SYSDBA scripts:
-```bash
-"$PYTHON_BIN" scripts/deploy_oracle.py --sysdba <SYS_USER> <SYS_PASSWORD> <DB_HOST>:1521/<DB_SERVICE> \
-    scripts/deploy/4_grants.sql
-```
-
-Handles SQLcl syntax: PROMPT removal, DEFINE/&& variable substitution, / block terminator for PL/SQL blocks.
-
-## v4.3.0 Graph And Collaboration Migration
-
-The integrated v4.3.0 migration is additive. It preserves v4.1.x identity,
-Task/Loop, memory, knowledge, and audit data, while the Graph executor closure
-and governed Channel/Barrier/Gateway objects remain in the same shared release
-line. The internal v4.2.1 step is retained only as a historical migration name;
-there is no public v4.2.1 package.
-
-After the v4.1 schema is available, apply the nine common Graph/lifecycle
-scripts in numeric order, inserting the Enterprise scheduler overlay where
-applicable:
-
-```text
-9_v4_2_0_graph_engineering.sql
-10_v4_2_0_graph_runtime.sql
-11_v4_2_0_graph_control.sql
-12_v4_2_0_graph_edge_scope.sql
-13_v4_2_0_scheduler_ha.sql       # Enterprise only
-14_v4_2_0_graph_triggers.sql
-15_v4_2_1_executor_registry.sql  # internal closure migration
-16_v4_3_0_identity_channels.sql
-17_v4_3_0_governance_lifecycle.sql
-18_v4_3_0_security_lifecycle.sql
-```
-
-Community packages therefore apply nine scripts in this migration tail.
-Enterprise packages apply the same nine plus
-`13_v4_2_0_scheduler_ha.sql` between `12` and `14`, for ten scripts. The
-internal `15` step is included in the v4.3.0 package and is not a public
-v4.2.1 release.
-
-```bash
-"$PYTHON_BIN" scripts/migration_runner.py --version 4.3.1 --edition enterprise \
-    --oracle-config /path/to/oracle-config.json \
-    --pg-config /path/to/pg-config.json \
-    --yashandb-config /path/to/yashandb-config.json \
-    --confirm-database-backup \
-    --preflight
-
-# Replace --preflight with --dry-run or omit it to apply the migration.
-```
-
-Use the adapter-specific deploy command documented in the package when the
-database requires a client wrapper. PostgreSQL 18 with Apache AGE is the
-current supported Graph adapter.
-
-For PostgreSQL, Apache AGE must be installed by a privileged PostgreSQL
-operator before the application migration runs. For v4.4.10, run the packaged
-consolidated prerequisite in the dedicated target database instead of copying
-individual grants from this guide:
-
-```bash
-psql -v ON_ERROR_STOP=1 -v schema_owner=<SCHEMA_OWNER> \
-  -d <TARGET_DATABASE> -f scripts/deploy/0_pg_database_prerequisites.sql
-```
-
-The script grants bounded AGE catalog operations, database `CREATE` for the
-graph namespace, `CREATEROLE` for per-Agent LOGIN provisioning, and `ADMIN
-OPTION` on the shared NOLOGIN `ai_agent_runtime` role. It does not grant
-SUPERUSER, CREATEDB, or BYPASSRLS. Preflight reports
-`PG_AGE_OWNER_PRIVILEGES` and `PG_AGENT_ROLE_ADMIN` and blocks before
-foundational DDL if either contract is incomplete.
-
-The underlying bounded AGE permissions are:
-
-```sql
-GRANT USAGE ON SCHEMA ag_catalog TO <APP_ROLE>;
-GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO <APP_ROLE>;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO <APP_ROLE>;
-GRANT USAGE ON TYPE ag_catalog.agtype TO <APP_ROLE>;
-```
-
-The migration intentionally does not call `LOAD 'age'`, because hardened
-PostgreSQL installations reserve that command for superusers. An installed
-AGE extension plus the grants above is sufficient for the PostgreSQL adapter.
-
-### PostgreSQL Agent role provisioning
-
-The Admin Agent uses the configured Schema Owner connection to provision each
-Business Agent's independent PostgreSQL login. Before the first registration,
-a PostgreSQL DBA must grant the Schema Owner `CREATEROLE` and, when the shared
-runtime role was created by the DBA, `ADMIN OPTION` on that role:
-
-```sql
-ALTER ROLE <SCHEMA_OWNER> CREATEROLE;
-GRANT ai_agent_runtime TO <SCHEMA_OWNER> WITH ADMIN OPTION;
-```
-
-Do not grant either privilege to a Business Agent or to `ai_agent_runtime`.
-The generated login remains `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`.
-For PostgreSQL 16 and later, the Admin Agent sets transaction-local
-`createrole_self_grant='set, inherit'` before it creates each LOGIN. This gives
-the Schema Owner `ADMIN OPTION` on only that new role, which is required for
-subsequent credential rotation. A role created by another administrator must
-be explicitly granted back to the Schema Owner with `ADMIN OPTION` before the
-platform can rotate it.
-If the provisioning prerequisites are absent, initialization fails closed in
-preflight and registration does not fall back to Schema Owner access.
-
-PostgreSQL deployment is supported with a non-superuser Schema Owner. Because
-`FORCE ROW LEVEL SECURITY` also governs a table owner, migration 50 creates its
-trusted Owner policy before seeding control-plane data and terminal migration
-65 converges `cx_trusted_schema_owner` on every forced-RLS table. The policy is
-targeted to the actual relation owner; Business Agent LOGIN roles cannot use
-it and remain constrained by their Agent, organization, and Security Domain
-policies.
-
-### YashanDB Agent user provisioning
-
-Before initialization, run `scripts/deploy/0_yashandb_database_prerequisites.sql`
-as the YashanDB administrator in the dedicated application PDB after setting
-`SCHEMA_OWNER`. It grants only `CREATE USER` and `ALTER USER` for independent
-Business Agent login creation and credential rotation plus the direct schema
-DDL and `CREATE JOB` privileges required by the packaged baseline, creates the bounded
-`DEEP_SEC_SESSION_ROLE`, and grants its `ADMIN OPTION` to the Owner. The
-Bootstrap manifest then applies `6_deep_sec_policy.sql` as the Owner. Preflight
-blocks when any part is missing; the platform never substitutes the Schema
-Owner connection for a Business Agent.
-
-One-time Enrollment redemption now synchronizes the external Agent into
-`AGENT_REGISTRY`, provisions its dedicated login, and verifies the stored
-database credential before the Agent can activate. Migrations 63 and 64 close
-the Gateway object privileges and PostgreSQL compliance/evidence RLS policies.
-After applying v4.4.10, validate redemption, activation, Gateway Token,
-database-endpoint discovery, Heartbeat, Events, and a subsequent administrator
-login as one flow. Enterprise also validates posture Evidence and remediation;
-Community reports those Enterprise-only capabilities as not applicable.
-
-### Runtime Roles
-
-Run the web process with the Admin identity only for management operations.
-Business Agents and external Workers use registered identities, independent
-database users/roles, and scoped HTTP or MCP credentials. A Worker receives a
-Lease Token and bounded input, not a Schema Owner password. Multiple Enterprise
-Schedulers may run concurrently; the database claim/fencing protocol is the
-authority for ownership.
-
-### Health Checks
-
-Verify `/api/health`, `/api/graph/capabilities`, registered Worker status,
-pending Event Inbox/Outbox rows, current Checkpoints, the assurance invariant
-view, and the migration ledger after deployment. Keep database replication,
-backup, and failover configured according to the database vendor's production
-guidance and validate that topology separately from application runtime
-recovery.
-
-### v4.4.4 Agent Pool and External Endpoint Setup
-
-Register Admin, Compliance, and Agent Pool hosts as managed nodes before using
-them as runtime targets. For an Agent Pool host, the Dashboard sequence is:
-
-1. Register the host, role, SSH port, operating-system user, and failure domain.
-   When SSH mutual trust is unavailable, choose `ONE_USE_PASSWORD` and enter
-   the masked password. It is accepted for this request only and discarded by
-   the API; it is never a reusable platform credential.
-2. Run bounded reachability validation. This does not become a remote shell.
-3. Issue a short-lived one-time bootstrap token and run the packaged
-   `scripts/agent_pool_node.py` on the target host.
-4. Enter the parent of the node-local Agent information directory during host
-   registration. For example, `/root` resolves to
-   `/root/AI-Agent-Infra-with-DB`. It is local filesystem storage on that node, arranged as
-   `agents/<agent-id>/...`; each Agent gets a separate directory and directory
-   contents never grant database authority. Register and bind only
-   `AGENT_POOL_RUNTIME` for shared idle-Agent/runtime state.
-5. Activate the checked-in node. Activation fails closed until the shared
-   runtime binding and the node-local information directory both exist. The node remains online only while its
-   authenticated helper sends heartbeats.
-
-The token digest is persisted, never the token, SSH password, database key, or
-private key. Local shared directories are validated for directory existence and
-read/write/execute access. NFS, object storage, and unified storage profiles
-remain adapter-managed until a corresponding storage adapter is installed.
-The binding is audited and describes a runtime storage location only; it does
-not grant data, database, Skill, Tool, or Channel access. MaaS, SaaS, and
-virtualization targets use deployment adapters rather than the Host bootstrap
-path. Removing a binding also requires an audited reason.
-
-Host onboarding is coordinated by the platform but executed on the target:
-the platform registers metadata, validates reachability, issues the one-time
-token, verifies the receipt, and records activation. The target Host Manager
-and `agent_pool_node.py` perform installation, lifecycle checks, and callback;
-the administrator explicitly starts the generated command and approves final
-activation. No step grants the platform an arbitrary root shell.
-
-#### Retiring a node or draining work
-
-Node removal in Dashboard is logical retirement, not physical deletion. The
-record remains in audit/history but is hidden from active selectors. Before
-retirement, the protected Platform Administration Channel can prepare an
-Agent Pool node for maintenance:
-
-```text
-/platform AGENT_DRAIN <source_node_id> <destination_node_id> <reason>
-```
-
-The request becomes an Action Card and requires the configured human/Admin
-approval path. After approval, the source enters `DRAINING` and accepts no new
-work. Only expired retryable claims may return to `PENDING` and move to an
-active destination. Work already running is allowed to finish; drain does not
-forcibly kill or copy it. Retire the source only after active executions,
-bindings, onboarding records and Admin HA memberships have cleared. If no
-destination is suitable, the plan remains pending and reports remediation.
-
-LLM profile removal follows the same logical-retirement model. It is blocked
-while referenced by Portal policy, active native Agents or pending requests;
-after retirement, encrypted API-key ciphertext is revoked and the profile is
-removed from active selection while audit history remains.
-
-Admin Agent nodes receive their node-local Agent information and runtime path
-when the node is added. The initial platform node records its actual deployment
-directory automatically; every additional node requires an explicit parent
-directory. It is independent per node and must not be confused
-with `ADMIN_RUNTIME`, which is the optional shared platform-management
-coordination directory. The platform does not convert local paths to NFS,
-object storage, or another backend; the Admin Agent runtime must apply
-Agent-specific subdirectories and local filesystem ownership and permission
-controls.
-
-For an externally registered Agent that must use a public database endpoint,
-create the endpoint profile with the Agent enrollment grant ID. The platform
-records the endpoint reference in the grant policy snapshot. Only the Agent
-redeemed from that active, unexpired grant can discover the profile. Agents
-without a valid binding receive the initialization endpoint instead.
-
-# v4.3.7 Bootstrap Deployment and Embedding Worker
-
-For a new prepared database target, use the package-local Bootstrap Deployment
-Agent instead of an external Skill runtime:
-
-```bash
-bash scripts/install_platform.sh initialize --database <oracle|pg|yashandb> \
-  --edition <community|enterprise> --version 4.5.2 --config config.json
-```
-
-The command verifies a strictly empty target, records a database-managed
-`NO_PREEXISTING_PLATFORM_DATA` recovery boundary, and does not require a
-client-side backup manifest. It records sanitized deployment evidence before
-handing over to native management Agents. It does not create
-Oracle/YashanDB PDBs, tablespaces, or privileged database infrastructure.
-Prepare those items first and use the returned remediation evidence if a
-preflight check is blocked. `status`, `verify`, `resume`, and `upgrade` use the
-same command shape. Oracle preflight also requires direct Owner grants on
-`SYS.DBMS_CRYPTO` and `SYS.UTL_HTTP`. Oracle Enterprise initialization executes
-the Deep Data Security policy automatically, initializes database-local crypto
-keys in the checksummed Owner baseline, and then applies the hardened context
-setter through migration 50. Postflight and standalone `verify` reject invalid
-executable PL/SQL, missing keys, failed crypto round trips, missing Agent
-context, insufficient Data Grants, or a stale context setter before reporting
-the database and control plane as ready.
-
-Embedding Profiles, Contracts, Spaces, and bindings are managed from the
-protected Dashboard view. The Dashboard never performs bulk vector work. Start
-the local worker separately for a bounded, lease-protected batch:
-
-```bash
-"$PYTHON_BIN" scripts/embedding_worker.py --limit 10
-```
-
-Only verified writable Spaces using `PLATFORM_MANAGED` or `ENTERPRISE_PROXY`
-Profiles can be processed by that worker. `ENTERPRISE_DIRECT` must be verified
-and written by the external Agent; `PRECOMPUTED_IMPORT` accepts governed
-vectors supplied by the enterprise; `NONE` disables vector work.
-
-## v4.4.10 Model Governance Verification
-
-Set `CX_PUBLIC_BASE_URL` to the reachable HTTPS base before gateway
-distribution; the completion path is appended automatically. Direct and
-gateway routing remain independently selectable. Install with Python 3.14,
-deploy the adapter's `baseline_v4_4_10.json` ordered chain through terminal
-migration 65, and require `/api/ready` before traffic admission.
-
-From a source checkout run `tools/v410_full_flow_gate.py`; from a generated
-package use `scripts/tools/v410_full_flow_gate.py`. Then run the corresponding
-`v410_model_governance_benchmark.py` at the approved customer volume and
-concurrency. Evidence must omit DSNs, passwords, keys, gateway tokens, prompts,
-and model output. Repository results are a bounded baseline, not a substitute
-for load balancers/Ingress, failover, backup, and restore certification. The run
-must also verify the Security Domain ->
-Channel -> execution-group relationship and cross-domain negative cases; a
-legacy collaboration group alone is never sufficient admission evidence.
-
-Run `scripts/tools/v410_external_agent_full_capability_gate.py` against each
-Enterprise service before release. The gate must cover registration through
-revocation, Channel Events/SSE, compliance, Embedding and model forwarding,
-plus external-Agent Memory Candidate submission, Human promotion, Agent-private
-Knowledge write/read, and company-wide publication denial. Store only the
-redacted combined evidence; never persist enrollment tokens, Client Secrets,
-Gateway tokens, database passwords, Provider keys, prompts, or model output.
-
-## v4.4.11 Deployment Gate
-
-Deploy v4.4.11 migrations 66-68 after the complete v4.4.10 chain and run
-package-local validators with Python 3.14. A Deployment
-Adapter may admit only the isolation level supported by verified evidence.
-Bundled reference adapters remain `UNVERIFIED`.
-
-Kubernetes/MaaS/SaaS connectors record tenant ID, namespace, service account,
-default-deny network policy, quota, storage binding, and KMS key. Reject host
-root paths and Docker/containerd/CRI sockets. Validate drift heartbeat before
-sending executable work.
-
-The local Linux implementation is `shared.lib.deployment_adapters.LinuxRuntimeAdapter`.
-It launches an argv-only bubblewrap sandbox through a transient systemd unit,
-loads a libseccomp BPF policy, applies cgroup v2 CPU/memory/PID limits, and
-records policy/rootfs digests plus host-observed evidence. It can report
-`VERIFIED` when the actual sandbox process proves all required boundaries; it
-remains `UNVERIFIED` and fails admission when host enforcement or evidence is
-unavailable. Network is default deny. A non-empty egress allowlist is rejected
-until a privileged firewall backend is configured. Container, VM, MaaS, and
-SaaS adapters are deferred until those environments are selected.
-
-On a fresh RHEL 9.8+ (Oracle Linux 9.8+) runtime host, create the management account
-and run the Host Manager bootstrap as root:
-
-```bash
-bash scripts/install_host_manager.sh --management-user chuanxu-admin
-```
-
-This installs the root-owned Unix-socket service and verifies management-user
-access, but does not automatically disable root SSH. After the separate
-provision/start/stop/revoke gate creates evidence with `passed=true` and
-`lifecycle_passed=true`, record the console or cloud recovery channel and
-finish the handoff:
-
-```bash
-bash scripts/install_host_manager.sh \
-  --management-user chuanxu-admin \
-  --verification-evidence /root/chuanxu-host-verification.json \
-  --recovery-channel "cloud-console:host-id" \
-  --disable-root-ssh
-```
-
-Agent Pool activation then requires a `VERIFIED` Runtime Host Profile and
-allocates a database-recorded non-root UID/GID lease per Agent Instance.
-
-The 2026-08-31 Oracle Linux 9.8 gate evidence is
-`release_evidence/v4.4.11-linux-runtime-isolation-ol98.json`. It covers private
-process and namespaces, filesystem and credentials, default-deny network,
-resource limits, ptrace denial, cross-Agent negatives, and revoke termination;
-it is not a VM, cloud-tenant, or capacity certification.
-The bounded 2026-08-31 performance evidence is
-`release_evidence/v4.4.11-platform-performance.json`; it covers authenticated
-concurrent wallboard aggregation across relational, full-text, vector, graph,
-JSON, and mixed multimodal paths and is not a capacity certification.
-
-On Oracle PDBs where Oracle Text or Deep Data Security is not installed, the
-optional Text index and DATA GRANT overlay are skipped with explicit evidence;
-core schema, application authorization, and migration ledger remain required.
+Dashboard is at `/app/` and Portal at `/portal`. `/api/health` reports process
+identity and version; `/api/ready` checks database/control-plane readiness.
+Neither alone proves release acceptance. The launcher defaults to the package's
+`.runtime/web.pid`, so separate installations have separate PID files.
+
+## Configure governance, registration and models
+
+`CX_RUNTIME_PROFILE` defaults to `production`; it does not change database
+governance records. Platform, Graph and model capability matrices remain
+authoritative. Missing records or an unavailable database do not mean enabled.
+Environment variables cannot expand a license or identity's authority.
+
+Human self-registration and external Agent enrollment have independent controls.
+Portal uses local managed Agents. Channel Agents require membership, activation,
+a valid runtime target and data/model grants. Policy-permitted answers without
+Knowledge matches use the model and show a separate source label.
+
+Save model endpoint, model ID and any private key, then run health and individual
+capability probes. Structured output, tools, images and cancellation depend on
+the actual provider. MCP, A2A, framework execution, telemetry and diagnostics
+retain their specific capability, authorization and isolation gates. See
+[Agent extensions](agent-extensions.md) and [operations](operations.md).
+
+Stop with `./start_web_server.sh stop`, or use `restart`. Preserve Task and
+Worker lease records for recovery rather than deleting state to clear errors.

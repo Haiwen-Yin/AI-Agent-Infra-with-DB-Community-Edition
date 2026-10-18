@@ -15,7 +15,9 @@ from lib.continuity_state import ContinuityConflict, ContinuityError
 
 
 @pytest.fixture
-def database():
+def database(monkeypatch):
+    from lib import connection
+    monkeypatch.setattr(connection, "DATABASE_DIALECT", "oracle")
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     db.executescript("""
@@ -44,6 +46,12 @@ def database():
             return [{key.lower(): row[key] for key in row.keys()} for row in rows]
 
         def query_one(self, statement, params):
+            if statement.startswith("INSERT INTO TASK_PLANS(") and statement.endswith(" RETURNING PLAN_ID"):
+                # The host SQLite predates RETURNING. Its native generated
+                # rowid exercises the same atomic database-owned key here;
+                # package acceptance executes the actual PostgreSQL SQL.
+                cursor = db.execute(statement.removesuffix(" RETURNING PLAN_ID"), params)
+                return {"plan_id": cursor.lastrowid}
             rows = self.query(statement, params)
             return rows[0] if rows else None
 
@@ -83,6 +91,28 @@ def test_opaque_protocol_key_gets_one_canonical_task_owned_by_receiver(database)
                    canonical_task_id=first["canonical_task_id"])
     assert second["canonical_task_id"] == first["canonical_task_id"]
     assert db.execute("SELECT COUNT(*) FROM TASK_PLANS").fetchone()[0] == 1
+
+
+def test_pg_protocol_admission_uses_native_generated_plan_and_same_transaction(database, monkeypatch):
+    from lib import connection
+    monkeypatch.setattr(connection, "DATABASE_DIALECT", "postgresql")
+    db, _, run = database
+    db.execute("DROP TABLE TASK_PLANS")
+    db.execute("CREATE TABLE TASK_PLANS(PLAN_ID INTEGER PRIMARY KEY AUTOINCREMENT, AGENT_ID TEXT, GOAL TEXT, STATUS TEXT, PRIORITY INTEGER, STRATEGY TEXT)")
+    db.commit()
+    first = admit(db, run, task_id="opaque-business/key")
+    key = first["canonical_task_id"]
+    assert key.isdecimal() and int(key) > 0
+    second = admit(db, run, task_id=key, link_id="second-link", idem="second-key")
+    assert second["canonical_task_id"] == key
+    assert db.execute("SELECT COUNT(*) FROM TASK_PLANS").fetchone()[0] == 1
+    before = db.execute("SELECT COUNT(*) FROM TASK_PLANS").fetchone()[0]
+    with pytest.raises(RuntimeError, match="rollback"):
+        def failed(tx):
+            task_continuity.ensure_task_root(tx, "agent-a", "new/opaque")
+            raise RuntimeError("rollback")
+        run(failed)
+    assert db.execute("SELECT COUNT(*) FROM TASK_PLANS").fetchone()[0] == before
 
 
 def test_idempotency_key_replays_without_creating_a_second_link(database):

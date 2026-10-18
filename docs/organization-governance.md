@@ -1,4 +1,8 @@
-# Organization Governance - AI Agent Infra with DB v4.5.2
+# Organization Governance - AI Agent Infra with DB v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
+
+[简体中文](organization-governance_zh.md)
 
 v4.3.1 introduces a database-authoritative organization model and a graphical
 workspace for controlled search, inspection, and change preparation. It is a

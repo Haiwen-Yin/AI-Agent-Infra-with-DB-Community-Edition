@@ -1,8 +1,10 @@
-# Model Usage Gateway And Executive Wallboard - v4.5.2
+# Model Usage Gateway And Executive Wallboard - v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 ## Purpose And Boundary
 
-v4.4.10 adds an optional platform forwarding path for model calls and a
+The platform provides an optional forwarding path for model calls and a
 login-protected, read-only management wallboard. The gateway is not mandatory:
 an LLM Provider Profile may allow direct mode, platform-gateway mode, or both.
 Gateway evidence improves Token and cost attribution but does not prove that no
@@ -123,7 +125,7 @@ Definition versions are immutable; publish and rollback append governed
 publication facts. The viewer can read only the currently published authorized
 version and contains no mutation controls.
 
-Every v4.4.10 API error exposes `code`, `message`, `correlation_id`, and
+Every canonical API error exposes `code`, `message`, `correlation_id`, and
 `retryable`; the same correlation identifier is returned in
 `X-Correlation-ID`. Clients must not infer retryability from message text.
 
@@ -145,11 +147,12 @@ Every v4.4.10 API error exposes `code`, `message`, `correlation_id`, and
 - Preserve usage and request rows during rollback or routing disablement so
   accounting and audit evidence remain internally consistent.
 
-v4.4.10 is the fresh-deployment baseline. Historical migration steps remain in
-the package for deterministic ordering, checksum evidence, and source audit;
-they are not a promise of in-place customer upgrades from an earlier v4.4.x
-package. v4.4.8 is withdrawn and must not be used as a source.
-# v4.4.12 Usage Accounting Contract
+Use the current package baseline through migration 102. Historical SQL remains
+for deterministic ordering, checksum evidence and source audit; it is not an
+instruction to stop at its introduction version. v4.4.8 remains withdrawn.
+See [migration](migration.md) for supported, journaled upgrade boundaries.
+
+## Usage accounting contract
 
 The chat-completion gateway normalizes cached tokens as a subset of input and
 reasoning tokens as a subset of output. A configured detail tariff replaces

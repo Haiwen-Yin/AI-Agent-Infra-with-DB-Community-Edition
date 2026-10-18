@@ -120,10 +120,11 @@ def test_physical_boolean_binds_match_database_adapter(monkeypatch):
 
 
 def test_legacy_memory_digest_alignment_uses_sha256_on_all_adapters():
+    from lib.package_layout import active_database, deployment_dir
     root = Path(__file__).resolve().parents[2]
     if not (root / "adapters").is_dir():
         # Generated packages deliberately contain one selected adapter only.
-        script = (root / "scripts/deploy/24_v4_3_2_memory_digest_alignment.sql").read_text(encoding="utf-8").upper()
+        script = (deployment_dir(root, active_database(root)) / "24_v4_3_2_memory_digest_alignment.sql").read_text(encoding="utf-8").upper()
         dialect = str(getattr(lifecycle.connection, "DATABASE_DIALECT", "")).lower()
         if dialect in {"pg", "postgresql"}:
             assert "ENCODE(SHA256(" in script
@@ -143,10 +144,11 @@ def test_legacy_memory_digest_alignment_uses_sha256_on_all_adapters():
 
 
 def test_legacy_fusion_scheduler_is_removed_by_a_separate_rerunnable_step():
+    from lib.package_layout import deployment_dir
     root = Path(__file__).resolve().parents[2]
     packaged = not (root / "adapters").is_dir()
     adapters = (str(getattr(lifecycle.connection, "DATABASE_DIALECT", "")).lower(),) if packaged else ("oracle", "pg", "yashandb")
-    script_root = root / "scripts" / "deploy" if packaged else None
+    script_root = deployment_dir(root, adapters[0]) if packaged else None
     for adapter in adapters:
         path = (
             script_root / "25_v4_3_2_disable_legacy_memory_fusion.sql"

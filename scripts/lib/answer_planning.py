@@ -26,7 +26,9 @@ def prepare(question, profile_id, configured, retrieval):
     citations = [{key: value for key, value in item.items() if key != "content"} for item in sources]
     reply, messages, source = None, [], "INSUFFICIENT_KNOWLEDGE"
     if status == "AMBIGUOUS":
-        reply = "请明确要了解川序中的数据库适配，还是该数据库产品或厂商。 / Please specify platform integration, the database product, or its vendor."
+        from .product_identity import identity
+        brand = identity()["brand_zh"]
+        reply = f"请明确要了解{brand}中的数据库适配，还是该数据库产品或厂商。 / Please specify platform integration, the database product, or its vendor."
         source = "CLARIFICATION_REQUIRED"
     elif not sources:
         if allowed:

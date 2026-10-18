@@ -71,11 +71,9 @@ def test_runtime_pool_uses_database_fencing_and_fresh_input():
 
 
 def test_all_adapters_ship_v436_migration_without_plaintext_secret_columns():
+    from lib.package_layout import databases, deployment_dir
     root = Path(__file__).resolve().parents[2]
-    if (root / "adapters").is_dir():
-        paths = [root / "adapters" / database / "deploy" / "32_v4_3_6_native_agents.sql" for database in ("oracle", "pg", "yashandb")]
-    else:
-        paths = [Path(__file__).resolve().parents[1] / "deploy" / "32_v4_3_6_native_agents.sql"]
+    paths = [deployment_dir(root, database) / "32_v4_3_6_native_agents.sql" for database in databases(root)]
     for path in paths:
         assert path.is_file(), path
         text = path.read_text(encoding="utf-8").upper()

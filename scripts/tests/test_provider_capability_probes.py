@@ -55,6 +55,48 @@ def test_unregistered_reasoning_parameters_are_rejected():
             probes.parameters(value)
 
 
+@pytest.mark.parametrize("finish", ["length", "content_filter", None, "unknown"])
+def test_plausible_body_does_not_verify_an_incomplete_completion(finish):
+    response = completion()
+    response["choices"][0]["finish_reason"] = finish
+    with pytest.raises(ValueError, match="INCOMPLETE_COMPLETION"):
+        probes.observe_json("TEXT", PROFILE, response)
+
+
+def test_refusal_is_not_success_even_with_expected_body():
+    with pytest.raises(ValueError, match="PROVIDER_REFUSAL"):
+        probes.observe_json("TEXT", PROFILE, completion(refusal="private refusal text"))
+
+
+def stream(monkeypatch, frames):
+    import io
+    data = b"".join(b"data: " + (item.encode() if isinstance(item, str) else json.dumps(item).encode()) + b"\n\n" for item in frames)
+    class Opener:
+        def open(self, *_args, **_kwargs):
+            return io.BytesIO(data)
+    monkeypatch.setattr(probes, "opener", lambda: Opener())
+    profile = {**PROFILE, "provider_url": "https://provider.example/v1"}
+    return probes._send(profile, probes.payload("STREAM", profile["model_id"], {}), 10, "STREAM")
+
+
+def chunk(content="", finish=None, model=PROFILE["model_id"]):
+    return {"model": model, "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": finish}]}
+
+
+def test_stream_requires_terminal_success_and_transport_completion(monkeypatch):
+    assert stream(monkeypatch, [chunk("CX_OK"), chunk(finish="stop"), "[DONE]"])["stream_completed"]
+    for frames in ([chunk("CX_OK"), "[DONE]"], [chunk("CX_OK"), chunk(finish="stop")]):
+        with pytest.raises(ValueError, match="STREAM_COMPLETION_MISMATCH"):
+            stream(monkeypatch, frames)
+
+
+def test_stream_rejects_truncation_and_model_switching(monkeypatch):
+    with pytest.raises(ValueError, match="INCOMPLETE_COMPLETION"):
+        stream(monkeypatch, [chunk("CX_OK"), chunk(finish="length"), "[DONE]"])
+    with pytest.raises(ValueError, match="MODEL_MISMATCH"):
+        stream(monkeypatch, [chunk("CX_", model="wrong-model"), chunk("OK"), chunk(finish="stop"), "[DONE]"])
+
+
 @pytest.mark.parametrize("message", [{"content": ""}, {"content": "  "}, {"reasoning_content": "hidden only"}])
 def test_health_check_cannot_accept_empty_completion(monkeypatch, message):
     class Response:

@@ -1,4 +1,6 @@
-# Framework-Neutral Agent Gateway Adapter - AI Agent Infra with DB v4.5.2
+# Framework-Neutral Agent Gateway Adapter - AI Agent Infra with DB v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 `shared/lib/agent_framework_adapters.py` is a pure conversion boundary for
 external runtimes such as OpenClaw and Hermes Agent. It does not implement a

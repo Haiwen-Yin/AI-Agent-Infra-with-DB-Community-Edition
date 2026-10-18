@@ -1,4 +1,6 @@
-# 发布压缩包签名 v4.5.2
+# 发布压缩包签名 v5.0.0
+
+> 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
 升级服务使用运维人员配置的 `CX_RELEASE_SIGNING_PUBLIC_KEY` 验证 Ed25519
 签名。该值是 32 字节公钥的 URL-safe Base64 编码。客户端提交的 `VERIFIED`

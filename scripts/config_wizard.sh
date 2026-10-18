@@ -17,7 +17,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-CONFIG_FILE="$PROJECT_DIR/config.json"
+CONFIG_FILE="${CX_CONFIG_PATH:-$PROJECT_DIR/config.json}"
 EXAMPLE_FILE="$PROJECT_DIR/config.example.json"
 RUNTIME_HELPER="$SCRIPT_DIR/python_runtime.sh"
 
@@ -61,6 +61,18 @@ read_masked_secret() {
 
 # --- Step 1: ensure config.json exists (copy from template if missing) -------
 if [ ! -f "$CONFIG_FILE" ]; then
+    if [ -f "$PROJECT_DIR/config.pg.example.json" ]; then
+        DB_CHOICE="${CX_DATABASE_DIALECT:-}"
+        if [ -z "$DB_CHOICE" ]; then
+            read -r -p "Select database (oracle/pg/yashandb): " DB_CHOICE || true
+        fi
+        case "$DB_CHOICE" in
+            postgres|postgresql) DB_CHOICE=pg ;;
+            oracle|pg|yashandb) ;;
+            *) echo "[wizard] Select oracle, pg or yashandb before configuring." >&2; exit 2 ;;
+        esac
+        EXAMPLE_FILE="$PROJECT_DIR/config.$DB_CHOICE.example.json"
+    fi
     if [ ! -f "$EXAMPLE_FILE" ]; then
         echo -e "${RED}[wizard] ERROR: neither config.json nor config.example.json found in $PROJECT_DIR${NC}"
         echo -e "${RED}[wizard]        Release package is incomplete. Re-extract from the zip.${NC}"

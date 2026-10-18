@@ -1,0 +1,152 @@
+{
+  "oracle": [
+    {
+      "id": "CXK_V4413_OVERVIEW",
+      "title": "\u5ddd\u5e8f v4.4.13 \u5e73\u53f0\u603b\u89c8",
+      "hashes": [
+        "a4eadb405d37f8705b050f3acd2d73e44c00a82875ed505be2aac6871c96925c",
+        "e068d0c1386008a5a5888c70a10a945b9e777d659216094007335f64d8e91956"
+      ]
+    },
+    {
+      "id": "CXK_V4413_PORTAL",
+      "title": "\u5ddd\u5e8f v4.4.13 Portal \u4e0e\u77e5\u8bc6\u589e\u5f3a\u95ee\u7b54",
+      "hashes": [
+        "d51a194ad8bcb5cd075acea0f1a26b47ac30cc6d2782b1578b63e9169f84196b",
+        "f0e363b1472df53c3da54942930ba18cff7aa25cad6ce82086867eeef11cc081",
+        "27eb56ba52912e2caa7bbef93090b264cd68adfab9996a607e76e431fe4229c7"
+      ]
+    },
+    {
+      "id": "CXK_V4413_SECURITY",
+      "title": "\u5ddd\u5e8f v4.4.13 \u8eab\u4efd\u6743\u9650\u4e0e\u5b89\u5168\u6cbb\u7406",
+      "hashes": [
+        "38fe00e3b58325e7e99e3d2da2b44f8ee683a14ba88308043ce0f4985aad439c",
+        "205e98299193402556fd271197fdd0836acd7fc2a2258da0fc1a643e4e246881"
+      ]
+    },
+    {
+      "id": "CXK_V4413_COLLAB",
+      "title": "\u5ddd\u5e8f v4.4.13 Agent \u534f\u4f5c\u4e0e\u5de5\u4f5c\u7ba1\u7406",
+      "hashes": [
+        "0d29f02f79b343df88d24cea54048633edbd8399f830966c4b3d86d1a04ee3b0",
+        "3686876453a73ee3b1d68aa5c526e92e186986b9dd57f50c3e45a575bbef46b9"
+      ]
+    },
+    {
+      "id": "CXK_V4413_DATA",
+      "title": "\u5ddd\u5e8f v4.4.13 \u6570\u636e\u6a21\u578b\u3001\u5ba1\u8ba1\u4e0e\u8fd0\u7ef4",
+      "hashes": [
+        "d331ea0a398f4c74b1400d712ae755a8041fd68fca7d5f7e406bf4b1b64034ae",
+        "6af401c7e952dff8be38d723e3e7991291ec0afc8c4ae66487c2cabafddd01ae",
+        "dbc29b9a8a6c8cb52fa3f3aab5491a6d8dd0cd16a47f016d14b62c581b17bfaa"
+      ]
+    },
+    {
+      "id": "CXK_V4413_DB",
+      "title": "\u5ddd\u5e8f v4.4.13 Oracle Enterprise \u6570\u636e\u5e93\u80fd\u529b",
+      "hashes": [
+        "1f79addb4f11e2077fdbc6c3da3fcc9a627868ff9061d468ef6d6230c36772d6",
+        "da037339f91062079b47bdc8e7203b89375570e83decac3ca6bc84d05b84ef83",
+        "e8661cafe91fa8e9f0f19df5c99e04eda7a2317e4c50ec7354285fb1ee54c956"
+      ]
+    }
+  ],
+  "pg": [
+    {
+      "title": "\u5ddd\u5e8f v4.4.13 \u5e73\u53f0\u603b\u89c8 / Chuanxu Platform Overview",
+      "hashes": [
+        "a7032cbeab8db540a2594691b25a08b6e33c1a08e854e01442a3a68df8c75dfd",
+        "6c8127126bede0674b15c53c770b8a581c570f97b32cd24f89674cfc63302e2a"
+      ]
+    },
+    {
+      "title": "\u5ddd\u5e8f v4.4.13 Portal \u4e0e\u77e5\u8bc6\u589e\u5f3a\u95ee\u7b54 / Knowledge-grounded Portal",
+      "hashes": [
+        "9acc8b9d73111911b2594d01f161cda69efecb41fb8a4ab1894c3945de2b0a61",
+        "1e6ca0936376e4510ac7c9be2bb38a4f5bde6571b301ca665fd9e4938d1ca351"
+      ]
+    },
+    {
+      "title": "\u5ddd\u5e8f v4.4.13 \u8eab\u4efd\u6743\u9650\u4e0e\u5b89\u5168\u6cbb\u7406 / Identity and Security",
+      "hashes": [
+        "57a5bf5dc9de36780d66f022b42590753c58db47fed56f7e2913fe56993d04e9",
+        "4921e568ee2f0be309c5404a078a6a71316f8432b0907aa2b8c952644da4df08"
+      ]
+    },
+    {
+      "title": "\u5ddd\u5e8f v4.4.13 Agent \u534f\u4f5c\u4e0e\u5de5\u4f5c\u7ba1\u7406 / Agent Work and Collaboration",
+      "hashes": [
+        "050b4a54e40e18e42cbf0cda75a20b82f371ad9a1ede5d84e695e11f72d80417",
+        "372f36f60b5a4c2452653df1baa75f4a8561851d705ba8c106706bade7707a6f"
+      ]
+    },
+    {
+      "title": "\u5ddd\u5e8f v4.4.13 \u6570\u636e\u6a21\u578b\u3001\u5ba1\u8ba1\u4e0e\u8fd0\u7ef4 / Data, Audit and Operations",
+      "hashes": [
+        "345d653e8aad19fb9c96f0ac44290a61d07681b31f9420b471259895d7272343",
+        "969bbbe71e00e74fa2669b8c1ad1282052c40c820eca59604b951a7ffcf0e64b"
+      ]
+    },
+    {
+      "title": "\u5ddd\u5e8f v4.4.13 PostgreSQL Enterprise \u6570\u636e\u5e93\u80fd\u529b / Database Capabilities",
+      "hashes": [
+        "5800f43b664686f8a2e0a2634d7d1e92cfc27c4787af94ea228dc70ad34e2c60",
+        "10d656797990421586ac06b958d99376670e8a304941a7e13bd24c3e64ad1e63"
+      ]
+    }
+  ],
+  "yashandb": [
+    {
+      "id": "CXK_V4413_OVERVIEW",
+      "title": "\u5ddd\u5e8f v4.4.13 \u5e73\u53f0\u603b\u89c8",
+      "hashes": [
+        "9e85a1420c610b992422054bf2cf9676f34e0549d49d1ae45c01773e507e062a",
+        "2474a1dd25720507674911191ac1da34685aedf38a40265ad1a15d571bc1c8d4"
+      ]
+    },
+    {
+      "id": "CXK_V4413_PORTAL",
+      "title": "\u5ddd\u5e8f v4.4.13 Portal \u4e0e\u77e5\u8bc6\u589e\u5f3a\u95ee\u7b54",
+      "hashes": [
+        "67062c23adcf0f82883518f1ba6ab6166cd5ac5af13e1a8fff76f5f0cddc54ca",
+        "5f082eee40a04550527b3a88cb4a8a3a207918b7a48d554d5f752cd8c570cee0",
+        "d3bf962ff2f1be592e0d042033964801e95f416b331535241793d101e159a3a1"
+      ]
+    },
+    {
+      "id": "CXK_V4413_SECURITY",
+      "title": "\u5ddd\u5e8f v4.4.13 \u8eab\u4efd\u6743\u9650\u4e0e\u5b89\u5168\u6cbb\u7406",
+      "hashes": [
+        "c40c70814df26f477c06c9f56ef7ae3fc6e775c02b11518a0bfbabbef260fb53",
+        "a078d335b534b6329aa5102b73128a119a7d257b0dbd61df9792db3035bd2f7a"
+      ]
+    },
+    {
+      "id": "CXK_V4413_COLLAB",
+      "title": "\u5ddd\u5e8f v4.4.13 Agent \u534f\u4f5c\u4e0e\u5de5\u4f5c\u7ba1\u7406",
+      "hashes": [
+        "d05ebbb85d3af2a47c03dcaca8b9af5bdaf101621cb137401381bf1a9002c9f8",
+        "2ff69ef54c26009a6181fa9dfea84b09021d697c60c128e197d0da2cc5ee2710"
+      ]
+    },
+    {
+      "id": "CXK_V4413_DATA",
+      "title": "\u5ddd\u5e8f v4.4.13 \u6570\u636e\u6a21\u578b\u3001\u5ba1\u8ba1\u4e0e\u8fd0\u7ef4",
+      "hashes": [
+        "3fb7be61653b83127ecf34dd1338dfaa374106471d9e0c5f180133d9fe36fc66",
+        "4246ff39a6bde27f5322e252e95aba0aeaba07f4fda1fc24021aeba96e2b85f7",
+        "b5448b7fa8c0b2755f2dc5ad03afda1fcd215559c2a7533eaf20a3274a16308a"
+      ]
+    },
+    {
+      "id": "CXK_V4413_DB",
+      "title": "\u5ddd\u5e8f v4.4.13 YashanDB Enterprise \u6570\u636e\u5e93\u80fd\u529b",
+      "hashes": [
+        "9d0762b4b8fc659a14718be73a4252a8e66ca6b710729114de0717ac572ac8f3",
+        "3ffaa56347c54201440d42b7b0f3476040660f4d390bb0f8f89798e5b1083a6c",
+        "7258f9599c61ea53fd35003a9af0e9a7725a2ca037509d7049f0d4e5f64efbb5"
+      ]
+    }
+  ]
+}

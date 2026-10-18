@@ -1,90 +1,80 @@
-# Loop Engineering - AI Agent Infra with DB v4.5.2
+# Loop engineering v5.0.0
 
-> This is a technical document for **Chuanxu (川序)**, the **AI Agent
-> Management Platform**. `AI Agent Infra with DB` is the unified technical project
-> name; database-specific package names identify the adapter and edition.
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
-## Overview
+[简体中文](loop-engineering_zh.md)
 
-**Loop Engineering** is the fourth generation of AI engineering methodology, succeeding Prompt Engineering, Context Engineering, and Harness Engineering. It was proposed by **Peter Steinberger in June 2026** as a model for building *self-correcting, goal-directed* agents that iterate toward an objective rather than producing a single-shot response.
+## Purpose and entities
 
-### Evolution of AI Engineering
+A Loop records a goal, bounded iterations, observations, evaluation and stop
+conditions. This guide describes this product's implementation; it does not
+claim a universally agreed sequence of engineering methodologies or an
+unverified attribution.
 
-| Generation | Methodology | Core Idea |
-|------------|-------------|-----------|
-| 1st | Prompt Engineering | Craft the best single instruction for one-shot output |
-| 2nd | Context Engineering | Curate and inject the right context window for the model |
-| 3rd | Harness Engineering | Package reusable execution blueprints (input/output schemas, modes) |
-| 4th | **Loop Engineering** | Define a goal, evaluate each step, and iterate until stop conditions are met |
+A Definition is an `ENTITIES` row of type `LOOP_DEFINITION`, extended by
+`LOOP_META`. Runs, Iterations and Hooks have separate database records.
+A Harness supplies an optional execution blueprint. A Loop can link a Context
+Branch, Workspace Context and Task Plan/Step instead of creating a separate
+untyped orchestration store. The selected database adapter persists the facts;
+vendor-specific SQL remains in that adapter.
 
-### What is a Loop?
+## Operator workflow
 
-A **Loop** is a persistent, observable, self-evaluating execution unit. Instead of asking an agent to "fix the bug" once, a Loop:
+1. Create a Definition with goal, owner/Agent, evaluation configuration and
+   explicit iteration, Token and duration limits.
+2. Start a Run and record each intent, action, observation, adjustment and
+   measured consumption through the authorized service.
+3. Evaluate the committed iteration; inspect the result and evidence before
+   deciding whether to continue.
+4. Pause/resume, stop, fail or complete the Run explicitly. Inspect current
+   state and stop conditions after a process restart.
+5. Preserve the Run/Iteration history and any bound task outcome.
 
-1. Declares a **goal** (`goal_definition`) and **stop conditions** (max iterations, tokens, duration)
-2. Runs **iterations**, each following the cycle: **Intent -> Context -> Action -> Observation -> Adjustment**
-3. **Evaluates** every iteration via a pluggable engine (TEST, DIFF, LLM_JUDGE, MANUAL)
-4. Fires **lifecycle hooks** at key points (PRE_RUN, POST_ITERATION, ON_STOP, ON_FAIL, ON_TIMEOUT, ON_START)
-5. **Stops** automatically when a stop condition is met or the evaluation passes
+Use Dashboard `/app/loops` or authenticated loop routes from the
+[API reference](api-reference.md). Python helpers in `lib.loop_api` are
+service implementation APIs, not permission to run as the schema Owner from
+an ordinary Agent. A Loop record does not autonomously run arbitrary code.
+Tools, models, Skills and external effects retain their existing authorization
+and runtime controls.
 
-Loops are durable: a run can be paused, resumed, monitored, and audited. All
-state lives in the selected Oracle AI Database, PostgreSQL, or YashanDB
-adapter's tables, so a loop survives Agent restarts and can be inspected by
-humans or other Agents.
+## Evaluation and hooks
 
----
+Supported evaluation types are `TEST`, `DIFF`, `LLM_JUDGE`, `MANUAL`,
+`SPEC_VALIDATION` and `AGGREGATE`. Keep the input observation and evaluator
+configuration with the result. A model judge needs an approved, usable model;
+its output is evidence for a decision, not authority to change permissions or
+publish Knowledge. Test/diff evaluators consume bounded structured observations.
 
-## Architecture
+Hooks record lifecycle behavior such as `PRE_RUN`, `POST_ITERATION`,
+`ON_STOP`, `ON_FAIL`, `ON_TIMEOUT` and `ON_START`. Hook type and handler
+support are implementation-specific; declaring a hook is not proof a remote
+effect ran. Check the current service result and audit.
 
-Loop Engineering is implemented as a sidecar to the Unified Entity Model. A Loop Definition is an `ENTITY` with `ENTITY_TYPE='LOOP_DEFINITION'`, extended by `LOOP_META`. Execution state is tracked in three dedicated tables, and behavior is exposed through a PL/SQL package and a Python module.
+## Reuse of existing capabilities
 
-```
-Harness Template ──(blueprint)──▸ Loop Definition ──▸ Loop Run
-                                        │
-                                        ├── Intent → Define goal
-                                        ├── Context → Gather information
-                                        ├── Action → Execute tools
-                                        ├── Observe → Get results
-                                        └── Adjust → Refine and repeat
-```
-Harness Template ──(blueprint)──► Loop Definition ──► Loop Run
-                                        │
-                                        ├── runs in ──► Context Branch (isolation)
-                                        ├── emits ────► Task Plans (sub-tasks)
-                                        └── saves ───► Workspace Context (continuity)
-```
+| Link | Behavior and boundary |
+|---|---|
+| Specification | `create_loop_from_spec` derives the goal from accepted criteria; inspect the derived input |
+| Task Step | `bind_loop_to_step` records `TASK_LOOP_BINDING`; completion updates the bound step through the existing lifecycle |
+| Branch | A bound branch supplies isolated context; merge remains a separate governed decision |
+| Skill | A configured validation loop may be created during Skill acquisition |
+| Collaborative Loop | Child runs aggregate observations; historical collaboration-group links do not grant Security Domain access |
 
-Together these features let a Loop be both **executable** (via a Harness Template), **isolated** (via Context Branches), **structured** (via Task Plans), and **resumable** (via Workspace Context) — turning a single-shot agent call into a durable, self-correcting engineering process.
+The service limits collaborative nesting to two levels. Task completion types
+include `MANUAL`, `LOOP` and `SPEC`; a waiting step can enter
+`WAITING_LOOP`. Completion callbacks retain the original relationship and
+must not infer missing work from an old success marker.
 
+## Recovery and evidence
 
+The database stores current state and iteration history, allowing authorized
+inspection after an Agent restart. This is not a guarantee that an arbitrary
+external action is retried safely or that every model conversation resumes.
+Record uncertain effects and reconcile them rather than sending again.
+Respect current permissions and source revocation when reconstructing context.
 
-
-## v3.7.4 — Collaborative Integration
-
-### Spec-Driven Loop
-- `create_loop_from_spec(spec_id, agent_id)` derives goal from Spec acceptance_criteria
-- `derive_loop_from_spec()` in spec_api.py returns derived loop parameters
-- SPEC_VALIDATION evaluation type: validates each criterion against iteration observations
-- POST /api/loops/from-spec endpoint
-
-### Task-Loop Binding
-- `bind_loop_to_step(step_id, loop_id)` creates TASK_LOOP_BINDING entry
-- Step STEP_COMPLETION_TYPE: MANUAL (default), LOOP (auto-complete on loop success), SPEC
-- WAITING_LOOP status added to TASK_STEPS
-- `on_loop_run_completed()` auto-updates bound step status
-- POST /api/tasks/steps/{id}/bind-loop endpoint
-
-### Collaborative Loop
-- `create_collab_loop(group_id, parent_loop_id)` creates loop with COLLAB_GROUP_ID
-- `create_sub_loops_for_group()` creates child loops for each group member
-- 2-level nesting limit enforced (parent_loop_id cannot point to a sub-loop)
-- AGGREGATE evaluation type: collects child run results
-- `aggregate_child_runs(parent_run_id)` returns aggregation summary
-- GET /api/loops/{id}/children and /api/loops/{id}/aggregation endpoints
-
-### Branch-Isolated Loop
-- Loops with branch_id set automatically run in branch context
-
-### Skill-Triggered Loop
-- `create_validation_loop_for_skill(skill_id, agent_id)` checks skill metadata
-- Auto-triggered on skill acquire if validation_loop defined in skill properties
+Use [Graph engineering](graph-engineering.md) for leased Graph execution,
+[workspace operations](workspace.md) for branch/context lifecycle, and
+[recovery](recovery.md) for process and database recovery boundaries. Do not
+replace those durable services with an independent Loop scheduler or claim
+database-cluster HA from process restart tests.

@@ -689,6 +689,13 @@ def main():
         os.path.join(script_dir, "requirements.txt"),
     ]
     req_file = next((path for path in req_candidates if os.path.isfile(path)), req_candidates[0])
+    selected_requirements = os.environ.get("CX_REQUIREMENTS_FILE")
+    if selected_requirements:
+        from pathlib import Path
+        selected = Path(selected_requirements).resolve()
+        if not selected.is_relative_to(Path(project_dir).resolve()):
+            raise SystemExit("[ERROR] selected requirements must be inside the package")
+        req_file = str(selected)
 
     if not os.path.isdir(vendor_dir):
         print(f"[ERROR] vendor/ directory not found: {vendor_dir}")

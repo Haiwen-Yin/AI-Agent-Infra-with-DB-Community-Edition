@@ -30,5 +30,8 @@ def verify(path,public_key,expected_digest):
             Ed25519PublicKey.from_public_bytes(key).verify(signature,b'chuanxu-release-manifest/v1\n'+digest.encode('ascii'))
             if root+'SKILL.md' not in archive.namelist():
                 raise ValueError('Skill entrypoint is unavailable')
+    from .product_identity import release_product
+    product = release_product(manifest)
     return {'verified':True,'received_digest':expected_digest,'package_version':manifest['version'],
-            'edition':manifest['edition'],'database':manifest['database']['key']}
+            'edition':manifest['edition'],'database':manifest['database']['key'],
+            'databases':product['databases'],'product_key':product['product_key']}

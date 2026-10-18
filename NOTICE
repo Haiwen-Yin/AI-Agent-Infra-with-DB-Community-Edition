@@ -1,4 +1,4 @@
-AI Agent Infra with OracleDB - Community Edition
+AI Agent Infra with PostgreSQL - Community Edition
 Product brand: Chuanxu (川序)
 Product: AI Agent Management Platform
 Technical project: AI Agent Infra with DB
@@ -10,17 +10,18 @@ This product is licensed under the Apache License, Version 2.0.
 See LICENSE for details.
 
 
-This product uses Oracle Database technologies, including but not limited to:
-- Oracle AI Database 26ai
-- Oracle Property Graph (SQL PGQ)
-- Oracle JSON-Relational Duality Views
-- Oracle Vector Data Type
-- Oracle PL/SQL Packages
-- Oracle Scheduler
+This product uses PostgreSQL technologies, including but not limited to:
+- PostgreSQL 18.3+
+- pgvector extension (VECTOR data type + HNSW/IVFFlat index)
+- pg_trgm extension (trigram fuzzy search)
+- pgcrypto extension (column-level encryption)
+- pg_cron extension (scheduled jobs)
+- Row-Level Security (RLS) policies
+- PL/pgSQL server-side functions
 
-Oracle and Java are registered trademarks of Oracle and/or its affiliates.
+PostgreSQL is released under the PostgreSQL License, a BSD-style license.
+psycopg2 is licensed under the GNU LGPL v3 with a linking exception.
 Other names may be trademarks of their respective owners.
-Use of these trademarks does not imply endorsement by Oracle Corporation.
 
 
 

@@ -108,9 +108,9 @@ def test_portal_agent_lifecycle_is_isolated_by_node():
 
 
 def test_portal_pool_assignment_requires_active_agent_principal():
+    from lib.package_layout import adapter_file, databases
     root = Path(__file__).resolve().parents[2]
-    sources = ([root / "scripts" / "lib" / "agent_api.py"] if (root / "build-manifest.json").is_file()
-               else [root / "adapters" / adapter / "agent_api.py" for adapter in ("oracle", "pg", "yashandb")])
+    sources = [adapter_file(root, database, "agent_api.py") for database in databases(root)]
     for path in sources:
         source = path.read_text(encoding="utf-8")
         assignment = source.split("def assign_random_pool_agent", 1)[1].split("def ", 1)[0]
@@ -123,8 +123,8 @@ def test_portal_pool_assignment_requires_active_agent_principal():
 def test_portal_pool_config_can_be_serialized_after_database_round_trip():
     """Oracle/YashanDB NUMBER values return as Decimal during Portal claim."""
     root = Path(__file__).resolve().parents[2]
-    sources = ([root / "scripts" / "lib" / "agent_api.py"] if (root / "build-manifest.json").is_file()
-               else [root / "adapters" / adapter / "agent_api.py" for adapter in ("oracle", "pg", "yashandb")])
+    from lib.package_layout import adapter_file, databases
+    sources = [adapter_file(root, database, "agent_api.py") for database in databases(root)]
     for path in sources:
         source = path.read_text(encoding="utf-8")
         register = source.split("def register_agent(", 1)[1].split("def ", 1)[0]
@@ -400,13 +400,9 @@ def test_portal_chat_stream_is_not_buffered_by_compatibility_layers():
 
 
 def test_pool_assignment_excludes_inactive_registered_agents():
+    from lib.package_layout import adapter_file, databases
     root = Path(__file__).resolve().parents[2]
-    adapter_files = [
-        root / "adapters" / database / "agent_api.py"
-        for database in ("oracle", "pg", "yashandb")
-    ]
-    if not adapter_files[0].exists():
-        adapter_files = [root / "scripts" / "lib" / "agent_api.py"]
+    adapter_files = [adapter_file(root, database, "agent_api.py") for database in databases(root)]
     for path in adapter_files:
         content = path.read_text(encoding="utf-8")
         assert "LEFT JOIN" in content
@@ -415,8 +411,8 @@ def test_pool_assignment_excludes_inactive_registered_agents():
     pg = root / "adapters" / "pg" / "agent_api.py"
     if pg.exists():
         assert "def _ensure_agent_login(agent_id: str)" in pg.read_text(encoding="utf-8")
-    elif json.loads((root / "build-manifest.json").read_text(encoding="utf-8")).get("database", {}).get("key") == "pg":
-        assert "def _ensure_agent_login(agent_id: str)" in adapter_files[0].read_text(encoding="utf-8")
+    elif "pg" in databases(root):
+        assert "def _ensure_agent_login(agent_id: str)" in adapter_file(root, "pg", "agent_api.py").read_text(encoding="utf-8")
 
 
 def test_auth_branding_preserves_product_title():
@@ -426,13 +422,9 @@ def test_auth_branding_preserves_product_title():
 
 
 def test_all_adapters_persist_and_condition_portal_node_ownership():
+    from lib.package_layout import adapter_file, databases
     root = Path(__file__).resolve().parents[2]
-    adapter_files = [
-        root / "adapters" / database / "agent_api.py"
-        for database in ("oracle", "pg", "yashandb")
-    ]
-    if not adapter_files[0].exists():
-        adapter_files = [root / "scripts" / "lib" / "agent_api.py"]
+    adapter_files = [adapter_file(root, database, "agent_api.py") for database in databases(root)]
     for path in adapter_files:
         content = path.read_text(encoding="utf-8")
         assert "def reclaim_portal_agents(portal_node_id: str) -> int:" in content

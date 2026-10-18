@@ -1,228 +1,115 @@
-# Workspace & Context Continuity - AI Agent Infra with DB v4.5.2
+# Workspace and context continuity v5.0.0
 
-> This is a technical document for **Chuanxu (川序)**, the **AI Agent
-> Management Platform**. `AI Agent Infra with DB` is the unified technical project
-> name; database-specific package names identify the adapter and edition.
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
-## Design Philosophy: JRD vs Native JSON
+[简体中文](workspace_zh.md)
 
-v3.4.0 adopts a layered JSON strategy that balances relational integrity with document convenience:
+## Database entities and authorization
 
-1. **Native JSON columns** for storage — `WORKSPACES.METADATA`, `WORKSPACE_CONTEXT.CONTEXT_DATA`, and `AGENT_SESSION.CONTEXT` use Oracle's native JSON type. This provides schemaless flexibility while remaining queryable via `JSON_VALUE`, `JSON_TABLE`, and dot-notation.
+Workspaces, workspace contexts, sessions, branches and linked tasks are existing
+database entities. They retain stable identifiers, source relationships and
+history; JSON holds bounded content rather than permissions or a second task
+engine. This product supports **oracle, pg, yashandb**.
 
-2. **JRD (JSON Relational Duality)** for document API — `WORKSPACE_DV` and `CONTEXT_DV` expose the relational schema as JSON documents. WORKSPACE_DV nests WORKSPACE_CONTEXT and WORKSPACE_TASKS as sub-documents, enabling atomic workspace operations via a single JSON payload.
+Use authenticated Dashboard/Gateway operations with current resource permission.
+Direct Python helpers in `scripts/lib/workspace_api.py` are internal primitives,
+not an authorization boundary. Native Agent logins retain their backend's
+independent policies. A Workspace's `SHARED` or `ISOLATED` metadata does not
+grant access to Knowledge, Memory, Channels, models or another principal's data.
 
-3. **JSON_TRANSFORM for partial updates** — Updatable JRD views use `JSON_TRANSFORM` internally for atomic partial JSON updates. This avoids full document replacement on small changes (e.g., updating a single field in METADATA).
+PostgreSQL uses native JSONB and generated numeric identifiers where defined;
+Oracle and YashanDB use their selected native schema and adapter. Oracle JSON
+Relational Duality views, when present, are adapter-specific projections, not a
+portable write API. Do not copy Oracle JSON/SQL syntax into another backend.
 
-**Why not JRD for everything?** JRD views impose structural constraints — nested subqueries must align with FK relationships, and read-only views cannot be used for writes. Native JSON columns give full flexibility for unstructured data (CONTEXT_DATA, METADATA) while JRD provides the REST-friendly document interface for consumers.
+## Workspace lifecycle
 
----
+| State | Meaning | Intended next states |
+|---|---|---|
+| `ACTIVE` | Current working context | `PAUSED`, `COMPLETED`, `ABANDONED` |
+| `PAUSED` | Work is suspended | `ACTIVE`, `COMPLETED`, `ABANDONED` |
+| `COMPLETED` | Work has finished | Retain the result and history |
+| `ABANDONED` | Work has been discontinued | Retain the reason and history |
 
-## WORKSPACE Lifecycle
+`WORKSPACES` records owner, name, type, isolation metadata, current Agent and
+session, summary and timestamps. `WORKSPACE_TASKS` links Task Plans without
+duplicating their execution state. `GET /api/workspaces` is the authorized
+Dashboard inventory; use `view=summary` for its bounded summary representation.
+Do not infer write support merely from a read endpoint.
 
-```
-ACTIVE ──pause──▸ PAUSED ──resume──▸ ACTIVE
-  │                                  │
-  └──archive──▸ ARCHIVED             │
-                                     │
-PAUSED ──archive──▸ ARCHIVED         │
-                                     │
-ACTIVE ──archive──▸ ARCHIVED
-```
+## Context types and content
 
-| Status | Description | Allowed Transitions |
-|--------|-------------|-------------------|
-| ACTIVE | Workspace is in use, agents can operate | → PAUSED, → ARCHIVED |
-| PAUSED | Temporarily suspended, no new sessions | → ACTIVE, → ARCHIVED |
-| ARCHIVED | Read-only, preserved for history | (terminal) |
+`WORKSPACE_CONTEXT` retains parent, workspace, Agent, session and Branch
+relationships separately from `CONTEXT_DATA`.
 
-WORKSPACES tracks the `CURRENT_AGENT_ID` and `CURRENT_SESSION_ID` to identify the active agent and session at any point. When a handoff occurs, these are updated atomically with the new session creation.
+| Type | Content purpose |
+|---|---|
+| `SNAPSHOT` | Working state at a recorded instant |
+| `CHECKPOINT` | Intermediate progress and outstanding actions |
+| `HANDOFF` | Transfer reason, current state and recipient instructions |
+| `SUMMARY` | Bounded account of the session's outcomes |
+| `RECOVERY` | Recovery point, prior interruption and resume instructions |
 
----
-
-## CONTEXT_DATA Structure by CONTEXT_TYPE
-
-Each `WORKSPACE_CONTEXT.CONTEXT_DATA` JSON document follows a structure determined by `CONTEXT_TYPE`:
-
-### SNAPSHOT
-
-Full workspace state at a point in time:
-
-```json
-{
-  "entity_count": 42,
-  "active_tasks": ["PLAN_abc123", "PLAN_def456"],
-  "recent_entities": ["ENTITY_xxx", "ENTITY_yyy"],
-  "session_summary": "Completed data analysis phase",
-  "workspace_status": "ACTIVE"
-}
-```
-
-### CHECKPOINT
-
-Intermediate save during a session:
+A recommended content shape is:
 
 ```json
 {
-  "progress": "Step 3 of 7 complete",
-  "intermediate_results": { ... },
-  "pending_actions": ["Run validation", "Generate report"],
-  "timestamp_offset_ms": 145000
+  "_version": 1,
+  "summary": "Validation is incomplete",
+  "pending_actions": ["Verify the remaining task"],
+  "observed_at": "2026-10-17T00:00:00Z"
 }
 ```
 
-### HANDOFF
+The example is illustrative, not execution evidence or a grant. Keep content
+bounded, version its schema and use ISO-8601 timestamps. Content cannot contain
+credentials. The service sanitizes secret-like fields, but callers must still
+avoid placing secrets into arbitrary prose.
 
-Context transferred between agents:
+## Handoff and Branch relationships
 
-```json
-{
-  "from_agent": "agent-1",
-  "to_agent": "agent-2",
-  "reason": "Specialist handoff for code review",
-  "current_state": "Analysis complete, review pending",
-  "instructions": "Review the generated SQL queries for optimization",
-  "artifacts": ["ENTITY_sql_draft", "ENTITY_analysis_report"]
-}
-```
+The legacy `create_handoff_session()` helper creates a HANDOFF Branch, links a
+new `AGENT_SESSION` to its predecessor, saves context and updates the Workspace's
+current Agent/session. Its separate helper calls are not proof of an atomic
+governed work transfer or recipient acceptance. New work uses the versioned
+Work contract, handoff offer/acknowledgement and Context Assembly workflows in
+[continuity operations](continuity-operations.md).
 
-### SUMMARY
+Those workflows preserve responsibilities, policy revisions, exact source
+snapshots, digests, current authorization and immutable review/publication facts.
+Concurrent capacity is explicit and bounded; coordinator ownership remains
+distinct from a recipient's authority. Neither a text instruction nor a Branch
+name transfers ownership. The recipient's current permissions must still allow
+every source it reads.
 
-Condensed summary of session activity:
+DB4A2A sends context references and exact snapshot facts instead of copying
+large prompts. The authorized child-Branch operation locks and validates its
+dispatch and context, then commits the Branch, link and audit atomically.
+A retry rejects changed sources. See [DB4A2A](db4a2a.md).
 
-```json
-{
-  "session_id": "SES_abc123",
-  "duration_minutes": 45,
-  "entities_created": 5,
-  "entities_modified": 3,
-  "tasks_completed": 1,
-  "key_findings": "Identified 3 optimization opportunities"
-}
-```
+## Recovery and execution
 
-### RECOVERY
+`recover_workspace()` assembles available Workspace metadata, bounded context
+and session history, linked active tasks and applicable scoped entities. It does
+not resume a model, rerun an external operation, promote a database standby or
+establish that a previous side effect failed. Inspect the original task,
+attempt, lease, checkpoint and source revision before resuming.
 
-Context used to restore a workspace after interruption:
+Use recorded `RECOVERY` context to explain a chosen resume point. Expired
+Worker fencing tokens cannot commit; uncertain external sends require explicit
+reconciliation and are never blindly repeated. Original Gateway credential
+revocation cannot be repaired by substituting a new credential for old work.
+Database backups, replication and RPO/RTO remain operator duties.
 
-```json
-{
-  "interrupted_at": "2026-05-20T14:30:00Z",
-  "interrupted_session": "SES_old123",
-  "recovery_point": "CHECKPOINT_CTX_abc",
-  "resume_instructions": "Continue from step 4 of the data pipeline",
-  "lost_operations": ["Partial entity update (rolled back)"]
-}
-```
+## Operations and verification
 
----
+1. Select an authorized Workspace and inspect its owner, state and current session.
+2. Inspect the exact source context and Branch before a handoff or DB4A2A dispatch.
+3. Use the governed operation with its expected revision and idempotency key.
+4. Read the resulting database record and audit; a queued response is not completion.
+5. Recheck access after membership, source or credential revocation.
+6. Verify restart behavior and uncertain outcomes in a classified temporary target.
 
-## Handoff Flow
-
-Agent handoff transfers workspace control from one agent to another while preserving context continuity:
-
-```
-Agent-1 (current)                   Agent-2 (new)
-     │                                   │
-     │ 1. create_handoff_session(ws_id)  │
-     │ ─────────────────────────────────► │
-     │                                    │
-     │ 2. New AGENT_SESSION created:      │
-     │    PREDECESSOR_SESSION_ID = old     │
-     │    WORKSPACE_ID = ws_id            │
-     │                                    │
-     │ 3. HANDOFF context saved:          │
-     │    PARENT_CONTEXT_ID = latest ctx  │
-     │                                    │
-     │ 4. WORKSPACES updated:             │
-     │    CURRENT_AGENT_ID = agent-2      │
-     │    CURRENT_SESSION_ID = new_ses    │
-     │                                    │
-     │           ◄── Agent-2 active ──►   │
-```
-
-**Steps performed by `create_handoff_session()`:**
-
-1. Retrieve the workspace's current state (latest context, current session)
-2. Create a new `AGENT_SESSION` with `PREDECESSOR_SESSION_ID` pointing to the current session
-3. Save a `HANDOFF` context entry with `PARENT_CONTEXT_ID` linking to the latest context
-4. Update `WORKSPACES` to set `CURRENT_AGENT_ID` and `CURRENT_SESSION_ID` to the new values
-
-**Session chain traversal:** `get_session_chain(session_id)` walks `PREDECESSOR_SESSION_ID` backwards, returning the full history of sessions in the workspace.
-
----
-
-## Recovery Flow
-
-When a workspace needs to be restored (after crash, pause, or agent loss):
-
-```
-recover_workspace(workspace_id)
-     │
-     ├── Returns workspace metadata
-     ├── Returns context chain (latest 5 entries)
-     ├── Returns active tasks (PENDING/RUNNING/BLOCKED)
-     ├── Returns recent sessions (latest 5)
-     └── Returns recent entities (ISOLATED mode only, latest 10)
-```
-
-**Recovery procedure:**
-
-1. Call `recover_workspace()` to get the full recoverable state
-2. Inspect the context chain for the latest CHECKPOINT or HANDOFF entry
-3. Create a new session with `PREDECESSOR_SESSION_ID` pointing to the last known good session
-4. Save a RECOVERY context entry with resume instructions
-5. Resume operations from the recovery point
-
----
-
-## Isolation Modes
-
-| Mode | Behavior | Entity Scoping |
-|------|----------|---------------|
-| SHARED | Entities are visible across workspaces | `ENTITIES.WORKSPACE_ID` is optional (nullable) |
-| ISOLATED | Entities are scoped to the workspace | `ENTITIES.WORKSPACE_ID` is set; `recover_workspace()` returns only workspace-scoped entities |
-
-In ISOLATED mode, agents operating in a workspace can only see entities tagged with that `WORKSPACE_ID`. This is enforced at the application layer — the Python API filters by `WORKSPACE_ID` when the workspace has `ISOLATION_MODE = 'ISOLATED'`.
-
----
-
-## CONTEXT_DATA JSON Schema Recommendations
-
-While CONTEXT_DATA is stored as schemaless JSON, the following patterns are recommended:
-
-### General Guidelines
-
-- Always include a human-readable `description` or `summary` field for debugging
-- Use consistent field names across CONTEXT_TYPEs (e.g., `session_id` not `ses_id`)
-- Include timestamps as ISO 8601 strings for cross-language compatibility
-- Keep CONTEXT_DATA under 32KB to avoid performance issues with large JSON columns
-- Use arrays for ordered collections, objects for keyed lookups
-
-### Versioning
-
-If CONTEXT_DATA schema evolves, include a `_version` field:
-
-```json
-{
-  "_version": 2,
-  "new_field": "value",
-  "legacy_field": "deprecated"
-}
-```
-
-### Nested vs Flat
-
-Prefer flat structures for QUERY performance. Nest only when the sub-document is always read/written atomically:
-
-```json
-{
-  "progress": "50%",
-  "metadata": {
-    "tool": "sql_analyzer",
-    "version": "1.2"
-  }
-}
-```
-
-The `metadata` sub-object is appropriate because it's always read together. Individual progress fields should be at the top level for `JSON_VALUE` access.
+See [API reference](api-reference.md), [security](security.md),
+[recovery](recovery.md) and [migration](migration.md). The retained historical
+Workspace guide is source history, not the current multi-database contract.

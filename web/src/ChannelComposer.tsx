@@ -7,7 +7,7 @@ type Row = Record<string, any>;
 type Props = {
   body: string; setBody: (body: string) => void; members: Row[]; commands: Row[];
   threads: Row[]; threadId: string; setThreadId: (id: string) => void;
-  sending: boolean; feedback: string; lang: "zh" | "en";
+  sending: boolean; readOnly?: boolean; feedback: string; lang: "zh" | "en";
   text: (zh: string, en: string) => string;
   onSend: (mentions: string[]) => Promise<void>;
 };
@@ -63,7 +63,7 @@ export default function ChannelComposer(props: Props) {
     }
   };
   const submit = async () => {
-    if (props.sending || composing.current || !body.trim()) return;
+    if (props.readOnly || props.sending || composing.current || !body.trim()) return;
     if (hasCommandPlaceholders(body)) { setError(text("请填写命令中的参数和原因。", "Complete the command parameters and reason.")); return; }
     const memberIds = new Set(members.map((item) => String(item.principal_id)));
     const selectedIds = selectedMentionIds(body, mentions, memberIds);
@@ -77,6 +77,7 @@ export default function ChannelComposer(props: Props) {
     await props.onSend([...new Set([...selectedIds, ...directIds])]);
   };
   const insertTrigger = (trigger: string) => {
+    if (props.readOnly) return;
     const position = input.current?.selectionStart ?? body.length;
     const prefix = position && !/\s/.test(body[position - 1]) ? " " : "";
     const next = trigger === "/" && !body.trim() ? "/" : body.slice(0, position) + prefix + trigger + body.slice(position);
@@ -92,7 +93,7 @@ export default function ChannelComposer(props: Props) {
         </button>)}
       </div>}
       <textarea ref={input} aria-label={text("消息内容", "Message")} aria-autocomplete="list" aria-controls={items.length ? "channel-completions" : undefined} aria-activedescendant={items.length ? `channel-completion-${index}` : undefined}
-        value={body} onChange={(event) => update(event.target.value, event.target.selectionStart)}
+        disabled={props.readOnly} value={body} onChange={(event) => update(event.target.value, event.target.selectionStart)}
         onSelect={(event) => { setCaret(event.currentTarget.selectionStart); }}
         onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
         onKeyDown={(event) => {
@@ -106,10 +107,10 @@ export default function ChannelComposer(props: Props) {
       {!dismissed && mention && !mentionItems.length && <small role="status">{text("没有匹配的频道成员", "No matching channel members")}</small>}
     </div>
     <div className="compose-controls">
-      <button type="button" className="icon-button" title={text("提及成员", "Mention member")} onClick={() => insertTrigger("@")}><AtSign size={17} /></button>
-      {commands.length > 0 && <button type="button" className="icon-button" disabled={Boolean(body.trim())} title={text("平台命令", "Platform commands")} onClick={() => insertTrigger("/")}><Slash size={17} /></button>}
+      <button type="button" className="icon-button" disabled={props.readOnly} title={text("提及成员", "Mention member")} onClick={() => insertTrigger("@")}><AtSign size={17} /></button>
+      {commands.length > 0 && <button type="button" className="icon-button" disabled={props.readOnly || Boolean(body.trim())} title={text("平台命令", "Platform commands")} onClick={() => insertTrigger("/")}><Slash size={17} /></button>}
       <select aria-label={text("消息线程", "Message thread")} value={props.threadId} onChange={(event) => props.setThreadId(event.target.value)}><option value="">{text("频道消息", "Channel message")}</option>{props.threads.map((item) => <option key={item.thread_id} value={item.thread_id}>{item.thread_type} · {item.thread_id}</option>)}</select>
-      <button className="primary-button" disabled={!body.trim() || props.sending}><Send size={16} />{props.sending ? text("发送中", "Sending") : text("发送", "Send")}</button>
+      <button className="primary-button" disabled={props.readOnly || !body.trim() || props.sending}><Send size={16} />{props.sending ? text("发送中", "Sending") : text("发送", "Send")}</button>
     </div>
   </form>;
 }

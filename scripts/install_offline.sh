@@ -37,6 +37,10 @@ if ! PYTHON_BIN="$(cx_resolve_python "${PYTHON_BIN:-}")"; then
     exit 1
 fi
 cx_prepare_python_environment "$PYTHON_BIN"
+export PYTHONPATH="$PROJECT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}"
+DB_KEY="$("$PYTHON_BIN" -m lib.database_selection)"
+REQ_FILE="$("$PYTHON_BIN" -m lib.database_selection --requirements)"
+export CX_REQUIREMENTS_FILE="$REQ_FILE"
 if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
     echo "[ERROR] $PYTHON_BIN has no pip module. Install pip for the same interpreter before retrying." >&2
     exit 1
@@ -56,7 +60,7 @@ fi
 # YashanDB ships a CPython-native driver rather than a wheel. Install it into
 # the same package-local virtual environment before checking or starting the
 # Web service; no user-site or global Python path is modified.
-if [[ -d "$VENDOR_DIR/yaspy" ]]; then
+if [[ "$DB_KEY" == "yashandb" && -d "$VENDOR_DIR/yaspy" ]]; then
     if [[ ! -f "$SCRIPT_DIR/install_yaspy.sh" ]]; then
         echo "[ERROR] YashanDB native-driver installer is missing." >&2
         exit 1
@@ -70,7 +74,7 @@ fi
 "$VENV_PYTHON" "$SCRIPT_DIR/verify_deps.py"
 PIP_REQ_FILE="$REQ_FILE"
 TEMP_REQ_FILE=""
-if [[ -d "$VENDOR_DIR/yaspy" ]]; then
+if [[ "$DB_KEY" == "yashandb" && -d "$VENDOR_DIR/yaspy" ]]; then
     # yaspy is shipped as a native extension, not as a pip distribution.
     TEMP_REQ_FILE="$(mktemp)"
     sed -E '/^[[:space:]]*yaspy([<=>]|$)/d' "$REQ_FILE" >"$TEMP_REQ_FILE"

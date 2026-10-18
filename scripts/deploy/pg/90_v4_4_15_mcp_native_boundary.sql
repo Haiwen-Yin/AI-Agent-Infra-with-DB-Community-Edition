@@ -1,0 +1,18 @@
+CREATE OR REPLACE VIEW public.CX_MCP_EXPOSED_TOOLS AS
+SELECT TOOL_ID, TOOL_NAME, DESCRIPTION, INPUT_SCHEMA, STATUS, MCP_EXPOSED
+FROM public.TOOL_REGISTRY WHERE MCP_EXPOSED='Y' AND STATUS='ACTIVE';
+GRANT SELECT ON public.CX_MCP_EXPOSED_TOOLS TO ai_agent_runtime;
+REVOKE INSERT, UPDATE, DELETE ON public.CX_MCP_EXPOSED_TOOLS FROM ai_agent_runtime;
+CREATE OR REPLACE FUNCTION public.cx90_guard_mcp_delete() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $cx90$
+DECLARE owner_name name;
+BEGIN
+  SELECT pg_get_userbyid(relowner) INTO owner_name FROM pg_class WHERE oid=TG_RELID;
+  IF session_user<>owner_name AND OLD.mcp_exposed='Y' THEN
+    RAISE EXCEPTION 'An exposed tool requires control-plane authority' USING ERRCODE='42501';
+  END IF;
+  RETURN OLD;
+END $cx90$;
+REVOKE ALL ON FUNCTION public.cx90_guard_mcp_delete() FROM PUBLIC;
+CREATE OR REPLACE TRIGGER CX415_TOOL_MCP_DELETE BEFORE DELETE ON public.TOOL_REGISTRY
+FOR EACH ROW EXECUTE FUNCTION public.cx90_guard_mcp_delete();

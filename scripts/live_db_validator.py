@@ -37,6 +37,9 @@ REPO_ROOT = _resolve_repo_root()
 def _migration_path(database: str, name: str) -> Path:
     """Resolve every migration against the same source or package layout."""
     if (REPO_ROOT / "build-manifest.json").is_file():
+        selected = REPO_ROOT / "scripts" / "deploy" / database / name
+        if selected.is_file():
+            return selected
         return REPO_ROOT / "scripts" / "deploy" / name
     return REPO_ROOT / "adapters" / database / "deploy" / name
 
@@ -49,6 +52,13 @@ def _available_databases() -> tuple[str, ...]:
     except (OSError, ValueError):
         manifest = {}
     key = str((manifest.get("database") or {}).get("key") or "").lower()
+    product_databases = (manifest.get("delivery_product") or {}).get("databases")
+    if product_databases is not None:
+        if (not isinstance(product_databases, list) or not product_databases
+                or any(item not in {"oracle", "pg", "yashandb"} for item in product_databases)
+                or len(set(product_databases)) != len(product_databases)):
+            raise ValueError("Invalid product database declaration")
+        return tuple(product_databases)
     if key in {"oracle", "pg", "yashandb"}:
         return (key,)
     return ("oracle", "pg", "yashandb")
@@ -230,6 +240,7 @@ V451_MIGRATION_SCRIPTS = V411_MIGRATION_SCRIPTS + (
 V452_MIGRATION_SCRIPTS = V451_MIGRATION_SCRIPTS + (
     "101_v4_5_2_task_continuity.sql",
 )
+V500_MIGRATION_SCRIPTS = V452_MIGRATION_SCRIPTS + ("102_v5_0_0_network_access.sql",)
 ENTERPRISE_ONLY_MIGRATION_SCRIPTS = frozenset({
     "29_v4_3_4_agent_compliance.sql",
     "30_v4_3_4_compliance_hardening.sql",
@@ -1645,6 +1656,20 @@ def validate_v452_static_contract(
             "passed": bool(base.get("passed")) and bool(control["passed"])}
 
 
+def validate_v500_static_contract(database: str, scripts: Sequence[Path], edition: str = "enterprise") -> dict[str, Any]:
+    base = validate_v452_static_contract(database, scripts, edition)
+    selected = {path.name: path for path in scripts}
+    migration = selected.get("102_v5_0_0_network_access.sql")
+    source = migration.read_text(encoding="utf-8").upper() if migration and migration.is_file() else ""
+    markers = {"CX_IP_ACCESS_STATE", "CX_IP_ACCESS_REVISIONS", "CX_IP_ACCESS_RULES", "CX102_", "ALLOWLIST", "DENYLIST"}
+    required = migration_scripts_for_edition(V500_MIGRATION_SCRIPTS, edition)
+    control = {"scripts_missing": [name for name in required if name not in selected or not selected[name].is_file()],
+               "contract_markers_missing": sorted(marker for marker in markers if marker not in source)}
+    control["passed"] = not control["scripts_missing"] and not control["contract_markers_missing"]
+    return {"database": database, "v452": base, "v500_source_ip_access": control,
+            "passed": bool(base.get("passed")) and bool(control["passed"])}
+
+
 def _pg_runtime_permission_contract(cursor: Any) -> dict[str, Any]:
     """Read actual PostgreSQL grants; absence of the runtime role is a failure."""
     cursor.execute("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ai_agent_runtime')")
@@ -2243,7 +2268,10 @@ def main() -> int:
     static_contracts: dict[str, dict[str, Any]] = {}
     if requires_v43:
         for database in available_databases:
-            if requires_v452:
+            if at_least((5, 0, 0)):
+                migration_scripts = migration_scripts_for_edition(V500_MIGRATION_SCRIPTS, edition)
+                validator = lambda database, scripts: validate_v500_static_contract(database, scripts, edition)
+            elif requires_v452:
                 migration_scripts = migration_scripts_for_edition(V452_MIGRATION_SCRIPTS, edition)
                 validator = lambda database, scripts: validate_v452_static_contract(database, scripts, edition)
             elif requires_v411:

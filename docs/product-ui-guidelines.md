@@ -1,4 +1,6 @@
-# Chuanxu Product UI Guidelines v4.5.2
+# Chuanxu Product UI Guidelines v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 These reusable rules apply to authenticated Dashboard pages in every edition.
 
@@ -104,6 +106,12 @@ versions, loading placeholders, errors, and overlaps are rejected.
 - Display the running package version. Release captures verify backend version
   and served frontend asset digests against that exact package.
 - Use the original Chinese vector wordmark with a contrasting dark variant.
+- For OpenTenBase AgentX, use the official OpenTenBase emblem with the separate
+  name `OpenTenBase AgentX` beside it in both languages. Preserve its colors and
+  proportions, and verify that authentication controls do not overlap the name.
+  Authentication footers display only the running version, such as `v5.0.0`;
+  product titles and branding badges omit the database-specific edition label.
+  Deployment documentation and technical configuration still identify the supported database.
 - Separate discussion threads, current members and member addition. Align short
   selects to the top instead of stretching them beside compound controls.
 - Reuse the accessible name/username Principal combobox, retaining existing

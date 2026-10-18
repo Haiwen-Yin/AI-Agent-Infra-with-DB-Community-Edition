@@ -57,7 +57,7 @@ def test_upgrade_protocol_keeps_remote_execution_outside_web_service():
 def test_automatic_uploaded_upgrade_keeps_signature_and_safe_point_boundaries():
     source = Path(admin_management.__file__).read_text(encoding="utf-8")
     function = source.split("def auto_schedule_upgrade(", 1)[1].split("\ndef preflight_upgrade", 1)[0]
-    assert "upgrade package database does not match this installation" in function
+    assert "product_identity.check_release_compatibility(" in function
     assert "upgrade package version must be newer than this installation" in function
     assert "CX_UPGRADE_NODES" in function
     assert "CX_SKILL_DISTRIBUTION" in function

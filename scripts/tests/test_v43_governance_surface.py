@@ -21,16 +21,16 @@ def _database_key() -> str | None:
         return None
     import json
     try:
-        return str(json.loads((ROOT / "build-manifest.json").read_text(encoding="ascii"))["database"]["key"])
+        from lib.package_layout import active_database
+        return active_database(ROOT)
     except (OSError, KeyError, TypeError, ValueError):
         return None
 
 
 def _migration_path(database: str) -> Path:
-    source_path = ROOT / "adapters" / database / "deploy" / "17_v4_3_0_governance_lifecycle.sql"
-    if source_path.is_file():
-        return source_path
-    return SOURCE_ROOT / "deploy" / "17_v4_3_0_governance_lifecycle.sql"
+    from lib.package_layout import databases, deployment_dir
+    selected = database if database in databases(ROOT) else _database_key()
+    return deployment_dir(ROOT, selected) / "17_v4_3_0_governance_lifecycle.sql"
 
 
 def _route_paths() -> set[str]:

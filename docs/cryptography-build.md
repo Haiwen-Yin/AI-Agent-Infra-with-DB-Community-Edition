@@ -1,4 +1,6 @@
-# Cryptography Wheel Policy - AI Agent Infra with DB v4.5.2
+# Cryptography Wheel Policy - AI Agent Infra with DB v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 The platform uses `cryptography==49.0.0` for configuration and credential
 encryption. v4.4.11 and later target RHEL 9.8+ (Oracle Linux 9.8+), or an
@@ -20,7 +22,7 @@ release archive.
 Run the normal offline dependency gate on the supported host:
 
 ```bash
-python3.14 shared/verify_deps.py
+python3.14 scripts/verify_deps.py
 ```
 
 The gate rejects hosts below glibc 2.34, foreign platform tags, incompatible

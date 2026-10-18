@@ -17,7 +17,7 @@ def _chunks(package: dict[str, Any]) -> list[str]:
     return [" ".join(parts)[start:start + 1200] for start in range(0, len(" ".join(parts)), 1200)] or [text[:1200]]
 
 def publish(actor: str, key: str, content: dict[str, Any], *, audience: str, scope_type: str,
-            version: int, reason: str, dialect: str = "", edition: str = "") -> dict[str, Any]:
+            version: int, reason: str, dialect: str = "", edition: str = "", _tx=None) -> dict[str, Any]:
     if identity_api.effective_access(actor, "platform.manage").get("decision") != "ALLOW":
         raise PermissionError("platform management permission is required")
     if not key.strip() or key != key.strip() or len(key) > 128 or not isinstance(content, dict) or type(version) is not int or version < 1 or len(reason.strip()) < 3:
@@ -41,7 +41,9 @@ def publish(actor: str, key: str, content: dict[str, Any], *, audience: str, sco
             tx.execute("INSERT INTO CX_PLATFORM_KNOWLEDGE_CHUNKS(CHUNK_ID,KNOWLEDGE_ID,CHUNK_NO,CHUNK_TEXT,CHUNK_DIGEST,AUDIENCE,SCOPE_TYPE,CLASSIFICATION,STATUS) VALUES (:chunk,:knowledge,:chunk_no,:text,:chunk_digest,:audience,:scope,'RESTRICTED','ACTIVE')", {"chunk": f"{knowledge_id}_C{number}", "knowledge": knowledge_id, "chunk_no": number, "text": chunk, "chunk_digest": hashlib.sha256(chunk.encode()).hexdigest(), "audience": audience, "scope": scope_type})
         identity_api._audit_tx(tx, actor, "BUILTIN_KNOWLEDGE_PUBLISH", "PLATFORM_KNOWLEDGE", knowledge_id, "ALLOW", reason)
         return {"knowledge_id":knowledge_id,"status":"PUBLISHED","idempotent":False,"digest":digest}
-    return connection.execute_transaction_callback(work)
+    # A deployment publication can include its public Knowledge entities and
+    # legacy retirement in the same database transaction.
+    return work(_tx) if _tx is not None else connection.execute_transaction_callback(work)
 
 def withdraw(actor: str, knowledge_id: str, reason: str) -> dict[str, Any]:
     if identity_api.effective_access(actor, "platform.manage").get("decision") != "ALLOW" or len(reason.strip()) < 3:

@@ -12,12 +12,13 @@ except ModuleNotFoundError:  # generated edition
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = (ROOT / "build-manifest.json").is_file()
 if GENERATED:
+    from lib.package_layout import active_database, deployment_dir
     _manifest = __import__("json").loads((ROOT / "build-manifest.json").read_text(encoding="utf-8"))
-    GENERATED_DATABASE = str((_manifest.get("database") or {}).get("key") or "")
+    GENERATED_DATABASE = active_database(ROOT)
     WEB_APP_SOURCE = ROOT / "scripts" / "web_app.py"
     LIB_SOURCE = ROOT / "scripts" / "lib"
     RUNNER_SOURCE = ROOT / "scripts" / "migration_runner.py"
-    DEPLOY_SOURCE = ROOT / "scripts" / "deploy"
+    DEPLOY_SOURCE = deployment_dir(ROOT, GENERATED_DATABASE)
 else:
     GENERATED_DATABASE = ""
     WEB_APP_SOURCE = ROOT / "shared" / "web_app.py"
@@ -239,8 +240,9 @@ def test_pg_external_agent_domain_context_is_database_scoped():
 
 @pytest.mark.skipif(GENERATED and GENERATED_DATABASE != "pg", reason="PostgreSQL package contract")
 def test_pg_agent_database_role_is_namespaced_by_database():
+    from lib.package_layout import adapter_file
     source = (
-        (LIB_SOURCE / "agent_api.py") if GENERATED
+        adapter_file(ROOT, "pg", "agent_api.py") if GENERATED
         else (ROOT / "adapters" / "pg" / "agent_api.py")
     ).read_text(encoding="utf-8")
     function = source.split("def _agent_role_name", 1)[1].split("def _provision_agent_login", 1)[0]

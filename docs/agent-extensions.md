@@ -1,9 +1,11 @@
-# Agent extensions — Chuanxu v4.5.2
+# Agent extensions — Chuanxu v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 This guide applies to both editions. Database entities retain identity,
 authorization, exact revisions, source lineage, attempts, leases and audit facts.
 An integration setting does not grant permissions. Install the complete additive
-migration chain through 99 and verify deployment before starting the new workers.
+migration chain through 102 and verify deployment before starting the new workers.
 The package's generated baseline manifest determines the actual migration list.
 
 ## Model support and answer quality
@@ -66,12 +68,14 @@ recheck current domain authority. Protocol and SDK versions are separate facts.
 MCP discovery never approves execution. A newly observed contract closes existing
 approval; approve it again after review. Uncertain sends are reconciled rather than
 automatically repeated. The A2A entry preserves original credentials and Graph
-authorization; DB4A2A remains a separate database dispatch mechanism.
+authorization. A2A and DB4A2A keep their protocol/transport paths while sharing
+durable Task Plan and Step links, fenced execution attempts, cancellation and
+unknown-send reconciliation; see [continuity operations](continuity-operations.md).
 
 Start `scripts/agent_integration_worker.py` under the operator's service manager
 to deliver registered telemetry and reconcile uncertain calls. Prepare a new
 framework rootfs with `scripts/prepare_framework_rootfs.py --rootfs
-/var/lib/chuanxu/framework-v4.5.2`, then configure its verified Linux
+/var/lib/chuanxu/framework-v5.0.0`, then configure its verified Linux
 sandbox target. The framework receives bounded messages; platform entities remain
 the source of execution and authorization facts. Generic framework execution,
 live effect replay, live migration and global autonomy remain disabled.

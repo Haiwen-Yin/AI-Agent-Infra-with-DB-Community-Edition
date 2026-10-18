@@ -1,4 +1,6 @@
-# Work continuity operations v4.5.2
+# Work continuity operations v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 [完整中文说明](continuity-operations_zh.md)
 
@@ -26,7 +28,10 @@ tables. Deploy the release-bound migration chain, including
 deployment verifier checks columns, defaults, constraints, immutable-history
 triggers and native grants. An APPLIED ledger entry alone is insufficient.
 
-The current v4.5.2 deployment terminal is migration 97 on all three databases.
+The current v5.0.0 deployment terminal is migration 102 on all supported databases.
+Migration 101 links A2A and DB4A2A to the existing Task Plan/Step identities,
+fenced attempts, cancellation and unknown-outcome reconciliation. Native source
+snapshots introduced by migration 97 retain their own exact-source contract.
 Migrations 95 and 96 add three immutable relations for native executions,
 context input attempts and original Gateway credentials. Keep both SQL files
 and schema manifests. Install them before starting the context-aware Worker.

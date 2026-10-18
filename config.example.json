@@ -1,36 +1,39 @@
 {
-    "database": {
-        "user": "<DB_USER>",
-        "password": "<DB_PASSWORD>",
-        "dsn": "<DB_HOST>:<DB_PORT>/<DB_SERVICE>"
-    },
-    "server": {
-        "host": "0.0.0.0",
-        "port": 8001,
-        "node_id": ""
-    },
-    "embedding": {
-        "api_url": "<EMBEDDING_API_URL>",
-        "model": "text-embedding-bge-m3",
-        "dimension": 1024,
-        "api_key": "<EMBEDDING_API_KEY_OR_EMPTY>",
-        "execution_mode": "PLATFORM_MANAGED",
-        "profile_key": "platform-default",
-        "distance_metric": "COSINE",
-        "normalize_vectors": true,
-        "secret_reference": ""
-    },
-    "llm": {
-        "api_url": "<LLM_API_URL>",
-        "model": "<LLM_MODEL_NAME>",
-        "api_key": "<LLM_API_KEY_OR_EMPTY>"
-    },
-    "security": {
-        "admin_username": "admin",
-        "session_timeout": 300,
-        "secret_key": "<SESSION_SECRET>"
-    },
-    "agent": {
-        "mode": "standalone"
-    }
+  "database": {
+    "user": "<DB_USER>",
+    "password": "<DB_PASSWORD>",
+    "host": "<DB_HOST>",
+    "port": 5432,
+    "dbname": "<DB_NAME>",
+    "type": "<DATABASE_TYPE>"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 18080,
+    "node_id": ""
+  },
+  "embedding": {
+    "api_url": "<EMBEDDING_API_URL>",
+    "model": "text-embedding-bge-m3",
+    "dimension": 1024,
+    "api_key": "<EMBEDDING_API_KEY_OR_EMPTY>",
+    "execution_mode": "PLATFORM_MANAGED",
+    "profile_key": "platform-default",
+    "distance_metric": "COSINE",
+    "normalize_vectors": true,
+    "secret_reference": ""
+  },
+  "llm": {
+    "api_url": "<LLM_API_URL>",
+    "model": "<LLM_MODEL_NAME>",
+    "api_key": "<LLM_API_KEY_OR_EMPTY>"
+  },
+  "security": {
+    "admin_username": "admin",
+    "session_timeout": 300,
+    "secret_key": "<SESSION_SECRET>"
+  },
+  "agent": {
+    "mode": "standalone"
+  }
 }

@@ -126,7 +126,8 @@ def test_v445_has_equivalent_additive_run_contract_migrations():
         manifest = root / "build-manifest.json"
         assert manifest.is_file(), "generated package must include build-manifest.json"
         json.loads(manifest.read_text(encoding="ascii"))["database"]["key"]
-        scripts = [root / "scripts" / "deploy" / "45_v4_4_5_graph_run_contract.sql"]
+        from lib.package_layout import databases, deployment_dir
+        scripts = [deployment_dir(root, database) / "45_v4_4_5_graph_run_contract.sql" for database in databases(root)]
     for script in scripts:
         source = script.read_text(encoding="utf-8").upper()
         assert required <= {marker for marker in required if marker in source}

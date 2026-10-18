@@ -10,7 +10,8 @@ from . import continuity_client as client
 
 
 def main(argv=None, *, transport=None):
-    parser=argparse.ArgumentParser(description='Chuanxu continuity operations and server diagnostics')
+    from .product_identity import identity
+    parser=argparse.ArgumentParser(description=identity()['brand_en']+' continuity operations and server diagnostics')
     commands=parser.add_subparsers(dest='command',required=True)
     for name in ('setup','doctor','capabilities','verify-context'):
         command=commands.add_parser(name)

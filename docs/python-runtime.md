@@ -1,4 +1,6 @@
-# Python Runtime Policy - AI Agent Infra with DB v4.5.2
+# Python Runtime Policy - AI Agent Infra with DB v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 The release requires an accessible CPython **3.14 or newer** interpreter.
 There is no preferred vendor or installation source.
@@ -86,7 +88,7 @@ contains only the upstream `cryptography==49.0.0` `manylinux_2_34` wheel; the
 former RHEL 8 `manylinux_2_28` compatibility wheel is retired and must not be
 reintroduced into release archives.
 
-The release build runs this offline dependency gate by default after all six
-archives are generated. `--skip-dependency-validate` is available only for
+The release build runs this offline dependency gate for each selected backend
+in the five product packages, covering seven targets. `--skip-dependency-validate` is available only for
 development diagnostics when a wheelhouse is intentionally incomplete; it does
 not make the generated archives releasable.

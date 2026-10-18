@@ -17,18 +17,9 @@ if (ROOT / "build-manifest.json").is_file():
 
 
 def _adapter_scripts(names: tuple[str, ...] | list[str]):
+    from lib.package_layout import databases, deployment_dir
     root = Path(__file__).resolve().parents[2]
-    if (root / "adapters").is_dir():
-        return [
-            (database, [root / "adapters" / database / "deploy" / name for name in names])
-            for database in ("oracle", "pg", "yashandb")
-        ]
-    manifest = root / "build-manifest.json"
-    assert manifest.is_file(), "generated package must include build-manifest.json"
-    import json
-
-    database = str(json.loads(manifest.read_text(encoding="utf-8"))["database"]["key"])
-    return [(database, [root / "scripts" / "deploy" / name for name in names])]
+    return [(database, [deployment_dir(root, database) / name for name in names]) for database in databases(root)]
 
 
 @pytest.mark.skipif(

@@ -10,21 +10,16 @@
     var queryTheme = query.get("cx_theme");
     var storage = window.localStorage;
     var preferenceVersion = root.getAttribute("data-cx-version") || "4.1.0";
-    if (storage.getItem("cx-ui-preferences-version") !== preferenceVersion) {
-      // Reset legacy preferences once so a version upgrade keeps the product
-      // default (Chinese and light) instead of inheriting stale UI state.
-      storage.setItem("cx-ui-preferences-version", preferenceVersion);
-      storage.setItem("cx-lang", "zh");
-      storage.setItem("lang", "zh");
-      storage.setItem("cx-theme", "light");
-      storage.setItem("theme", "light");
-    }
-    var savedLang = storage.getItem("cx-lang") || storage.getItem("lang");
-    var savedTheme = storage.getItem("cx-theme") || storage.getItem("theme");
+    // An upgrade migrates aliases while preserving the user's choice.
+    storage.setItem("cx-ui-preferences-version", preferenceVersion);
+    var savedLang = storage.getItem("cxLang") || storage.getItem("cx-lang") || storage.getItem("lang");
+    var savedTheme = storage.getItem("cxTheme") || storage.getItem("cx-theme") || storage.getItem("theme");
     if (savedLang === "en") lang = "en";
     if (savedTheme === "dark") theme = "dark";
     if (queryLang === "en" || queryLang === "zh") lang = queryLang;
     if (queryTheme === "dark" || queryTheme === "light") theme = queryTheme;
+    ["cxLang", "cx-lang", "lang"].forEach(function (key) { storage.setItem(key, lang); });
+    ["cxTheme", "cx-theme", "theme"].forEach(function (key) { storage.setItem(key, theme); });
   } catch (_) {}
   root.setAttribute("data-lang", lang);
   root.setAttribute("data-theme", theme);

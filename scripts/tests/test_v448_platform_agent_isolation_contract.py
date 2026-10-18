@@ -3,12 +3,13 @@ import json
 import pytest
 
 import migration_runner
+from lib.package_layout import active_database, deployment_dir
 
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_MODE = (ROOT / "build-manifest.json").is_file() and not (ROOT / "adapters").is_dir()
 DATABASE_KEY = (
-    str(json.loads((ROOT / "build-manifest.json").read_text(encoding="ascii"))["database"]["key"])
+    active_database(ROOT)
     if PACKAGE_MODE else None
 )
 PACKAGE_EDITION = (
@@ -21,7 +22,7 @@ def _migration_dir(adapter: str) -> Path:
     if PACKAGE_MODE:
         if adapter != DATABASE_KEY:
             pytest.skip(f"{adapter} migration is validated by its generated package")
-        return ROOT / "scripts" / "deploy"
+        return deployment_dir(ROOT, adapter)
     return ROOT / "adapters" / adapter / "deploy"
 
 

@@ -66,7 +66,8 @@ def test_manifest_has_deterministic_base_actions_for_all_databases():
     package_manifest = root / "build-manifest.json"
     if package_manifest.is_file():
         package = json.loads(package_manifest.read_text(encoding="utf-8"))
-        targets = ((str(package["database"]["key"]), str(package["edition"]).lower()),)
+        from lib.package_layout import databases
+        targets = tuple((database, str(package["edition"]).lower()) for database in databases(root))
     else:
         targets = tuple((database, "enterprise") for database in ("oracle", "pg", "yashandb"))
     for database, edition in targets:
@@ -461,13 +462,9 @@ def test_deployed_platform_embedding_is_runtime_immutable_and_dashboard_is_read_
 
 
 def test_all_adapters_declare_fingerprint_and_space_isolation():
+    from lib.package_layout import databases, deployment_dir
     root = Path(__file__).resolve().parents[2]
-    adapters = root / "adapters"
-    scripts = (
-        [adapters / database / "deploy" / "33_v4_3_7_bootstrap_embedding.sql" for database in ("oracle", "pg", "yashandb")]
-        if adapters.is_dir()
-        else [root / "scripts" / "deploy" / "33_v4_3_7_bootstrap_embedding.sql"]
-    )
+    scripts = [deployment_dir(root, database) / "33_v4_3_7_bootstrap_embedding.sql" for database in databases(root)]
     for script in scripts:
         source = script.read_text(encoding="utf-8").upper()
         for marker in ("CX_DEPLOYMENT_RUNS", "CX_EMBEDDING_PROFILES", "MODEL_FINGERPRINT", "EMBEDDING_SPACE_ID", "EMBEDDING_CONTRACT_ID"):

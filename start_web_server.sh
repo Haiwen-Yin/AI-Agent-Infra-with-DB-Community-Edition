@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Chuanxu v4.5.0 - AI Agent Infra v4.5.0 - Oracle Community unified FastAPI/Uvicorn server controller.
+# Chuanxu v5.0.0 - AI Agent Infra v5.0.0 - PostgreSQL Community unified FastAPI/Uvicorn server controller.
 
 set -euo pipefail
 
@@ -23,18 +23,23 @@ if [[ -d "$YASHAN_CLIENT_LIB" ]]; then
   export LD_LIBRARY_PATH="$YASHAN_CLIENT_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
-DB_DIALECT="oracle"
+cd "$SCRIPT_DIR"
+export PYTHONPATH="$SCRIPT_DIR/scripts:$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+if [[ "${1:-start}" =~ ^(start|restart)$ && -z "${CX_CONFIG_PATH:-}" && ! -f "$SCRIPT_DIR/config.json" ]]; then
+  "$SCRIPT_DIR/scripts/config_wizard.sh"
+fi
+# Validate selection before importing any native driver or opening a socket.
+DB_DIALECT="$("$PYTHON" -m lib.database_selection --dialect)"
 PROFILE="${CX_RUNTIME_PROFILE:-production}"
 HOST="${MEMORY_SERVER_HOST:-0.0.0.0}"
 PORT="${MEMORY_SERVER_PORT:-8000}"
-PID_FILE="${CX_WEB_PID_FILE:-/tmp/chuanxu-${DB_DIALECT}.pid}"
+PID_FILE="${CX_WEB_PID_FILE:-$SCRIPT_DIR/.runtime/web.pid}"
 LOG_FILE="${CX_WEB_LOG_FILE:-$SCRIPT_DIR/chuanxu_web.log}"
 
-cd "$SCRIPT_DIR"
-export PYTHONPATH="$SCRIPT_DIR/scripts:$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export CX_DATABASE_DIALECT="$DB_DIALECT"
+export CX_REQUIREMENTS_FILE="$("$PYTHON" -m lib.database_selection --requirements)"
 export CX_RUNTIME_PROFILE="$PROFILE"
-export AI_AGENT_RELEASE_DATE="2026-09-27"
+export AI_AGENT_RELEASE_DATE="2026-10-18"
 
 read_config() {
   "$PYTHON" - "$1" "$2" <<'PY'
@@ -99,6 +104,7 @@ stop_server() {
 }
 
 start_server() {
+  mkdir -p "$(dirname "$PID_FILE")"
   if is_running; then
     echo "Chuanxu is already running (PID $(<"$PID_FILE"))."
     return 0
@@ -119,9 +125,9 @@ start_server() {
     echo "FastAPI and Uvicorn are not installed for the selected Python. Run scripts/install_offline.sh with the same Python 3.14+ interpreter, then retry." >&2
     exit 1
   fi
-  echo "Starting Chuanxu v4.5.0 ($DB_DIALECT, $PROFILE) on $HOST:$PORT"
+  echo "Starting Chuanxu v5.0.0 ($DB_DIALECT, $PROFILE) on $HOST:$PORT"
   setsid nohup "$PYTHON" -m uvicorn web_app:app --host "$HOST" --port "$PORT" \
-    --proxy-headers --no-access-log >>"$LOG_FILE" 2>&1 &
+    --no-proxy-headers --no-access-log >>"$LOG_FILE" 2>&1 &
   echo "$!" >"$PID_FILE"
   for _ in {1..40}; do
     if is_running; then

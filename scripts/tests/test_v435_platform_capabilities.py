@@ -94,14 +94,10 @@ def test_audit_failure_propagates_and_prevents_false_success(monkeypatch):
 
 
 def test_migrations_define_history_dependencies_and_no_secret_values():
-    for database in ("oracle", "pg", "yashandb"):
-        test_root = Path(__file__).resolve()
-        source_path = next(
-            candidate for candidate in (
-                test_root.parents[2] / "adapters" / database / "deploy" / "31_v4_3_5_platform_capabilities.sql",
-                test_root.parents[1] / "deploy" / "31_v4_3_5_platform_capabilities.sql",
-            ) if candidate.is_file()
-        )
+    from lib.package_layout import databases, deployment_dir
+    root = Path(__file__).resolve().parents[2]
+    for database in databases(root):
+        source_path = deployment_dir(root, database) / "31_v4_3_5_platform_capabilities.sql"
         source = source_path.read_text(encoding="utf-8").upper()
         assert "CX_PLATFORM_CAPABILITIES" in source
         assert "CX_PLATFORM_CAPABILITY_DEPENDENCIES" in source

@@ -1,9 +1,22 @@
-# DB4A2A Database-Mediated Collaboration v4.5.2
+# DB4A2A Database-Mediated Collaboration v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
 DB4A2A is the project's reference-oriented Agent collaboration pattern. It is
 not a replacement for standard A2A. A2A or Agent Protocol carries discovery,
 delegation, status, and small events; the database context plane carries
 authorized Knowledge, Memory, Context, Artifact, Graph, and Branch facts.
+
+## Unified task continuity
+
+Current A2A and DB4A2A execution links reuse the same database Task Plan and
+Step identities. Transport-specific task/run/dispatch identifiers remain typed
+references, with attempts, lease tokens, cancellation and unknown-outcome
+reconciliation persisted in the existing control plane. A status response from
+one transport cannot silently complete a different attempt. Late or stale
+completion is fenced; an uncertain send must be reconciled against its original
+digest before a new send is authorized. Migration 101 establishes this shared
+association without introducing another task engine.
 
 ## Dispatch contract
 

@@ -1,0 +1,2 @@
+-- v4.4.4 additive binding of shared storage to managed runtime nodes.
+CREATE TABLE IF NOT EXISTS cx_managed_node_storage_bindings (binding_id varchar(128) PRIMARY KEY,node_id varchar(128) NOT NULL,storage_id varchar(128) NOT NULL,mount_reference varchar(512) NOT NULL,role_scope varchar(64) NOT NULL,status varchar(32) NOT NULL,reason varchar(2000) NOT NULL,created_by varchar(128) NOT NULL,created_at timestamp NOT NULL DEFAULT current_timestamp,CONSTRAINT uq_cx_node_storage_scope UNIQUE(node_id,storage_id,role_scope));

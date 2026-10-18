@@ -743,11 +743,16 @@ def stage_upgrade_archive(actor: str, filename: str, content: bytes, reason: str
             signature_state, signature_detail = _verify_release_signature(archive, root, package_digest)
     except zipfile.BadZipFile as exc:
         raise ManagementError("upgrade package is not a valid ZIP archive") from exc
-    database = str((manifest.get("database") or {}).get("key") or "").lower()
     edition = str(manifest.get("edition") or "")
     version = str(manifest.get("version") or "")
-    if database not in {"oracle", "pg", "yashandb"} or edition not in {"Community", "Enterprise"} or not version:
-        raise ManagementError("upgrade package manifest has an unsupported database, edition, or version")
+    from . import product_identity
+    try:
+        current_manifest = product_identity.read_manifest()
+        product_identity.check_release_compatibility(manifest,
+            database=str(getattr(connection, "DATABASE_DIALECT", "")).lower(),
+            edition=str(current_manifest.get("edition") or ""), current=current_manifest)
+    except ValueError as exc:
+        raise ManagementError(str(exc)) from exc
     stage = _staging_directory() / (package_digest + ".zip")
     if not stage.exists():
         stage.write_bytes(content)
@@ -826,15 +831,16 @@ def auto_schedule_upgrade(actor: str, upgrade_id: str, expected_edition: str,
     """
     _require_manage(actor)
     manifest, _root, package_digest = _package_manifest_for_upgrade(upgrade_id)
-    database = str((manifest.get("database") or {}).get("key") or "").lower()
     current_database = str(getattr(connection, "DATABASE_DIALECT", "")).lower()
     database_key = "pg" if current_database in {"pg", "postgresql"} else current_database
     edition = str(manifest.get("edition") or "")
     version = str(manifest.get("version") or "")
-    if database != database_key:
-        raise ManagementError("upgrade package database does not match this installation")
-    if edition.upper() != str(expected_edition or "").upper():
-        raise ManagementError("upgrade package edition is incompatible with this installation")
+    from . import product_identity
+    try:
+        product_identity.check_release_compatibility(manifest, database=database_key,
+            edition=expected_edition, current=product_identity.read_manifest())
+    except ValueError as exc:
+        raise ManagementError(str(exc)) from exc
     if not version:
         raise ManagementError("upgrade package version is missing")
     if current_version and _compare_versions(version, current_version) <= 0:

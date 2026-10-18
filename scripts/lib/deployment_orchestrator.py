@@ -145,6 +145,13 @@ class ManifestAction:
 
 
 def _package_deploy_dir(database: str, root: Path = PACKAGE_ROOT) -> Path:
+    if (root / "build-manifest.json").is_file():
+        from .database_selection import supported_databases
+        if database not in supported_databases(root):
+            raise DeploymentError("selected database is not supported by this product")
+    selected = root / "scripts" / "deploy" / database
+    if selected.is_dir():
+        return selected
     packaged = root / "scripts" / "deploy"
     if packaged.is_dir():
         return packaged
@@ -832,6 +839,16 @@ def postflight(database: str, edition: str, config: Dict[str, Any], terminal_mig
                 "Resolve failed migration steps before handoff.", {"count": failed},
             ))
 
+            if terminal_migration == "102_v5_0_0_network_access.sql":
+                import migration_runner
+                complete = migration_runner._step_objects_complete(
+                    cursor, database, _package_deploy_dir(database, root) / terminal_migration,
+                    version=release_version(database, root),
+                )
+                checks.append(_check("SOURCE_IP_ACCESS_STORAGE", "PASS" if complete else "BLOCKED",
+                    "Source policy state, immutable revisions, rules and native SQL denials verified",
+                    "Complete migration 102 before starting source IP admission."))
+                terminal_migration = "101_v4_5_2_task_continuity.sql"
             if terminal_migration == "101_v4_5_2_task_continuity.sql":
                 import migration_runner
                 continuity_complete = migration_runner._step_objects_complete(
@@ -1302,6 +1319,9 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
     if str((knowledge_state.get("scoped_knowledge") or {}).get("status") or "") != "MIGRATED":
         raise DeploymentError("scoped platform management knowledge did not pass postflight")
     _record_evidence(journal.run_id, "PLATFORM_KNOWLEDGE_POSTFLIGHT", knowledge_state)
+    from . import product_knowledge
+    installed_knowledge = product_knowledge.publish(admin["principal_id"], database, root)
+    _record_evidence(journal.run_id, "INSTALLED_PRODUCT_KNOWLEDGE", installed_knowledge)
     models = _configure_models(raw, journal.run_id)
     verified = postflight(database, edition, config, terminal_migration, root)
     if not verified["passed"]:

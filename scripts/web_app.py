@@ -1,4 +1,4 @@
-"""FastAPI/Uvicorn entrypoint for the v4.5.2 Chuanxu Web application.
+"""FastAPI/Uvicorn entrypoint for the v5.0.0 Chuanxu Web application.
 
 The database-backed services are the authoritative implementation.  This
 entrypoint intentionally contains only HTTP concerns and exposes the same
@@ -35,18 +35,18 @@ from pydantic import BaseModel, Field, StrictBool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:
-    from lib import effective_capabilities
+    from lib import effective_capabilities, product_identity, network_access
     from lib import identity_api, external_identity_api, agent_gateway_api, compliance_api, connection, governed_contracts, security_lifecycle, organization_api, security_domain_api, platform_capabilities, native_agent_api, native_runtime, model_usage_api, model_governance_api, model_capability_api, deployment_adapters, runtime_isolation, db4a2a, embedding_governance, admin_management, cursor_pagination, task_plan_api, knowledge_api, memory_lifecycle, skill_api, tool_registry, spec_api, graph_production_profile, platform_agent_pool, host_provisioning, platform_governance_graph as governance_graph_module
 except ModuleNotFoundError as exc:
     # Only a missing top-level package means this is the source tree.  Do not
     # hide missing packaged dependencies by incorrectly falling back to shared.
     if exc.name != "lib":
         raise
-    from shared.lib import effective_capabilities
+    from shared.lib import effective_capabilities, product_identity, network_access
     from shared.lib import identity_api, external_identity_api, agent_gateway_api, compliance_api, connection, governed_contracts, security_lifecycle, organization_api, security_domain_api, platform_capabilities, native_agent_api, native_runtime, model_usage_api, model_governance_api, model_capability_api, deployment_adapters, runtime_isolation, db4a2a, embedding_governance, admin_management, cursor_pagination, task_plan_api, knowledge_api, memory_lifecycle, skill_api, tool_registry, spec_api, graph_production_profile, platform_agent_pool, host_provisioning, platform_governance_graph as governance_graph_module
 
 
-VERSION = "4.5.2"
+VERSION = "5.0.0"
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 if not WEB_ROOT.is_dir():
@@ -112,7 +112,7 @@ def _runtime_profile() -> str:
         requested = default if default in _VALID_PROFILES else "production"
     return requested
 
-app = FastAPI(title="Chuanxu AI Agent Management Platform", version=VERSION)
+app = FastAPI(title=product_identity.identity()["name_en"] + " AI Agent Management Platform", version=VERSION)
 
 
 def _correlation_id(request: Request) -> str:
@@ -344,6 +344,12 @@ async def attach_correlation_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Correlation-ID"] = correlation
     return response
+
+
+# Last registered middleware is outermost. Preserve the original TCP peer in
+# the ASGI server (--no-proxy-headers); this layer owns explicit proxy trust.
+app.add_middleware(network_access.SourceIPMiddleware,
+                   trusted_proxy_cidrs=os.environ.get("CX_TRUSTED_PROXY_CIDRS", ""))
 
 
 def _local_node_id() -> str:
@@ -2001,6 +2007,17 @@ class SessionPolicyBody(BaseModel):
     reason: str = Field(min_length=3, max_length=2000)
 
 
+class SourceIPPreviewBody(BaseModel):
+    enabled: StrictBool
+    list_mode: str = Field(pattern="^(ALLOWLIST|DENYLIST)$")
+    rules: List[str] = Field(max_length=512)
+
+
+class SourceIPPolicyBody(SourceIPPreviewBody):
+    expected_revision: int = Field(ge=1, strict=True)
+    reason: str = Field(min_length=3, max_length=2000)
+
+
 def _session_scope_for_path(path: str) -> str:
     return "PORTAL" if str(path or "").startswith("/portal/") else "DASHBOARD"
 
@@ -2235,15 +2252,18 @@ def _shell() -> FileResponse:
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
     """Process liveness only; database readiness is exposed separately."""
+    product = product_identity.identity()
     return {
         "status": "ok",
-        "product": "Chuanxu",
-        "product_zh": "川序",
+        "product": product["brand_en"],
+        "product_zh": product["brand_zh"],
+        "product_key": product["product_key"],
+        "product_name": product["name_en"],
         "product_type": "AI Agent Management Platform",
-        "technical_project": "AI Agent Infra with DB",
+        "technical_project": "OpenTenBase-AgentX" if product["brand_key"] == "agentx" else "AI Agent Infra with DB",
         "version": VERSION,
         "profile": _runtime_profile(),
-        "database": os.environ.get("CX_DATABASE", "adapter"),
+        "database": os.environ.get("CX_DATABASE_DIALECT") or os.environ.get("CX_DATABASE", "adapter"),
     }
 
 
@@ -2279,6 +2299,7 @@ def readiness(response: Response) -> Dict[str, Any]:
 
 
 @app.get("/app")
+@app.get("/app/", include_in_schema=False)
 @app.get("/app/{page}")
 def shell(page: str = "monitor") -> FileResponse:
     return _shell()
@@ -2763,6 +2784,46 @@ def platform_session_policy_update(
         )
     except (admin_management.ManagementError, PermissionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/platform/ip-access")
+def source_ip_configuration(request: Request, session: Dict[str, Any] = Depends(require_action("platform.manage"))):
+    try:
+        result = network_access.configuration(str(session["principal_id"]))
+        source = request.state.cx_source_ip
+        return {**result, "current_source": source.ip, "recovery_connection": source.recovery,
+                "proxied": source.proxied}
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Permission denied") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Configuration is unavailable") from exc
+
+
+@app.post("/api/platform/ip-access/preview")
+def source_ip_preview(body: SourceIPPreviewBody, request: Request,
+                      session: Dict[str, Any] = Depends(require_action("platform.manage"))):
+    try:
+        policy = network_access.candidate(body.enabled, body.list_mode, body.rules)
+        source = request.state.cx_source_ip
+        return {**policy.public(), "current_source": source.ip, "recovery_connection": source.recovery,
+                "current_source_allowed": source.recovery or policy.allows(source.ip)}
+    except network_access.PolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/platform/ip-access")
+def source_ip_update(body: SourceIPPolicyBody,
+                     session: Dict[str, Any] = Depends(require_action("platform.manage"))):
+    try:
+        return network_access.update(str(session["principal_id"]), **body.model_dump())
+    except network_access.RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except network_access.PolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Permission denied") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Configuration could not be saved") from exc
 
 
 @app.post("/api/platform/administration/initialize")

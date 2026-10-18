@@ -22,7 +22,8 @@ def test_application_release_retains_complete_bootstrap_chain(monkeypatch, datab
 @pytest.mark.parametrize('implicit', [False, True])
 def test_historical_successor_does_not_override_current_failure(monkeypatch, current, historical, release, implicit):
     root = Path(__file__).resolve().parents[2]
-    deploy = root / 'adapters/pg/deploy' if (root / 'adapters').is_dir() else root / 'scripts/deploy'
+    from lib.package_layout import active_database, deployment_dir
+    deploy = deployment_dir(root, 'pg' if (root / 'adapters').is_dir() else active_database(root))
     script = deploy / '86_v4_4_15_continuity_entities.sql'
     successor = deploy / '94_v4_4_15_handoff_policy.sql'
     calls = []

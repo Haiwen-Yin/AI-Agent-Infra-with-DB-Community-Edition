@@ -1,4 +1,8 @@
-# Linux Platform Compatibility v4.5.2
+# Linux Platform Compatibility v5.0.0
+
+> Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
+
+[简体中文](linux-platform-compatibility_zh.md)
 
 This document defines the operating-system baseline for v4.4.11 and later.
 Full platform functionality, including database services, Agent execution,
@@ -53,7 +57,7 @@ recorded as supported for strong isolation.
 
 | Distribution family | Control plane | Local strong isolation | Status |
 |---|---|---|---|
-| Oracle Linux 9.8 x86_64, UEK 6.12 | Supported | Supported | `VERIFIED`, 22/22 gate checks passed |
+| Oracle Linux 9.8 x86_64, UEK 6.12 | Supported baseline | Exact-host gate required | Historical gate: `VERIFIED`, 22/22; rerun for the current package and host |
 | RHEL 9, Rocky Linux 9, AlmaLinux 9 | Expected compatible | Gate required | Same platform family; not yet certified by this project |
 | CentOS Stream 9 | Development candidate | Gate required | Rolling build is not a production certification target |
 | Ubuntu Server 22.04/24.04 LTS | Expected compatible | Gate required | AppArmor and package/path differences require evidence |
@@ -72,13 +76,13 @@ automatically supported merely because its version number is higher.
 
 ## Qualification command
 
-Run from an extracted v4.4.11 package as root on a dedicated non-production
+Run from the extracted current package as root on a dedicated non-production
 host after installing bubblewrap and libseccomp:
 
 ```bash
 python3.14 scripts/tools/v411_linux_runtime_isolation_gate.py \
   --base /var/lib/chuanxu-runtime-gate \
-  --output /root/v4.4.11-linux-runtime-isolation.json
+  --output /root/current-linux-runtime-isolation.json
 ```
 
 The JSON result must report `passed=true` and

@@ -168,6 +168,17 @@ def context_snapshot(context_data: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _continuity_snapshot_digest(wire_digest: str) -> str:
+    """The v1 wire is algorithm-tagged; typed SHA-256 ledger columns are hex.
+
+    Preserve the wire digest in the dispatch/provenance. Do not truncate its
+    bytes, rehash its text or change an already deployed migration to fit it.
+    """
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", wire_digest):
+        raise DB4A2AError("unsupported context snapshot digest")
+    return wire_digest[len("sha256:"):]
+
+
 def _check_context_reader(receiver: str, context_id: str) -> None:
     """Use the receiver's real database identity, never the control-plane Owner."""
     from . import connection
@@ -301,6 +312,7 @@ def persist_dispatch(actor: str, receiver_agent_id: str, envelope: Mapping[str, 
     request_digest = hashlib.sha256(json.dumps({
         "sender_principal_id": actor, "receiver_agent_id": receiver, **normalized,
     }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest()
+    snapshot_hex = _continuity_snapshot_digest(normalized["snapshot_digest"])
     dispatch_id = _stable_dispatch_id(actor, receiver, normalized, request_digest)
     def work(tx: Any) -> None:
         domain = _domain(tx)
@@ -351,12 +363,12 @@ def persist_dispatch(actor: str, receiver_agent_id: str, envelope: Mapping[str, 
         link = task_continuity.link_protocol_task(
             tx, actor=actor, security_domain_id=domain, link_kind="DB4A2A", link_id=dispatch_id,
             canonical_task_id=canonical_task, idempotency_key="DB4A2A:" + request_digest, request_digest=request_digest,
-            input_digest=normalized["snapshot_digest"], effect_class="REVERSIBLE" if normalized["branch_policy"] == "CHILD_BRANCH_WRITE" else "READ_ONLY",
+            input_digest=snapshot_hex, effect_class="REVERSIBLE" if normalized["branch_policy"] == "CHILD_BRANCH_WRITE" else "READ_ONLY",
             status="PENDING", protocol_version="db4a2a/v1", reason="DB4A2A dispatch admission",
         )
         task_continuity.bind_context(
             tx, continuity_id=link["continuity_id"], assembly_id=None,
-            source_revision_id=normalized["context_ref"], source_digest=normalized["snapshot_digest"],
+            source_revision_id=normalized["context_ref"], source_digest=snapshot_hex,
             security_domain_id=domain, authorization_version=1, branch_id=normalized["source_branch"] or None,
             summary_policy="EXACT",
         )
