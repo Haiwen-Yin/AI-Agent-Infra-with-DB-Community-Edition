@@ -1,4 +1,4 @@
-# v5.0.0 Channel and Portal knowledge answers
+# v5.0.1 Channel and Portal knowledge answers
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -6,10 +6,22 @@ Portal assigns an approved idle local Agent to a signed-in user; external Agent
 enrollment is a separate workflow. Ordinary Channels dispatch explicit mentions
 subject to current human, Agent, Security Domain and private-thread membership.
 
-Both entry points use `knowledge_grounding.search`: current `knowledge.read`
-authority is required for both Principals, and SQL intersects their source
-visibility with active status and expiry. This component currently uses keyword
-retrieval, so vector-index synchronization is not a prerequisite for matching.
+Both entry points use `answer_planning.retrieve` and the same answer preparation.
+Current `knowledge.read` authority is required for both Principals; candidates
+intersect their source visibility, active status and expiry. The shared path
+requests `hybrid` by default, combining authorized full-text/vector routes and
+bounded keyword candidates. `keyword`, `fulltext` and `vector` are also supported.
+Unavailable channels can degrade to authorized text retrieval with actual
+strategy and reason recorded; permission failure never expands the source scope.
+Rank fusion is not confidence. Separate evidence assessment checks subject,
+coverage and explicit contradictions before selecting sources.
+
+Partial coverage is `PARTIAL_MATCH`; missing evidence is `NO_MATCH`. Ambiguous
+database/vendor subjects request clarification, and explicit contradictions
+produce an insufficient-evidence response. Retrieval metadata records requested
+and actual strategies, channel degradation and evidence status. Model permission,
+source disclosure and supplementation remain independent decisions. See
+[shared answers and evaluation](answer-quality.md).
 
 Portal additionally applies knowledge-only/knowledge-first policy, explicit
 model supplementation and a model-profile disclosure allowlist. A profile
@@ -50,8 +62,13 @@ multi-keyword or mixed-language question. Authorized source titles/content are
 rechecked before use: English terms require word boundaries and underscores are
 literal. A summary-only candidate is insufficient. Long words are not split;
 more than 24 distinct retained terms returns NO_MATCH without dropping terms.
-These conservative rules may omit paraphrases or multi-source answers. Keyword
-coverage does not certify factual relevance or current model knowledge.
+These conservative keyword-branch rules may omit paraphrases or multi-source
+answers; other authorized strategies have their own availability and evidence
+checks. Keyword coverage does not certify factual relevance or current model
+knowledge. When only some question parts are supported, a policy-permitted
+`MIXED_SOURCES` answer labels general-model content separately from citations.
+Turning off supplementation also blocks an old queued model-supplement answer
+before dispatch or publication.
 
 For an idle local Portal Agent missing its unified Principal, an administrator
 with `platform.manage` and `users.roles.manage.all` may run

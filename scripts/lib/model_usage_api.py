@@ -15,6 +15,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional
 
 from . import connection, identity_api, model_governance_api
+from .llm_transport import request_timeout_seconds
 
 
 class ModelUsageError(RuntimeError):
@@ -324,7 +325,7 @@ def forward(actor: str, provider_profile_id: str, messages: List[Dict[str, Any]]
         if secret: headers["Authorization"] = "Bearer " + secret
     req = urllib.request.Request(provider_url, data=payload, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=request_timeout_seconds()) as response:
             raw = response.read(1024 * 1024 + 1)
         if len(raw) > 1024 * 1024:
             raise ModelUsageError("model provider response exceeded the configured limit")
@@ -371,7 +372,7 @@ def stream_forward(actor: str, provider_profile_id: str, messages: List[Dict[str
     terminal: Dict[str, Any] = {}
     streamed_bytes = 0
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=request_timeout_seconds()) as response:
             for raw in response:
                 streamed_bytes += len(raw)
                 if len(raw) > 256 * 1024 or streamed_bytes > 8 * 1024 * 1024:

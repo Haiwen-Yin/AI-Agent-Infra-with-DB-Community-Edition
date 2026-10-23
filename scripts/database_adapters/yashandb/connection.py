@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.1 - Community Edition - Database Connection Pool Manager
 
 Unified yaspy connection pool with bind-variable support.
 Replaces all deploy_yashandb.py subprocess calls with direct yaspy access.
@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import get_config, DatabaseConfig, AgentModeConfig
+from lib.transaction_reads import TransactionReads, connection_identity
 
 _logger = logging.getLogger(__name__)
 
@@ -43,10 +44,77 @@ logger = logging.getLogger(__name__)
 # yaspy handles LOBs natively
 
 class _YashanPool(list):
+    """Bound both live sessions and idle sessions, including concurrent growth."""
+
     def __init__(self, min_size: int, max_size: int):
         super().__init__()
+        if not 0 <= min_size <= max_size or max_size < 1:
+            raise ValueError("Connection pool requires 0 <= min <= max and max >= 1")
         self.min = min_size
         self.max = max_size
+        self.condition = threading.Condition()
+        self.total = 0
+        self.closed = False
+        self.borrowers = {}
+
+    def acquire(self, connect):
+        owner = threading.get_ident()
+        with self.condition:
+            if not self and self.total >= self.max and self.borrowers.get(owner):
+                # Nested transaction reads already reuse their bound connection.
+                # Other nested scopes need independent transactions: never share
+                # their session or wait for a slot this thread itself must return.
+                raise RuntimeError("Nested YashanDB connection request exhausted the pool")
+            if not self.condition.wait_for(
+                lambda: self.closed or bool(self) or self.total < self.max, timeout=30
+            ):
+                raise TimeoutError("Timed out waiting for a YashanDB connection")
+            if self.closed:
+                raise RuntimeError("YashanDB connection pool is closed")
+            if self:
+                conn = self.pop()
+            else:
+                # Creation is serialized so failures cannot leave phantom slots.
+                conn = connect()
+                self.total += 1
+            self.borrowers[owner] = self.borrowers.get(owner, 0) + 1
+            return conn, owner
+
+    def release(self, conn, owner):
+        reusable = True
+        try:
+            # Committed writes stay committed; unfinished/error transactions must
+            # never become visible to the next borrower of this session.
+            conn.rollback()
+        except Exception:
+            reusable = False
+        with self.condition:
+            self.borrowers[owner] -= 1
+            if not self.borrowers[owner]:
+                del self.borrowers[owner]
+            if reusable and not self.closed:
+                self.append(conn)
+            else:
+                self.total -= 1
+                _close_connection(conn)
+            self.condition.notify_all()
+
+    def close(self):
+        with self.condition:
+            self.closed = True
+            while self:
+                _close_connection(self.pop())
+                self.total -= 1
+            # Checked-out sessions are closed on return, never under an active
+            # cursor. Waiters wake and fail against this retired pool generation.
+            self.condition.notify_all()
+
+
+def _close_connection(conn):
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 _pool: Optional[_YashanPool] = None
@@ -55,58 +123,48 @@ _lock = threading.Lock()
 
 def _init_pool(cfg: DatabaseConfig) -> _YashanPool:
     pool = _YashanPool(cfg.pool_min, cfg.pool_max)
-    for _ in range(cfg.pool_min):
-        # Keyword arguments use yaspy's remote DSN path and do not require the
-        # client-side YASDB_DATA environment variable.
-        conn = yaspy.Connection(user=cfg.user, password=cfg.password, dsn=cfg.dsn)
-        pool.append(conn)
+    # Bind new sessions to this pool's configuration, even if config is reloaded.
+    pool.connect = lambda: yaspy.Connection(user=cfg.user, password=cfg.password, dsn=cfg.dsn)
+    try:
+        for _ in range(cfg.pool_min):
+            pool.append(pool.connect())
+            pool.total += 1
+    except BaseException:
+        pool.close()
+        raise
     return pool
 
 
 def get_pool() -> list:
     global _pool
-    if _pool is None:
-        with _lock:
-            if _pool is None:
-                cfg = get_config()
-                if cfg.agent.mode == "agent":
-                    raise RuntimeError("Schema owner pool not available in agent mode")
-                db_cfg = cfg.database
-                logger.info("Initializing connection pool: %s@%s (min=%d, max=%d)",
-                            db_cfg.user, db_cfg.dsn, db_cfg.pool_min, db_cfg.pool_max)
-                _pool = _init_pool(db_cfg)
-    return _pool
+    with _lock:
+        if _pool is None:
+            cfg = get_config()
+            if cfg.agent.mode == "agent":
+                raise RuntimeError("Schema owner pool not available in agent mode")
+            db_cfg = cfg.database
+            logger.info("Initializing connection pool: %s@%s (min=%d, max=%d)",
+                        db_cfg.user, db_cfg.dsn, db_cfg.pool_min, db_cfg.pool_max)
+            _pool = _init_pool(db_cfg)
+        return _pool
 
 
 @contextmanager
 def get_connection():
     pool = get_pool()
-    conn = None
-    pooled = False
-    if pool:
-        conn = pool.pop()
-        pooled = True
-    if conn is None:
-        cfg = get_config()
-        db_cfg = cfg.database
-        conn = yaspy.Connection(user=db_cfg.user, password=db_cfg.password, dsn=db_cfg.dsn)
+    conn, owner = pool.acquire(pool.connect)
     try:
         yield conn
     finally:
-        if pooled and _pool is pool and len(pool) < pool.max:
-            with _lock:
-                pool.append(conn)
-        else:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        pool.release(conn, owner)
 
 
 _current_agent_id: ContextVar[Optional[str]] = ContextVar("cx_yashandb_agent_id", default=None)
 
 _end_user_connections: Dict[tuple[int, str], yaspy.Connection] = {}
 _end_user_lock = threading.Lock()
+_end_user_generations: Dict[str, int] = {}
+_revoked_end_users: set[str] = set()
 
 _agent_eu_creds: Optional[Dict[str, str]] = None
 _agent_eu_lock = threading.Lock()
@@ -133,6 +191,15 @@ def set_agent_context(agent_id: Optional[str]) -> None:
 def get_current_agent_id() -> Optional[str]:
     return _current_agent_id.get()
 
+
+def _transaction_read_identity():
+    cfg = get_config()
+    credentials = _load_agent_eu_creds() if cfg.agent.mode == "agent" else None
+    return connection_identity(cfg, get_current_agent_id(), credentials)
+
+
+_transaction_reads = TransactionReads(_transaction_read_identity)
+
 def _agent_id_to_end_user_name(agent_id: str) -> str:
     return "AIA_" + hashlib.sha256(agent_id.encode("utf-8")).hexdigest()[:24].upper()
 
@@ -156,6 +223,9 @@ def get_end_user_connection(agent_id: str) -> Optional[yaspy.Connection]:
         return _get_agent_mode_end_user_connection(agent_id)
 
     with _end_user_lock:
+        if agent_id in _revoked_end_users:
+            return None
+        generation = _end_user_generations.setdefault(agent_id, 0)
         existing = _end_user_connections.get(key)
         if existing:
             try:
@@ -169,32 +239,41 @@ def get_end_user_connection(agent_id: str) -> Optional[yaspy.Connection]:
                     pass
                 _end_user_connections.pop(key, None)
 
-        pwd = _get_end_user_password(agent_id)
-        if not pwd:
-            _logger.debug("No end user password for %s; denying independent connection", agent_id)
-            return None
+    pwd = _get_end_user_password(agent_id)
+    if not pwd:
+        _logger.debug("No end user password for %s; denying independent connection", agent_id)
+        return None
 
-        eu_name = _agent_id_to_end_user_name(agent_id)
-        db_cfg = cfg.database
-        try:
-            conn = yaspy.Connection(
-                user=eu_name,
-                password=pwd,
-                dsn=db_cfg.dsn,
-            )
-            with conn.cursor() as cur:
-                cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {cfg.database.user}")
+    eu_name = _agent_id_to_end_user_name(agent_id)
+    db_cfg = cfg.database
+    conn = None
+    try:
+        conn = yaspy.Connection(user=eu_name, password=pwd, dsn=db_cfg.dsn)
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {cfg.database.user}")
+        with _end_user_lock:
+            if agent_id in _revoked_end_users or _end_user_generations.get(agent_id, 0) != generation:
+                conn.close()
+                return None
             _end_user_connections[key] = conn
-            _logger.info("Created Deep Sec End User connection for %s (EU: %s)", agent_id, eu_name)
-            return conn
-        except Exception as e:
-            _logger.debug("End User connection failed for %s (EU: %s): %s", agent_id, eu_name, e)
-            return None
+        _logger.info("Created Deep Sec End User connection for %s (EU: %s)", agent_id, eu_name)
+        return conn
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _logger.debug("End User connection failed for %s (EU: %s): %s", agent_id, eu_name, e)
+        return None
 
 
 def _get_agent_mode_end_user_connection(agent_id: str) -> Optional[yaspy.Connection]:
     key = (threading.get_ident(), agent_id)
     with _end_user_lock:
+        if agent_id in _revoked_end_users:
+            return None
+        generation = _end_user_generations.setdefault(agent_id, 0)
         existing = _end_user_connections.get(key)
         if existing:
             try:
@@ -219,6 +298,9 @@ def _get_agent_mode_end_user_connection(agent_id: str) -> Optional[yaspy.Connect
         with conn.cursor() as cur:
             cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {cfg.database.user}")
         with _end_user_lock:
+            if agent_id in _revoked_end_users or _end_user_generations.get(agent_id, 0) != generation:
+                conn.close()
+                return None
             _end_user_connections[key] = conn
         _logger.info("Created Agent-mode End User connection for %s (EU: %s)", agent_id, creds["username"])
         return conn
@@ -227,14 +309,31 @@ def _get_agent_mode_end_user_connection(agent_id: str) -> Optional[yaspy.Connect
         return None
 
 
+def evict_agent_connections(agent_id: str, *, revoke: bool = False) -> dict:
+    """Retire this Agent locally; no claim about external database sessions."""
+    with _end_user_lock:
+        _end_user_generations[agent_id] = _end_user_generations.get(agent_id, 0) + 1
+        if revoke:
+            _revoked_end_users.add(agent_id)
+        keys = [key for key in _end_user_connections if key[1] == agent_id]
+        retired = [(key, _end_user_connections.pop(key)) for key in keys]
+    closed = failed = 0
+    for key, conn in retired:
+        try:
+            conn.close()
+            closed += 1
+        except Exception:
+            failed += 1
+            with _end_user_lock:
+                _end_user_connections[(key[0], agent_id, "retired", id(conn))] = conn
+    return {"closed": closed, "failed": failed}
+
+
 def close_end_user_connections():
     with _end_user_lock:
-        for agent_id, conn in _end_user_connections.items():
-            try:
-                conn.close()
-            except Exception:
-                pass
-        _end_user_connections.clear()
+        agents = set(_end_user_generations) | {key[1] for key in _end_user_connections}
+    for agent_id in agents:
+        evict_agent_connections(agent_id)
 
 @contextmanager
 def get_connection_for_agent(agent_id: Optional[str] = None):
@@ -284,14 +383,10 @@ def clear_agent_context(conn: yaspy.Connection) -> None:
 def close_pool():
     global _pool
     close_end_user_connections()
-    if _pool:
-        with _lock:
-            for conn in _pool:
-                try:
-                    conn.close()
-                except:
-                    pass
-            _pool = []
+    with _lock:
+        pool, _pool = _pool, None
+        if pool is not None:
+            pool.close()
 
 
 def execute(sql: str, params: Optional[Dict[str, Any]] = None) -> int:
@@ -305,7 +400,7 @@ def execute(sql: str, params: Optional[Dict[str, Any]] = None) -> int:
 
 def execute_query(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     sql = sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())")
-    with get_connection_for_agent() as conn:
+    with _transaction_reads.connection(get_connection_for_agent) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params or {})
             columns = [col[0].lower() for col in cur.description]
@@ -403,9 +498,10 @@ def execute_transaction_callback(callback):
     with get_connection_for_agent() as conn:
         tx = _Transaction(conn)
         try:
-            result = callback(tx)
-            conn.commit()
-            return result
+            with _transaction_reads.bind(conn):
+                result = callback(tx)
+                conn.commit()
+                return result
         except Exception:
             conn.rollback()
             raise

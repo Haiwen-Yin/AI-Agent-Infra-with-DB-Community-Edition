@@ -249,7 +249,7 @@ def list_tasks(actor, endpoint_id, *, context_id="", status="", page_size=50,
 def card(actor, endpoint_id):
     record, bound = connection.execute_transaction_callback(lambda tx: authority(tx, actor, endpoint_id))
     return {"name": record["endpoint_name"], "description": "Authorized bounded pure Graph tasks; reconnectable status streams, no push notifications or task continuation messages.",
-            "version": "5.0.0", "supportedInterfaces": [{"url": record["endpoint_url"], "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0", "tenant": endpoint_id}],
+            "version": "5.0.1", "supportedInterfaces": [{"url": record["endpoint_url"], "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0", "tenant": endpoint_id}],
             "capabilities": {"streaming": True, "pushNotifications": False}, "defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"],
             "securitySchemes": {"gateway": {"httpAuthSecurityScheme": {"scheme": "bearer"}}}, "securityRequirements": [{"schemes": {"gateway": {"list": ["agents.operate"]}}}],
             "skills": [{"id": bound["graph_version_id"], "name": "Published pure Graph", "description": "Independently approved exact Graph version", "tags": ["graph", "read-only"]}]}

@@ -1321,7 +1321,7 @@ function PageView({
 function WorkspacesAndContinuity({ lang, me, capabilities, text, onNotice }: { lang: Lang; me: Row | null; capabilities: Row | null; text: (zh: string, en: string) => string; onNotice: (value: string) => void }) {
   const [view, setView] = useUrlState("view", ["workspaces", "continuity"] as const, "workspaces");
   return <section className="page-stack"><ViewToggle value={view} onChange={setView} options={[["workspaces", text("工作区", "Workspaces"), Layers3], ["continuity", text("工作交接", "Work continuity"), History]]} />
-    {view === "workspaces" ? <DataPage page="workspaces" lang={lang} text={text} onNotice={onNotice} /> : <><SectionHeading title={text("工作交接", "Work continuity")} subtitle={text("记录目标与验收条件，明确交接责任，保留修订和执行结果。", "Record objectives and acceptance criteria, assign handoff responsibility, and retain revisions and outcomes.")} text={text} /><ContinuityWorkbench request={api} text={text} principalId={String(me?.principal_id || "")} canWrite={canAction(capabilities, "workspaces.write")} /></>}
+    {view === "workspaces" ? <DataPage page="workspaces" lang={lang} text={text} onNotice={onNotice} /> : <><SectionHeading title={text("工作交接", "Work continuity")} subtitle={text("记录目标与验收条件，明确交接责任，保留修订和执行结果。", "Record objectives and acceptance criteria, assign handoff responsibility, and retain revisions and outcomes.")} text={text} /><ContinuityWorkbench request={api} text={text} principalId={String(me?.principal_id || "")} canWrite={canAction(capabilities, "workspaces.write")} canManage={canAction(capabilities, "platform.manage")} canOperateAgents={canAction(capabilities, "agents.operate")} /></>}
   </section>;
 }
 
@@ -1887,10 +1887,11 @@ function LLMProviderProfilesPanel({ lang, capabilities, text, onNotice }: {
   const [routingDraft, setRoutingDraft] = useState<Record<string, RouteModes>>({});
   const [reasonDialog, setReasonDialog] = useState<{ kind: "retire" | "route"; item: Row } | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const canManage = canAction(capabilities, "platform.manage") || canAction(capabilities, "agents.manage");
+  const canManage = canAction(capabilities, "platform.manage");
   const load = async () => {
     setLoading(true);
     try {
+      if (!canManage) { setProfiles([]); return; }
       const value = await api<Row>("/api/llm-provider-profiles?limit=100");
       setProfiles(listPayload(value, ["items"]));
     } catch (error) { onNotice((error as Error).message); }
@@ -1953,7 +1954,7 @@ function LLMProviderProfilesPanel({ lang, capabilities, text, onNotice }: {
     catch (error) { onNotice((error as Error).message); } finally { setBusy(false); }
   };
   return <InfoPanel title={text("LLM 服务商配置", "LLM Provider Profiles")} text={text}>
-    <p className="cx-form-hint">{text("模型服务只提供推理能力，不构成授权边界。当前填写内容必须先测试再保存；API Key 仅以密文保存且不会回显。", "Model services provide reasoning only and never define authorization. Test the current draft before saving; API keys are encrypted and never returned.")}</p>
+    <p className="cx-form-hint">{text("模型服务只提供推理能力，不构成授权边界。当前填写内容必须先测试再保存；API Key 仅以密文保存且不会回显。页面展示已记录的健康状态，不会自动调用模型；可按需点击“探活”重新检查。", "Model services provide reasoning only and never define authorization. Test the current draft before saving; API keys are encrypted and never returned. Pages show recorded health without calling the model automatically; use Probe to check again when needed.")}</p>
     {feedback && <p className="operation-feedback" role="status">{feedback}</p>}
     {canManage && <form ref={formRef} className="configuration-form native-profile-form" onChange={() => { setDraftVersion((value) => value + 1); setTestedVersion(null); setFeedback(""); }} onSubmit={saveProfile}>
       <ConfigField label={text("配置键", "Profile key")} hint={text("平台内唯一标识。", "Unique platform identifier.")}><input name="profile_key" required /></ConfigField>
@@ -2374,44 +2375,27 @@ function NativeAgentsPage({
   const [nextCursor, setNextCursor] = useState("");
   const [totalItems, setTotalItems] = useState<number | undefined>(undefined);
   const [requestTemplateKey, setRequestTemplateKey] = useState("");
-  const canManage = canAction(capabilities, "platform.manage") || canAction(capabilities, "agents.manage");
+  const canViewPlatformConfig = canAction(capabilities, "platform.manage");
+  // Activation requires both the HTTP platform gate and the Agent authority
+  // checked by the service. Either permission alone must not expose actions.
+  const canManage = canViewPlatformConfig && canAction(capabilities, "agents.manage");
   const canEnroll = canAction(capabilities, "agents.enroll");
   const canDecide = canAction(capabilities, "agents.manage");
-  const refreshProfileHealth = async (profilePayload: Row) => {
-    const items = listPayload(profilePayload, ["items"]);
-    const active = items.filter((item) => String(item.status || "ACTIVE").toUpperCase() === "ACTIVE");
-    if (!active.length) return;
-    const results = await Promise.all(active.map(async (item) => {
-      try {
-        const probe = await api<Row>(`/api/llm-provider-profiles/${encodeURIComponent(String(item.profile_id))}/probe`, { method: "POST", body: "{}" });
-        return [String(item.profile_id), String(probe.health_state || "HEALTHY").toUpperCase()] as const;
-      } catch {
-        return [String(item.profile_id), "DEGRADED"] as const;
-      }
-    }));
-    setData((current) => {
-      const currentProfiles = current.profiles;
-      const updatedItems = listPayload(currentProfiles, ["items"]).map((item) => {
-        const result = results.find(([profileId]) => profileId === String(item.profile_id));
-        return result ? { ...item, health_state: result[1] } : item;
-      });
-      return { ...current, profiles: Array.isArray(currentProfiles) ? updatedItems : { ...currentProfiles, items: updatedItems } };
-    });
-  };
   const load = async (cursor = cursorHistory[cursorHistory.length - 1] || "", size = pageSize) => {
     setLoading(true);
     try {
       const [bootstrap, agents, templates, manifests, profiles, requests, targets] = await Promise.all([
-        api<Row>("/api/platform/native-bootstrap"),
+        canViewPlatformConfig ? api<Row>("/api/platform/native-bootstrap") : Promise.resolve<Row>({ status: "RESTRICTED" }),
         api<Row>(`/api/native-agents?page_size=${size}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
         api<Row>("/api/agent-templates?limit=100"),
         api<Row>("/api/native-manifests?limit=100"),
-        api<Row>("/api/llm-provider-profiles?limit=100"),
+        canViewPlatformConfig ? api<Row>("/api/llm-provider-profiles?limit=100") : Promise.resolve<Row>({ items: [] }),
         api<Row>("/api/agent-provision-requests?limit=100"),
         api<Row>("/api/deployment-targets?limit=100"),
       ]);
       setData({ bootstrap, agents, templates, manifests, profiles, requests, targets });
-      void refreshProfileHealth(profiles);
+      // Browsing and pagination read persisted health only. Model probes are
+      // explicit actions in LLMProviderProfilesPanel, never page-load effects.
       setNextCursor(String(agents.next_cursor || ""));
       setTotalItems(typeof agents.total_items === "number" ? agents.total_items : undefined);
     } catch (error) {
@@ -2478,6 +2462,7 @@ function NativeAgentsPage({
     } catch (error) { onNotice((error as Error).message); } finally { setBusy(false); }
   };
   const activate = async (agent: Row, profileId = String(profiles[0]?.profile_id || "")) => {
+    if (!canManage) return;
     if (!profileId) { onNotice(text("请先配置一个 LLM 服务商配置", "Configure an LLM Provider Profile first")); return; }
     const why = promptInput(text("请输入激活原因", "Enter the activation reason")) || "";
     if (why.trim().length < 3) return;
@@ -2492,13 +2477,31 @@ function NativeAgentsPage({
     const state = String(value || "").toUpperCase();
     if (state === "READY") return text("初始化已就绪", "Bootstrap ready");
     if (state === "MIGRATION_PENDING") return text("等待数据库迁移", "Waiting for database migration");
+    if (state === "RESTRICTED") return text("仅平台管理员可查看", "Platform administrator access required");
     return statusLabel(state || "-");
   };
   return <>
     {!embedded && <SectionHeading title={text("原生智能体", "Native Agents")} subtitle={text("平台原生管理智能体不依赖外部 Agent；业务智能体通过申请、审批、部署和激活形成可审计生命周期。LLM 只提供推理能力，不是安全边界。", "Platform-native management Agents bootstrap without an external Agent; business Agents follow an auditable request, approval, deployment, and activation lifecycle. An LLM provides reasoning only and is never a security boundary.")} text={text} actions={<PageRefresh loading={loading} onRefresh={load} text={text} />} />}
     {loading ? <PageLoading text={text} /> : <>
       <div className="metric-grid native-summary-grid">
-        <InfoPanel title={text("初始化状态", "Bootstrap status")} text={text}><strong className="metric-value">{bootstrapStatusLabel(data.bootstrap?.status)}</strong><p className="cx-form-hint">{text("初始化只创建和校验平台管理智能体，不调用模型。智能体是否可执行由下方“状态”和“模型配置”决定。", "Bootstrap only creates and verifies platform management Agents; it makes no model call. Execution readiness is determined by each Agent's status and model profile below.")}</p>{bootstrapFeedback && <p className="operation-feedback" role="status">{bootstrapFeedback}</p>}{canManage && <button type="button" className="primary-button" disabled={busy} onClick={async () => { setBusy(true); setBootstrapFeedback(text("正在检查并初始化平台原生智能体...", "Checking and initializing platform-native Agents...")); try { const result = await api<Row>("/api/platform/native-bootstrap", { method: "POST", body: "{}" }); await load(); const completed = ["READY", "COMPLETED"].includes(String(result.status || "").toUpperCase()); const message = completed ? text("平台原生智能体初始化已完成；当前状态已刷新。", "Platform-native Agent initialization is complete and the current status was refreshed.") : text(`初始化已处理，当前状态：${bootstrapStatusLabel(result.status)}。`, `Initialization was processed. Current status: ${bootstrapStatusLabel(result.status)}.`); setBootstrapFeedback(message); onNotice(message); } catch (error) { const message = (error as Error).message; setBootstrapFeedback(message); onNotice(message); } finally { setBusy(false); } }}><Bot className={busy ? "spin" : ""} size={15} />{busy ? text("处理中", "Working") : text("初始化或刷新状态", "Initialize or refresh status")}</button>}</InfoPanel>
+        <InfoPanel title={text("初始化状态", "Bootstrap status")} text={text}>
+          <strong className="metric-value">{bootstrapStatusLabel(data.bootstrap?.status)}</strong>
+          <p className="cx-form-hint">{text("初始化只创建和校验平台管理智能体，不调用模型。智能体是否可执行由下方“状态”和“模型配置”决定。", "Bootstrap only creates and verifies platform management Agents; it makes no model call. Execution readiness is determined by each Agent's status and model profile below.")}</p>
+          {bootstrapFeedback && <p className="operation-feedback" role="status">{bootstrapFeedback}</p>}
+          {canViewPlatformConfig && <button type="button" className="primary-button" disabled={busy} onClick={async () => {
+            setBusy(true);
+            setBootstrapFeedback(text("正在检查并初始化平台原生智能体...", "Checking and initializing platform-native Agents..."));
+            try {
+              const result = await api<Row>("/api/platform/native-bootstrap", { method: "POST", body: "{}" });
+              await load();
+              const completed = ["READY", "COMPLETED"].includes(String(result.status || "").toUpperCase());
+              const message = completed ? text("平台原生智能体初始化已完成；当前状态已刷新。", "Platform-native Agent initialization is complete and the current status was refreshed.") : text(`初始化已处理，当前状态：${bootstrapStatusLabel(result.status)}。`, `Initialization was processed. Current status: ${bootstrapStatusLabel(result.status)}.`);
+              setBootstrapFeedback(message); onNotice(message);
+            } catch (error) {
+              const message = (error as Error).message; setBootstrapFeedback(message); onNotice(message);
+            } finally { setBusy(false); }
+          }}><Bot className={busy ? "spin" : ""} size={15} />{busy ? text("处理中", "Working") : text("初始化或刷新状态", "Initialize or refresh status")}</button>}
+        </InfoPanel>
       </div>
         <InfoPanel title={text("平台内置管理智能体", "Built-in management Agents")} text={text}><p className="cx-form-hint">{text("内置管理智能体必须先绑定已批准的 LLM 服务商配置，配置和激活均写入审计。", "Built-in management Agents require an approved LLM Provider Profile; configuration and activation are audited.")}</p><CursorPager pageSize={pageSize} page={cursorHistory.length} totalItems={totalItems} hasMore={Boolean(nextCursor)} loading={loading} onPageSize={changePageSize} onPrevious={previousPage} onNext={nextPage} text={text} /><DataTable headers={[text("智能体", "Agent"), text("来源", "Source"), text("状态", "Status"), text("模型配置", "LLM profile"), text("操作", "Action")]} rows={agents.map((item) => [<button type="button" className="table-link" onClick={() => setSelected(item)}>{String(item.agent_name || item.display_name || item.agent_id)}</button>, statusLabel(item.source), statusLabel(item.status), String(item.llm_profile_id || text("未配置", "Not configured")), canManage ? <span className="actions-row"><button type="button" className="small-button" disabled={busy} onClick={() => setConfiguringAgent(item)}>{text("配置模型", "Configure model")}</button>{String(item.status).toUpperCase() !== "ACTIVE" && <><button type="button" className="small-button" disabled={busy || !profiles.length} onClick={() => void activate(item)} title={!profiles.length ? text("请先创建 LLM 服务商配置", "Create an LLM Provider Profile first") : text("激活智能体", "Activate Agent")}>{text("激活", "Activate")}</button>{!profiles.length && <small className="button-hint">{text("请先配置模型", "Configure a model first")}</small>}</>} </span> : statusLabel(item.activation_state)])} empty={text("暂无可见原生智能体", "No visible native Agents")} text={text} /><CursorPager pageSize={pageSize} page={cursorHistory.length} totalItems={totalItems} hasMore={Boolean(nextCursor)} loading={loading} onPageSize={changePageSize} onPrevious={previousPage} onNext={nextPage} text={text} /></InfoPanel>
       <InfoPanel title={text("业务智能体申请", "Business Agent request")} text={text}><p className="cx-form-hint">{text("申请不会直接创建运行中的智能体；社区版由管理员直接处理，企业版按职责分离审批。", "A request does not create a running Agent directly; Community is handled by an administrator, while Enterprise uses separated approval.")}</p><form className="configuration-form native-request-form" onSubmit={submitRequest}><ConfigField label={text("智能体名称", "Agent name")} hint={text("面向业务的可读名称。", "Readable business-facing name.")}><input name="agent_name" required /></ConfigField><ConfigField label={text("受管模板", "Managed template")} hint={text("模板是能力倾向、隔离要求和安全基线的受管选项，不会直接授予数据库、网络、Skill 或 Tool 权限。", "A template is a managed option for capability tendencies, isolation requirements, and security baselines; it does not directly grant database, network, Skill, or Tool authority.")}><select name="template_key" required onChange={changeRequestTemplate}>{templates.filter((item) => String(item.template_kind).toUpperCase() === "BUSINESS").map((item) => <option key={item.template_key} value={item.template_key}>{item.display_name}</option>)}</select></ConfigField><ConfigField label={text("负责人", "Owner")} hint={text("按名称搜索已有人员；默认选择当前用户。", "Search for an existing person by name; the current user is selected by default.")}><PrincipalPicker name="owner_principal_id" text={text} kind="HUMAN" required defaultValue={String(me?.principal_id || me?.profile?.principal_id || "")} defaultDisplayName={String(me?.display_name || me?.profile?.display_name || me?.profile?.username || "")} /></ConfigField><ConfigField label={text("LLM 配置", "LLM profile")} hint={text("可延后配置，但激活前必须绑定已批准配置。", "May be set later, but is mandatory before activation.")}><select name="provider_profile_id" defaultValue=""><option value="">{text("稍后配置", "Configure later")}</option>{profiles.map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_key}</option>)}</select></ConfigField><ConfigField label={text("部署目标", "Deployment target")} hint={text("选择受管运行时或已接入的目标。", "Choose a managed runtime or connected target.")}><select name="deployment_target_id" defaultValue="DT_LOCAL_MANAGED">{targets.map((item) => <option key={item.target_id} value={item.target_id}>{item.target_key} · {item.target_type}</option>)}</select></ConfigField><ConfigField label={text("隔离级别", "Isolation level")} hint={text("隔离范围由部署适配器和数据库授权共同执行。", "Enforced by the deployment adapter and database authorization.")}><select name="isolation_level" defaultValue="DOMAIN_ISOLATED"><option value="DOMAIN_ISOLATED" disabled={templateIsolation(requestTemplateKey) !== "DOMAIN_ISOLATED"}>{text("域隔离", "Domain isolated")}</option><option value="DEDICATED_CONTAINER" disabled={templateIsolation(requestTemplateKey) === "DEDICATED_RUNTIME"}>{text("专用容器", "Dedicated container")}</option><option value="DEDICATED_RUNTIME">{text("专用运行时", "Dedicated runtime")}</option></select></ConfigField><ConfigField label={text("数据分类", "Data classification")} hint={text("用于审批和后续治理策略。", "Used for approval and downstream governance.")}><select name="classification" defaultValue="INTERNAL"><option value="INTERNAL">{text("内部", "Internal")}</option><option value="CONFIDENTIAL">{text("机密", "Confidential")}</option><option value="RESTRICTED">{text("受限", "Restricted")}</option></select></ConfigField><ConfigField label={text("业务目的", "Business purpose")} hint={text("说明预期工作及获准访问范围。", "Describe intended work and approved access scope.")} multiline><textarea name="purpose" required /></ConfigField><ConfigField label={text("申请原因", "Request reason")} hint={text("写入审计记录，至少三个字符。", "Written to audit; at least three characters.")}><input name="reason" required /></ConfigField><ConfigField label={text("操作", "Action")} hint={text("提交后进入处理队列。", "Submits the request for processing.")} action><button className="primary-button" disabled={busy || !canEnroll}><Plus size={15} />{text("提交申请", "Submit request")}</button></ConfigField></form></InfoPanel>
@@ -2509,7 +2512,27 @@ function NativeAgentsPage({
       </div>
     </>}
     <DetailDrawer open={Boolean(configuringAgent)} title={text("配置内置智能体模型", "Configure built-in Agent model")} onClose={() => setConfiguringAgent(null)} text={text}>
-      {configuringAgent && <form className="cx-form native-agent-activation-form" onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const profileId = String(form.get("llm_profile_id") || ""); const why = String(form.get("reason") || "").trim(); if (!profileId || why.length < 3) return; setBusy(true); try { await api(`/api/native-agents/${encodeURIComponent(String(configuringAgent.agent_id))}/activate`, { method: "POST", body: JSON.stringify({ llm_profile_id: profileId, reason: why }) }); await load(); setConfiguringAgent(null); onNotice(text("模型配置已绑定，智能体已激活", "Model profile was bound and the Agent activated")); } catch (error) { onNotice((error as Error).message); } finally { setBusy(false); } }}><p className="cx-form-hint">{text("选择已批准的 LLM 服务商配置。提交会绑定该配置并激活此内置管理智能体；操作可审计。", "Select an approved LLM Provider Profile. Submitting binds it and activates this built-in management Agent; the action is audited.")}</p><ConfigField label={text("LLM 服务商配置", "LLM Provider Profile")} hint={text("只能选择已批准且可用的模型配置。", "Only an approved and available model profile may be selected.")}><select name="llm_profile_id" required defaultValue={String(configuringAgent.llm_profile_id || "")}><option value="" disabled>{text("请选择", "Select a profile")}</option>{profiles.map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_key} · {item.model_id}</option>)}</select></ConfigField><ConfigField label={text("配置原因", "Configuration reason")} hint={text("至少三个字符，并写入审计记录。", "At least three characters and written to the audit record.")} multiline><textarea name="reason" required /></ConfigField><ConfigField label={text("操作", "Action")} hint={text("绑定配置后才会激活智能体。", "The Agent is activated only after the profile is bound.")} action><button className="primary-button" disabled={busy || !profiles.length}><Check size={15} />{text("配置并激活", "Configure and activate")}</button></ConfigField>{!profiles.length && <p className="cx-form-hint">{text("请先在本页下方创建 LLM 服务商配置。", "Create an LLM Provider Profile below first.")}</p>}</form>}
+      {configuringAgent && canManage && <form className="cx-form native-agent-activation-form" onSubmit={async (event) => {
+        event.preventDefault();
+        if (!canManage) return;
+        const form = new FormData(event.currentTarget);
+        const profileId = String(form.get("llm_profile_id") || "");
+        const why = String(form.get("reason") || "").trim();
+        if (!profileId || why.length < 3) return;
+        setBusy(true);
+        try {
+          await api(`/api/native-agents/${encodeURIComponent(String(configuringAgent.agent_id))}/activate`, { method: "POST", body: JSON.stringify({ llm_profile_id: profileId, reason: why }) });
+          await load(); setConfiguringAgent(null);
+          onNotice(text("模型配置已绑定，智能体已激活", "Model profile was bound and the Agent activated"));
+        } catch (error) { onNotice((error as Error).message); }
+        finally { setBusy(false); }
+      }}>
+        <p className="cx-form-hint">{text("选择已批准的 LLM 服务商配置。提交会绑定该配置并激活此内置管理智能体；操作可审计。", "Select an approved LLM Provider Profile. Submitting binds it and activates this built-in management Agent; the action is audited.")}</p>
+        <ConfigField label={text("LLM 服务商配置", "LLM Provider Profile")} hint={text("只能选择已批准且可用的模型配置。", "Only an approved and available model profile may be selected.")}><select name="llm_profile_id" required defaultValue={String(configuringAgent.llm_profile_id || "")}><option value="" disabled>{text("请选择", "Select a profile")}</option>{profiles.map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_key} · {item.model_id}</option>)}</select></ConfigField>
+        <ConfigField label={text("配置原因", "Configuration reason")} hint={text("至少三个字符，并写入审计记录。", "At least three characters and written to the audit record.")} multiline><textarea name="reason" required /></ConfigField>
+        <ConfigField label={text("操作", "Action")} hint={text("绑定配置后才会激活智能体。", "The Agent is activated only after the profile is bound.")} action><button className="primary-button" disabled={busy || !profiles.length}><Check size={15} />{text("配置并激活", "Configure and activate")}</button></ConfigField>
+        {!profiles.length && <p className="cx-form-hint">{text("请先前往“平台配置 → 运行管理 → LLM 服务商配置”创建并测试模型配置。", "First create and test a model profile in Platform configuration → Operations → LLM Provider Profiles.")}</p>}
+      </form>}
     </DetailDrawer>
     <DetailDrawer open={Boolean(selected)} title={text("原生智能体详情", "Native Agent details")} onClose={() => setSelected(null)} text={text}><pre className="decision-box">{selected ? JSON.stringify(selected, null, 2) : ""}</pre></DetailDrawer>
   </>;
@@ -5717,9 +5740,9 @@ function MonitorPage({
               </div>
             )}
           </InfoPanel>
-          <MonitorDetails lang={lang} text={text} onNotice={onNotice} />
         </>
       )}
+      <MonitorDetails lang={lang} text={text} onNotice={onNotice} />
     </section>
   );
 }
@@ -6054,7 +6077,7 @@ function AgentsPage({
       const [registered, grantData, policyData] = await Promise.all([
         api<Row>(`/api/agents?page_size=${pageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
         api<Row>("/api/enrollment/grants"),
-        api<Row>("/api/platform/external-agent-registration"),
+        canAction(capabilities, "platform.manage") ? api<Row>("/api/platform/external-agent-registration") : Promise.resolve<Row>({ restricted: true }),
       ]);
       const governed = (registered.items || []).map((item: Row) => ({
         ...item,
@@ -6092,6 +6115,10 @@ function AgentsPage({
   const previousPage = () => { if (cursorHistory.length <= 1) return; const history = cursorHistory.slice(0, -1); setCursorHistory(history); void load(history[history.length - 1]); };
   const createGrant = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canAction(capabilities, "agents.enroll")) {
+      onNotice(text("当前账号没有创建注册令牌的权限。", "This account cannot create enrollment Tokens."));
+      return;
+    }
     try {
       const body = Object.fromEntries(
         new FormData(event.currentTarget).entries(),
@@ -6251,7 +6278,7 @@ function AgentsPage({
   ];
   const externalRegistration = <>
     <InfoPanel title={text("外部注册策略", "External registration policy")} text={text}>
-      <div className="external-registration-status"><span className="cx-form-hint">{text("注册策略", "Registration policy")}</span><span className={`compact-status ${String(externalPolicy.state || "").toLowerCase()}`}>{externalPolicy.state ? displayRowValue(lang, externalPolicy.state) : text("读取中", "Loading")}</span><p className="cx-form-hint">{text("这里只显示新外部智能体的注册策略，不显示或预填运行时。创建令牌时必须填写 Agent 名称；既有智能体不会被删除。配置位置：平台配置 → 能力与策略 → 外部智能体注册。", "This shows only the registration policy for new external Agents; runtime is neither shown nor prefilled. An Agent name is required when creating a Token; existing Agents are not deleted. Configure it in Platform configuration → Capabilities & policies → External Agent registration.")}</p></div>
+      <div className="external-registration-status"><span className="cx-form-hint">{text("注册策略", "Registration policy")}</span><span className={`compact-status ${String(externalPolicy.state || "").toLowerCase()}`}>{externalPolicy.restricted ? text("仅平台管理员可查看", "Platform administrator access required") : externalPolicy.state ? displayRowValue(lang, externalPolicy.state) : text("读取中", "Loading")}</span><p className="cx-form-hint">{text("这里只显示新外部智能体的注册策略，不显示或预填运行时。创建令牌时必须填写 Agent 名称；既有智能体不会被删除。配置位置：平台配置 → 能力与策略 → 外部智能体注册。", "This shows only the registration policy for new external Agents; runtime is neither shown nor prefilled. An Agent name is required when creating a Token; existing Agents are not deleted. Configure it in Platform configuration → Capabilities & policies → External Agent registration.")}</p></div>
     </InfoPanel>
     <InfoPanel title={text("生成注册令牌", "Create Enrollment Token")} text={text}>
       <p className="cx-form-hint">{text("外部智能体必须携带一次性令牌通过 Skill-first 注册。令牌只显示一次，并确定智能体归属、环境和风险范围。", "An external Agent must present a one-time Token for Skill-first registration. The Token is shown once and fixes ownership, environment, and risk scope.")}</p>
@@ -6260,7 +6287,7 @@ function AgentsPage({
         <label>{text("环境", "Environment")}<select name="environment"><option value="development">{text("开发", "Development")}</option><option value="production">{text("生产", "Production")}</option></select></label>
         <label>{text("风险等级", "Risk tier")}<select name="risk_tier"><option value="LOW">{text("低", "Low")}</option><option value="STANDARD">{text("标准", "Standard")}</option><option value="RESTRICTED">{text("受限", "Restricted")}</option></select></label>
         <label>{text("有效秒数", "TTL seconds")}<input name="ttl_seconds" type="number" min="60" max="3600" /></label>
-        <button className="primary-button" type="submit"><Plus size={16} />{text("生成并仅显示一次", "Create and show once")}</button>
+        <button className="primary-button" type="submit" disabled={!canAction(capabilities, "agents.enroll")}><Plus size={16} />{text("生成并仅显示一次", "Create and show once")}</button>
       </form>
       {token && <div className="one-time-token"><b>{text("请立即保存令牌", "Save this Token now")}</b><code>{token.token}</code><small>{text("平台只保存摘要，不会再次显示明文。", "Only a digest is stored; plaintext will not be shown again.")}</small></div>}
     </InfoPanel>
@@ -8932,7 +8959,11 @@ function MonitorDetails({
   const [cursorHistory, setCursorHistory] = useState<string[]>([""]);
   const [nextCursor, setNextCursor] = useState("");
   const [totalItems, setTotalItems] = useState<number | undefined>(undefined);
-  const load = async (cursor = cursorHistory[cursorHistory.length - 1] || "") => {
+  const currentCursor = useRef("");
+  useEffect(() => {
+    currentCursor.current = cursorHistory[cursorHistory.length - 1] || "";
+  }, [cursorHistory]);
+  const load = async (cursor = currentCursor.current) => {
     setLoading(true);
     try {
       const [agentData, metricData] = await Promise.all([

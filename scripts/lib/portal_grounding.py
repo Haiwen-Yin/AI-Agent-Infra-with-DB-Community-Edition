@@ -52,11 +52,12 @@ def set_policy(actor: str, mode: str, allow_model_supplement: bool, disclosure_p
     return connection.execute_transaction_callback(work)
 
 
-def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, supplement: bool = False, entity_ids: list[str] | None = None) -> dict[str, Any]:
+def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, supplement: bool = False,
+           entity_ids: list[str] | None = None, strategy: str = "hybrid") -> dict[str, Any]:
     actor, agent = str(session.get("principal_id") or ""), str(session.get("agent_id") or "")
     content_security.enforce(message, "USER_INPUT")
     configured = policy()
-    result = answer_planning.retrieve(actor, agent, message, entity_ids=entity_ids)
+    result = answer_planning.retrieve(actor, agent, message, entity_ids=entity_ids, strategy=strategy)
     sources = result["items"]
     effective_policy = dict(configured, allow_model_supplement=configured["allow_model_supplement"] if supplement else "N")
     planned = answer_planning.prepare(message, str(profile.get("profile_id") or ""), effective_policy, result)
@@ -64,6 +65,7 @@ def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, su
     reply = planned["knowledge_reply"]
     if reply is None:
         reply = native_runtime._call_llm(profile, planned["messages"])["content"]
+    reply = answer_planning.render_reply(reply, planned)
     content_security.enforce(reply, "OUTPUT")
     knowledge_grounding.require_reader(actor, agent)
     for item in citations:
@@ -71,4 +73,5 @@ def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, su
     if policy()["version"] != configured["version"]:
         raise knowledge_grounding.GroundingError("Knowledge policy changed during answer generation")
     return {"reply": reply, "citations": citations, "answer_source": source,
-            "retrieval_status": result["status"], "policy_version": configured["version"]}
+            "retrieval_status": result["status"], "policy_version": configured["version"],
+            "answer_metadata": planned["answer_metadata"]}

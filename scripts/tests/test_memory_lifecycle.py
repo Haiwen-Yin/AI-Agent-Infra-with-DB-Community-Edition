@@ -213,8 +213,13 @@ def test_snapshot_resolution_fails_closed_for_security_and_marks_expiry(monkeypa
     ])
     value = lifecycle.resolve_snapshot("MSNAP-1", continuation="HUMAN_DECISION")
     assert [item["version_id"] for item in value["members"]] == ["MV-safe"]
-    assert value["security_blocked"] == [{"version_id": "MV-quarantined", "reason": "QUARANTINED"}]
-    assert value["outcome"] == "HUMAN_DECISION"
+    assert value["security_blocked"] == [
+        {"version_id": "MV-quarantined", "reason": "QUARANTINED"},
+        {"version_id": "MV-expired", "reason": "NOT_CURRENTLY_APPLICABLE"},
+    ]
+    assert value["stale"] == []
+    assert value["requires_governed_refresh"] is False
+    assert value["outcome"] == "READY"
 
 
 def test_snapshot_subject_permission_change_fails_closed_before_membership_read(monkeypatch):
@@ -266,7 +271,17 @@ def test_authorized_chain_removes_protected_nodes_without_count_leak(monkeypatch
 
 
 def test_external_worker_rejects_stale_fence_before_writing(monkeypatch):
-    monkeypatch.setattr(lifecycle, "execute_query_one", lambda *_args, **_kwargs: {"item_id": "MI-1", "subject_version_id": "MV-1", "status": "RUNNING", "lease_owner": "worker-a", "fencing_token": 2, "input_digest": "input"})
+    class Tx:
+        def query_one(self, sql, params):
+            if sql.startswith('SELECT JOB_ID FROM CX_MEMORY_JOB_ITEMS'):
+                return {'job_id': 'job'}
+            if 'CX_MEMORY_JOBS' in sql:
+                return {'job_id': 'job'}
+            assert params['fencing_token'] == 1
+            return None
+        def execute(self, *_args, **_kwargs):
+            pytest.fail('stale worker must not write')
+    monkeypatch.setattr(lifecycle, 'execute_transaction_callback', lambda callback: callback(Tx()))
     monkeypatch.setattr(lifecycle, "execute", lambda *_args, **_kwargs: pytest.fail("stale worker must not write"))
     with pytest.raises(lifecycle.MemoryLifecycleError) as exc:
         lifecycle.submit_external_worker_result("MI-1", worker_id="worker-a", fencing_token=1, input_digest="input", output={"summary": "x"})

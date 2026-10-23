@@ -83,7 +83,11 @@ def test_launched_turn_retains_lock_after_wrapper_crash(tmp_path,packages):
     runtime.receive(archive,public,digest);runtime.activate(digest,authorize=lambda _:True)
     pin=tmp_path/'public-key';pin.write_text(public)
     ready=tmp_path/'child-ready'
-    code="import os,pathlib,sys; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); sys.stdin.read()"
+    # Publish readiness only after the complete PID is available. Existence of
+    # a file opened for writing does not mean its contents have been written.
+    code=("import os,pathlib,sys; ready=pathlib.Path(sys.argv[1]); "
+          "pending=ready.with_suffix('.pending'); pending.write_text(str(os.getpid())); "
+          "pending.replace(ready); sys.stdin.read()")
     script=Path(__file__).resolve().parents[1]/'tools/skill_runtime.py'
     process=subprocess.Popen([sys.executable,str(script),'--root',str(runtime.root),'--public-key-file',str(pin),'run','--',sys.executable,'-c',code,str(ready)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     child=None

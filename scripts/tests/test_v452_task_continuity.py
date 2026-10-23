@@ -20,6 +20,7 @@ def database(monkeypatch):
     monkeypatch.setattr(connection, "DATABASE_DIALECT", "oracle")
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys=ON")
     db.executescript("""
         CREATE TABLE CX_PRINCIPALS(PRINCIPAL_ID TEXT PRIMARY KEY, PRINCIPAL_TYPE TEXT, STATUS TEXT);
         CREATE TABLE CX_SECURITY_DOMAINS(SECURITY_DOMAIN_ID TEXT PRIMARY KEY, STATUS TEXT);
@@ -169,6 +170,59 @@ def test_expired_send_becomes_unobserved_before_any_retry(database):
             tx, continuity_id=link["continuity_id"], worker_id="worker-b",
             business_key="retry", request_digest="r" * 64, lease_seconds=60))
     assert claimed["fencing_token"] == 1
+
+
+@pytest.mark.parametrize("session_offset", [-4, 8])
+def test_expired_utc_send_never_creates_second_attempt_in_other_session_zone(database, monkeypatch, session_offset):
+    db, _, run = database
+    clock = [datetime(2030, 6, 1, 12)]
+    monkeypatch.setattr(task_continuity, "_now", lambda: clock[0])
+    # Model a TIMESTAMP column compared with a session-local database clock.
+    # Advance time without editing the stored lease or attempt.
+    db.create_function("current_timestamp", 0,
+                       lambda: (clock[0] + timedelta(hours=session_offset)).isoformat(sep=" "))
+    link = admit(db, run)
+    first = run(lambda tx: task_continuity.claim_attempt(
+        tx, continuity_id=link["continuity_id"], worker_id="worker-a",
+        business_key="send-key", request_digest="r" * 64, lease_seconds=1))
+    clock[0] += timedelta(seconds=2)
+    refusal = run(lambda tx: task_continuity.claim_attempt(
+        tx, continuity_id=link["continuity_id"], worker_id="worker-b",
+        business_key="retry-key", request_digest="r" * 64))
+    assert refusal["status"] == "UNOBSERVED" and refusal["reconciliation_required"]
+    attempts = db.execute("SELECT ATTEMPT_ID,STATUS,FENCING_TOKEN FROM CX_TASK_CONTINUITY_ATTEMPTS").fetchall()
+    assert [tuple(item) for item in attempts] == [(first["attempt_id"], "UNOBSERVED", 1)]
+    assert tuple(db.execute("SELECT STATUS,FENCING_TOKEN FROM CX_TASK_CONTINUITY_LEASES").fetchone()) == ("EXPIRED", 1)
+    assert db.execute("SELECT STATUS FROM CX_TASK_CONTINUITY_LINKS").fetchone()[0] == "UNOBSERVED"
+
+
+def test_worker_identity_is_not_a_principal_and_transition_retains_admitting_actor(database):
+    db, _, run = database
+    link = admit(db, run)
+    attempt = run(lambda tx: task_continuity.claim_attempt(
+        tx, continuity_id=link["continuity_id"], worker_id="machine-worker:not-a-principal",
+        business_key="send", request_digest="r" * 64))
+    result = run(lambda tx: task_continuity.finish_attempt(
+        tx, attempt_id=attempt["attempt_id"], worker_id="machine-worker:not-a-principal",
+        fencing_token=attempt["fencing_token"], status="SUCCEEDED", request_digest="r" * 64))
+    assert result["status"] == "SUCCEEDED"
+    assert {value[0] for value in db.execute("SELECT ACTOR_ID FROM CX_TASK_CONTINUITY_TRANSITIONS")} == {"owner"}
+    assert db.execute("SELECT LEASE_OWNER FROM CX_TASK_CONTINUITY_LEASES").fetchone()[0] == "machine-worker:not-a-principal"
+
+
+def test_claim_and_finish_reject_a_changed_admitted_request(database):
+    db, _, run = database
+    link = admit(db, run)
+    with pytest.raises(ContinuityConflict, match="request"):
+        run(lambda tx: task_continuity.claim_attempt(tx, continuity_id=link["continuity_id"],
+            worker_id="worker", business_key="send", request_digest="x" * 64))
+    assert db.execute("SELECT COUNT(*) FROM CX_TASK_CONTINUITY_ATTEMPTS").fetchone()[0] == 0
+    attempt = run(lambda tx: task_continuity.claim_attempt(tx, continuity_id=link["continuity_id"],
+        worker_id="worker", business_key="send", request_digest="r" * 64))
+    with pytest.raises(ContinuityConflict, match="request"):
+        run(lambda tx: task_continuity.finish_attempt(tx, attempt_id=attempt["attempt_id"],
+            worker_id="worker", fencing_token=attempt["fencing_token"], status="SUCCEEDED", request_digest="x" * 64))
+    assert db.execute("SELECT STATUS FROM CX_TASK_CONTINUITY_ATTEMPTS").fetchone()[0] == "SENDING"
 
 
 def test_stale_completion_is_rejected_and_persisted_as_unknown(database):

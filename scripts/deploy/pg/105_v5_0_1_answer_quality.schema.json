@@ -1,0 +1,641 @@
+{
+  "CX_ANSWER_QUALITY_INPUTS": {
+    "check_expressions": [],
+    "checks": 0,
+    "columns": {
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "INPUT_CIPHER": {
+        "default": null,
+        "not_null": true,
+        "type": "TEXT"
+      },
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RUN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "immutable_columns": [
+      "RUN_ID",
+      "ATTEMPT_ID",
+      "INPUT_CIPHER",
+      "INPUT_DIGEST",
+      "CREATED_AT"
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "RUN_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "RUN_ID"
+        ],
+        "CX_ANSWER_QUALITY_RUNS",
+        [
+          "RUN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX105_CCB37B73A3E90130"
+  },
+  "CX_ANSWER_QUALITY_OUTPUTS": {
+    "check_expressions": [
+      "FENCING_TOKEN>0",
+      "GENERATION_KIND IN ('REAL_MODEL','DETERMINISTIC')",
+      "LATENCY_MS>=0",
+      "ASSERTIONS_PASSED IN ('Y','N')"
+    ],
+    "checks": 4,
+    "columns": {
+      "ASSERTIONS_PASSED": {
+        "default": null,
+        "not_null": true,
+        "type": "CHAR(1)"
+      },
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "FENCING_TOKEN": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "GENERATION_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "LATENCY_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "MODEL_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(256)"
+      },
+      "OUTPUT_CIPHER": {
+        "default": null,
+        "not_null": true,
+        "type": "TEXT"
+      },
+      "OUTPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RUN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "immutable_columns": [
+      "RUN_ID",
+      "ATTEMPT_ID",
+      "FENCING_TOKEN",
+      "OUTPUT_CIPHER",
+      "OUTPUT_DIGEST",
+      "MODEL_ID",
+      "GENERATION_KIND",
+      "LATENCY_MS",
+      "ASSERTIONS_PASSED",
+      "CREATED_AT"
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "RUN_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "RUN_ID"
+        ],
+        "CX_ANSWER_QUALITY_RUNS",
+        [
+          "RUN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX105_7FA46E5D3C9C3D5C"
+  },
+  "CX_ANSWER_QUALITY_REVIEWS": {
+    "check_expressions": [
+      "FACTUAL_CORRECT IN ('Y','N')",
+      "CITATIONS_SUPPORTED IN ('Y','N')"
+    ],
+    "checks": 2,
+    "columns": {
+      "CITATIONS_SUPPORTED": {
+        "default": null,
+        "not_null": true,
+        "type": "CHAR(1)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "FACTUAL_CORRECT": {
+        "default": null,
+        "not_null": true,
+        "type": "CHAR(1)"
+      },
+      "OUTPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "REVIEWER_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "RUN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "immutable_columns": [
+      "RUN_ID",
+      "REVIEWER_ID",
+      "OUTPUT_DIGEST",
+      "FACTUAL_CORRECT",
+      "CITATIONS_SUPPORTED",
+      "REASON",
+      "CREATED_AT"
+    ],
+    "keys": [
+      [
+        "R",
+        [
+          "RUN_ID"
+        ],
+        "CX_ANSWER_QUALITY_OUTPUTS",
+        [
+          "RUN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "REVIEWER_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "RUN_ID",
+          "REVIEWER_ID"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX105_4DACC121894C24C4"
+  },
+  "CX_ANSWER_QUALITY_RUNS": {
+    "check_expressions": [
+      "PROFILE_VERSION>0",
+      "POLICY_VERSION>0",
+      "ENTRY_KIND IN ('PORTAL','CHANNEL')",
+      "STATUS IN ('PENDING','RUNNING','SUCCEEDED','FAILED','UNOBSERVED')"
+    ],
+    "checks": 4,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "AGENT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CASE_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CASE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CASE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "COMPLETED_AT": {
+        "default": null,
+        "not_null": false,
+        "type": "TIMESTAMP"
+      },
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "ENTRY_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "POLICY_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "POLICY_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RUBRIC_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RUBRIC_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "RUN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SECURITY_DOMAIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      }
+    },
+    "immutable_columns": [
+      "RUN_ID",
+      "CONTINUITY_ID",
+      "CASE_ID",
+      "CASE_VERSION",
+      "RUBRIC_REVISION",
+      "CASE_DIGEST",
+      "RUBRIC_DIGEST",
+      "ACTOR_ID",
+      "SECURITY_DOMAIN_ID",
+      "AGENT_ID",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "POLICY_VERSION",
+      "POLICY_DIGEST",
+      "ENTRY_KIND",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "CREATED_AT"
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "RUN_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "CONTINUITY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_TASK_CONTINUITY_LINKS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "SECURITY_DOMAIN_ID"
+        ],
+        "CX_SECURITY_DOMAINS",
+        [
+          "SECURITY_DOMAIN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "AGENT_ID"
+        ],
+        "CX_NATIVE_AGENTS",
+        [
+          "AGENT_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "ACTOR_ID",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CASE_ID",
+          "CASE_VERSION",
+          "RUBRIC_REVISION"
+        ],
+        "CX_ANSWER_RUBRICS",
+        [
+          "CASE_ID",
+          "CASE_VERSION",
+          "REVISION_NO"
+        ]
+      ]
+    ],
+    "trigger": "CX105_D2DA3A45F96D313F"
+  },
+  "CX_ANSWER_QUALITY_SOURCES": {
+    "check_expressions": [
+      "ITEM_NO>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "CONTENT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "ENTITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ITEM_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "RUN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "immutable_columns": [
+      "RUN_ID",
+      "ITEM_NO",
+      "ENTITY_ID",
+      "CONTENT_DIGEST"
+    ],
+    "keys": [
+      [
+        "R",
+        [
+          "RUN_ID"
+        ],
+        "CX_ANSWER_QUALITY_RUNS",
+        [
+          "RUN_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "RUN_ID",
+          "ITEM_NO"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "RUN_ID",
+          "ENTITY_ID"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX105_D32B3F374D57741A"
+  },
+  "CX_ANSWER_RUBRICS": {
+    "check_expressions": [
+      "REVISION_NO>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "CASE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CASE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "CREATED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "REVISION_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "RUBRIC_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RUBRIC_JSON": {
+        "default": null,
+        "not_null": true,
+        "type": "TEXT"
+      }
+    },
+    "immutable_columns": [
+      "CASE_ID",
+      "CASE_VERSION",
+      "REVISION_NO",
+      "RUBRIC_DIGEST",
+      "RUBRIC_JSON",
+      "CREATED_BY",
+      "REASON",
+      "CREATED_AT"
+    ],
+    "keys": [
+      [
+        "R",
+        [
+          "CREATED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "CASE_ID",
+          "CASE_VERSION",
+          "REVISION_NO"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CASE_ID",
+          "CASE_VERSION"
+        ],
+        "CX_ANSWER_EVAL_CASES",
+        [
+          "CASE_ID",
+          "VERSION"
+        ]
+      ]
+    ],
+    "trigger": "CX105_31F119029AD17A6B"
+  }
+}

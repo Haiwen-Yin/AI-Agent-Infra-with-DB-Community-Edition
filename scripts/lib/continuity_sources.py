@@ -34,6 +34,16 @@ def _resolve(tx,actor,domain,source,*,purpose=None,publication_id=None):
     # Cross-domain access is a separate explicit grant, evaluated for the
     # current recipient. It never substitutes a sender's session identity.
     metadata=locate(tx,source)
+    if source.family.value=='SOURCE':
+        if metadata['security_domain_id']!=domain or publication_id is not None:
+            raise PermissionError('Configured source evidence requires its original domain')
+        from .agent_source_sync import resolve_source
+        return resolve_source(tx,actor,domain,source)
+    if source.family.value=='WORKING_NOTE':
+        if metadata['security_domain_id']!=domain or publication_id is not None:
+            raise PermissionError('Working notes require their original domain')
+        from .continuity_notes import resolve_note
+        return resolve_note(tx,actor,domain,source)
     if source.family.value in {'TASK','GRAPH','DB4A2A','AUDIT'}:
         if metadata['security_domain_id']!=domain or publication_id is not None:
             raise PermissionError('Native source snapshots require their original domain')
@@ -85,6 +95,8 @@ def _resolve(tx,actor,domain,source,*,purpose=None,publication_id=None):
         if record.get('security_domain_id')!=domain:
             raise PermissionError('An explicit context publication is required')
         work._authorize(tx,actor,domain,write=False)
+        from .memory_quality import require_applicable
+        require_applicable(tx,source.revision_id)
         if record['content_digest']!=source.content_digest:
             raise ContinuityConflict('STALE_CONTENT','The referenced content digest does not match')
         def text(value):
@@ -104,7 +116,19 @@ def _resolve(tx,actor,domain,source,*,purpose=None,publication_id=None):
 def locate(tx,source):
     """Read locator metadata only; callers must authorize before body access."""
     family=source.family.value
-    if family in {'TASK','GRAPH','DB4A2A','AUDIT'}:
+    if family=='SOURCE':
+        row=tx.query_one("SELECT s.SECURITY_DOMAIN_ID,s.OWNER_PRINCIPAL_ID,d.CLASSIFICATION FROM CX_AGENT_SOURCES s "
+                         "JOIN CX_SECURITY_DOMAINS d ON d.SECURITY_DOMAIN_ID=s.SECURITY_DOMAIN_ID "
+                         "JOIN CX_AGENT_SOURCE_REVISIONS r ON r.SOURCE_ID=s.SOURCE_ID WHERE s.SOURCE_ID=:entity AND r.REVISION_ID=:revision",
+                         {'entity':source.entity_id,'revision':source.revision_id})
+        if not row:
+            raise PermissionError('Source access denied')
+        return row
+    if family=='WORKING_NOTE':
+        row=tx.query_one("SELECT n.SECURITY_DOMAIN_ID,n.OWNER_PRINCIPAL_ID,d.CLASSIFICATION "
+                         "FROM CX_WORK_NOTES n JOIN CX_SECURITY_DOMAINS d ON d.SECURITY_DOMAIN_ID=n.SECURITY_DOMAIN_ID "
+                         "WHERE n.NOTE_ID=:entity",{'entity':source.entity_id})
+    elif family in {'TASK','GRAPH','DB4A2A','AUDIT'}:
         from .continuity_native_sources import locate as native_locate
         row=native_locate(tx,source)
     elif family=='MEMORY':
@@ -135,6 +159,10 @@ def locate(tx,source):
 
 def publication_payload(tx,source,domain,*,actor):
     """Reconstruct an exact source only after explicit publication authorization."""
+    if source.family.value=='SOURCE':
+        raise PermissionError('Configured source evidence cannot bypass its current origin authority')
+    if source.family.value=='WORKING_NOTE':
+        raise PermissionError('Working notes cannot be published across domains')
     if source.family.value=='HANDOFF':
         from .continuity_handoff import _handoff_payload
         if not source.revision_id.isascii() or not source.revision_id.isdecimal() or str(int(source.revision_id))!=source.revision_id:
@@ -157,6 +185,8 @@ def publication_payload(tx,source,domain,*,actor):
                             "AND (v.VALID_UNTIL IS NULL OR v.VALID_UNTIL>CURRENT_TIMESTAMP)",{'entity':source.entity_id,'revision':source.revision_id})
         if not record:
             raise PermissionError('Source access denied')
+        from .memory_quality import require_applicable
+        require_applicable(tx,source.revision_id)
         fields={key:(record[key].read() if hasattr(record[key],'read') else record[key]) for key in ['title','body_text','memory_type','memory_scope','classification']}
         digest=memory._digest(*(fields[key] for key in ['title','body_text','memory_type','memory_scope','classification']))
         if digest!=source.content_digest or record['content_digest']!=source.content_digest:

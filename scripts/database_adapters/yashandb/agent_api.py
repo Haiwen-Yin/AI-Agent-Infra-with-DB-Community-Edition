@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Agent API
+"""AI Agent Infra v5.0.1 - Community Edition - Agent API
 
 Agent registration, session management, access audit logging,
 collaboration tracking, and Admin/Agent separation support.
@@ -147,6 +147,89 @@ def ensure_external_agent_identity(agent_id: str) -> None:
     if not _get_end_user_password_direct(agent_id):
         raise RuntimeError(f"No YashanDB login credentials for agent {agent_id}")
     _ensure_context_reader_identity(agent_id)
+
+
+def native_identity_snapshot(agent_id: str, *, _connection=None) -> Dict[str, Any]:
+    """Observe an exact managed PDB user without creating it or reading secrets."""
+    from contextlib import nullcontext
+    from .config import get_config
+    from . import connection as native_connection
+    from lib.native_identity import snapshot_record, set_principal, fingerprint, finish_snapshot, failure_code
+    value = snapshot_record(agent_id, "yashandb")
+    try:
+        cfg = get_config()
+        if cfg.agent.mode == "agent" or native_connection.get_current_agent_id():
+            raise RuntimeError("Owner context required")
+        with (nullcontext(_connection) if _connection is not None else get_connection()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT SYS_CONTEXT('USERENV','SESSION_USER'), SYS_CONTEXT('USERENV','CON_NAME') FROM DUAL")
+                owner, database = cur.fetchone()
+                if str(owner).upper() != str(cfg.database.user).upper() or not database:
+                    raise RuntimeError("Native Owner identity mismatch")
+                value["database_fingerprint"] = fingerprint("yashandb", cfg.database.dsn, owner, database)
+                cur.execute("SELECT p.STATUS,p.PERMISSION_VERSION,r.STATUS,r.AGENT_ROLE "
+                            "FROM CX_PRINCIPALS p JOIN AGENT_REGISTRY r ON r.AGENT_ID=p.PRINCIPAL_ID "
+                            "WHERE p.PRINCIPAL_ID=:agent_id AND p.PRINCIPAL_TYPE='AGENT'", {"agent_id": agent_id})
+                if not set_principal(value, cur.fetchone()):
+                    return finish_snapshot(value)
+                cur.execute("SELECT DB_USERNAME FROM CX_AGENT_DB_IDENTITIES WHERE AGENT_ID=:agent_id", {"agent_id": agent_id})
+                mappings = cur.fetchall()
+                username = _database_user_name(agent_id)
+                value["username"] = username
+                if len(mappings) != 1 or str(mappings[0][0]) != username:
+                    value["mapping_state"] = "AMBIGUOUS" if mappings else "UNAVAILABLE"
+                    return finish_snapshot(value)
+                if username in {str(owner).upper(), "SYS", "SYSTEM", "PDBADMIN", "AGENT_API"}:
+                    value["mapping_state"] = "PROTECTED"
+                    return finish_snapshot(value)
+                cur.execute("SELECT COUNT(*) FROM CX_AGENT_DB_IDENTITIES WHERE DB_USERNAME=:native_name", {"native_name": username})
+                value["mapping_state"] = "OBSERVED" if int(cur.fetchone()[0]) == 1 else "AMBIGUOUS"
+                cur.execute("SELECT ACCOUNT_STATUS FROM SYS.CX_AGENT_ACCOUNT_STATUS WHERE USERNAME=:native_name", {"native_name": username})
+                rows = cur.fetchall()
+                if len(rows) > 1:
+                    value["mapping_state"] = "AMBIGUOUS"
+                else:
+                    status = str(rows[0][0]) if rows else "ABSENT"
+                    value.update(native_state="OBSERVED", native_exists=bool(rows), account_status=status,
+                                 login_enabled=bool(rows) and "LOCKED" not in status.upper())
+    except Exception as exc:
+        value["error_code"] = failure_code(exc)
+    return finish_snapshot(value)
+
+
+def revoke_native_identity(agent_id: str, *, snapshot=None, reason: str) -> Dict[str, Any]:
+    """Lock one disabled managed local user; never CONTAINER=ALL or DROP."""
+    from . import connection as native_connection
+    from lib.native_identity import revoke_record, revocation_guard, failure_code
+    if not str(reason or "").strip():
+        raise ValueError("A revocation reason is required")
+    current = native_identity_snapshot(agent_id)
+    result = revoke_record(current)
+    denied = revocation_guard(current, snapshot)
+    if denied:
+        result.update(status="PENDING", error_code=denied)
+        return result
+    try:
+        with get_connection() as conn:
+            confirmed = native_identity_snapshot(agent_id, _connection=conn)
+            denied = revocation_guard(confirmed, current)
+            if denied:
+                result.update(status="PARTIAL", error_code=denied, post_snapshot=confirmed)
+                return result
+            retired = native_connection.evict_agent_connections(agent_id, revoke=True)
+            result.update(local_connections_closed=retired["closed"], local_connection_close_failures=retired["failed"])
+            if confirmed["login_enabled"] is not False:
+                with conn.cursor() as cur:
+                    cur.execute(f'ALTER USER "{_database_user_name(agent_id)}" ACCOUNT LOCK CONTAINER=CURRENT')
+                conn.commit()
+        post = native_identity_snapshot(agent_id)
+        result["post_snapshot"] = post
+        result["new_connections_blocked"] = (post.get("login_enabled") is False) if post.get("native_state") == "OBSERVED" else None
+        result["status"] = "COMPLETE" if result["new_connections_blocked"] and not retired["failed"] and not revocation_guard(post) else "PARTIAL"
+    except Exception as exc:
+        result.update(status="PARTIAL", error_code=failure_code(exc))
+        result["post_snapshot"] = native_identity_snapshot(agent_id)
+    return result
 
 
 def get_agent(agent_id: str) -> Optional[Dict[str, Any]]:

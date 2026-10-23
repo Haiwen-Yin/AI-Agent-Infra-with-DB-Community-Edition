@@ -1,6 +1,64 @@
 import zipfile
+import json
+
+import pytest
 
 import verify_deps
+
+
+@pytest.fixture
+def dependency_package(tmp_path, monkeypatch):
+    (tmp_path / "build-manifest.json").write_text(json.dumps({"delivery_product": {
+        "databases": ["oracle", "pg", "yashandb"]}}))
+    (tmp_path / "requirements").mkdir()
+    (tmp_path / "requirements.txt").write_text("httpx==0.28.1\n")
+    for database, driver in (("oracle", "oracledb"), ("pg", "psycopg2-binary"), ("yashandb", "yaspy")):
+        (tmp_path / "requirements" / (database + ".txt")).write_text(driver + ">=1.0\nhttpx==0.28.1\n")
+    config = tmp_path / "config.json"
+    config.write_text('{"database":{"type":"pg"}}')
+    monkeypatch.setenv("CX_CONFIG_PATH", str(config))
+    monkeypatch.delenv("CX_DATABASE_DIALECT", raising=False)
+    monkeypatch.delenv("CX_REQUIREMENTS_FILE", raising=False)
+    return tmp_path
+
+
+def test_verifier_automatically_includes_configured_database_driver(dependency_package):
+    root = dependency_package
+    assert verify_deps._requirements_path(root, root / "scripts") == root / "requirements/pg.txt"
+
+
+def test_verifier_cannot_override_selected_profile_with_shared_subset(dependency_package, monkeypatch):
+    root = dependency_package
+    monkeypatch.setenv("CX_REQUIREMENTS_FILE", str(root / "requirements.txt"))
+    with pytest.raises(ValueError, match="differ"):
+        verify_deps._requirements_path(root, root / "scripts")
+
+
+def test_verifier_rejects_cli_config_conflict(dependency_package):
+    root = dependency_package
+    with pytest.raises(ValueError, match="Conflicting"):
+        verify_deps._requirements_path(root, root / "scripts", database="oracle")
+
+
+def test_verifier_does_not_report_success_without_backend_selection(dependency_package):
+    root = dependency_package
+    (root / "config.json").unlink()
+    with pytest.raises(ValueError, match="Select database.type"):
+        verify_deps._requirements_path(root, root / "scripts")
+
+
+def test_verifier_cannot_use_another_backends_profile(dependency_package, monkeypatch):
+    root = dependency_package
+    monkeypatch.setenv("CX_REQUIREMENTS_FILE", str(root / "requirements/oracle.txt"))
+    with pytest.raises(ValueError, match="differ"):
+        verify_deps._requirements_path(root, root / "scripts")
+
+
+def test_verifier_rejects_driver_that_pip_would_skip(dependency_package):
+    root = dependency_package
+    (root / "requirements/pg.txt").write_text("psycopg2-binary>=2.9; python_version < '3.0'\nhttpx==0.28.1\n")
+    with pytest.raises(ValueError, match="must be unconditional"):
+        verify_deps._requirements_path(root, root / "scripts")
 
 
 def _metadata_wheel(tmp_path, package, version, requirements=()):

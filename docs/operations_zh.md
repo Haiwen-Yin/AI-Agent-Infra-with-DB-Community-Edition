@@ -1,4 +1,4 @@
-# 川序 v5.0.0 运维与技术说明（中文）
+# 川序 v5.0.1 运维与技术说明（中文）
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -22,7 +22,7 @@ DBA 负责创建并打开目标 PDB/数据库、表空间和独立 Owner，准�
 
 | 数据库 | 初始化前核对 |
 | --- | --- |
-| Oracle AI Database 26ai | 字符集 AL32UTF8、Partitioning、有效 Oracle Text、有限表空间配额及包内 `0_oracle_database_prerequisites.sql` 要求。Enterprise 还要具备 End User、DATA ROLE、DATA GRANT 与会话角色的完整前置。使用 Thin 客户端时须匹配数据库传输加密策略，不能关闭加密来绕过连接失败。 |
+| Oracle AI Database 26ai | 字符集 AL32UTF8、Partitioning、有效 Oracle Text、有限表空间配额及包内 `0_oracle_database_prerequisites.sql` 要求。Community 与 Enterprise 都需要受管 End User、DATA ROLE、DATA GRANT 与会话角色前置。使用 Thin 客户端时须匹配数据库传输加密策略，不能关闭加密来绕过连接失败。 |
 | PostgreSQL 18 | 已授权环境当前实测 18.6；核对 `0_pg_database_prerequisites.sql` 中的角色管理、AGE、向量和作业扩展前置。Owner 与每个 Agent 的 LOGIN 角色分开，强制行级安全不能由普通 Agent 绕过。 |
 | YashanDB 23.5.4+ | DSN 指向正确 PDB，确认独立用户、对象授权、字符集、表空间和包内前置脚本；使用匹配服务端的原生客户端与 yaspy。不能复制 Oracle 专用语法或错误码处理。 |
 
@@ -38,19 +38,23 @@ bash scripts/config_wizard.sh
 首次初始化不需要外部 Agent 或真实模型，由确定性的 Bootstrap Deployment Agent 执行。以下以 PostgreSQL Community 为例；其他版本将两个参数改为对应的 `oracle` / `yashandb` 和 `community` / `enterprise`：
 
 ```bash
-bash scripts/install_platform.sh initialize --version 5.0.0 \
+bash scripts/install_platform.sh initialize --version 5.0.1 \
   --database pg --edition community --config config.json
 bash start_web_server.sh start
 ```
 
 初始化会核对空目标、前置能力、逐步迁移及基线清单，交互输入初始管理员密码，建立 Human 管理员和平台原生管理 Agent，完成后退休临时部署身份。初始密码至少 12 位，包内没有通用默认密码。失败或中断时先查看部署状态和账本，通过同一部署入口恢复，不能手工跳过失败步骤或把未知结构认作空库。
 
+Oracle、YashanDB v5.0.1 新部署和升级前，还需由 SYS 在确切应用 PDB 中准备窄账户
+状态视图。此前置在预检前完成；视图缺失或不兼容时部署阻断，应用不会自动修复。
+详见[原生身份前置](native-identity_zh.md)。
+
 `config.json` 与加密主密钥应仅由运行用户读取，并纳入客户秘密管理；保留 `~/.ai-agent-infra/master.key`，不能另外生成不匹配的密钥来“修复”解密失败。Runtime / Business Agent 配置只包含各自独立凭据，不能携带 Owner 后备密码。
 
 启动后核对 `/api/health` 的进程与版本、`/api/ready` 的数据库就绪状态，以及管理页面中的数据库治理配置。健康响应、启动模式为 production、功能配置正常是不同检查，任何单项都不代表完成发布验收。需要再次核验部署时运行：
 
 ```bash
-bash scripts/install_platform.sh verify --version 5.0.0 \
+bash scripts/install_platform.sh verify --version 5.0.1 \
   --database pg --edition community --config config.json
 ```
 
@@ -60,7 +64,7 @@ bash scripts/install_platform.sh verify --version 5.0.0 \
 
 ## 升级与迁移
 
-v4.4.14 已正常发布，基线终点为 82；v4.4.15、v4.4.16、v4.5.0 终点为 97，v4.5.1 为 100，v4.5.2 与 v5.0.0 为 101。单库包以唯一的 `scripts/deploy/baseline_v*.json` 为部署合同；整合包使用 `scripts/deploy/数据库标识/` 下的对应清单，不根据历史模板文件名猜测终点。
+v4.4.14 已正常发布，基线终点为 82；v4.4.15、v4.4.16、v4.5.0 终点为 97，v4.5.1 为 100，v4.5.2 为 101，v5.0.0 为 102。v5.0.1 新增 103–105，目标合同不代表发布验收完成。单库包以唯一的 `scripts/deploy/baseline_v*.json` 为部署合同；整合包使用 `scripts/deploy/数据库标识/` 下的对应清单，不根据历史模板文件名猜测终点。
 
 升级前完成数据库原生备份和恢复演练，记录目标、已有迁移校验和、运行目录与进程。已有数据不得重新执行空库初始化。先运行包内迁移预检，再通过受约束部署入口确认并按账本顺序执行；预检失败时保留日志并修复原因，不清空目标库掩盖问题。
 
@@ -95,6 +99,15 @@ Human、平台 Agent、外部 Agent 和 Schema Owner 使用不同身份。凭据
 
 详细说明：[security 中文指南](security_zh.md)、[minimum-privileges 中文指南](minimum-privileges_zh.md)。
 
+## 原生 Agent 退役
+
+使用获授权的 Agent 退役流程，不能以直接账户 DDL 或兼容停用操作代替。检查
+`native_identity_revocation`，只有 `status=COMPLETE` 且 `audit_status=RECORDED`
+才能报告新登录/本地连接范围的结果。保留 PENDING/PARTIAL 失败供精确核对，保留
+身份映射与审计。Principal 已停用、令牌已撤销或账户已锁定，均不能证明全部外部
+存量会话或远端进程已停止。权限、处置条件、结果和事件阻断边界见
+[原生身份操作](native-identity_zh.md)。
+
 ## 模型、MCP 与 A2A
 
 模型及外部工具的治理姿态区分 `OFF`、`READ_ONLY`、`PROPOSAL_ONLY` 或 `GOVERNED_EXECUTOR`。MCP 连续性客户端通过已认证 Gateway 操作；动态工具必须逐项显式开放，调用时仍须当前授权。A2A 使用受控、有界的 HTTP JSON 1.0.1 路径，能力状态与实际授权分别检查，不宣称完整协议或 SDK 支持。模型生成的写入、策略变更、Agent 控制、外部联系和发布默认只能形成提案。
@@ -121,6 +134,27 @@ Principal、组织、安全域、任务、步骤、执行、工作契约、交�
 
 详细说明：[graph-engineering 中文指南](graph-engineering_zh.md)、[organization-governance 中文指南](organization-governance_zh.md)、
 [db4a2a 中文指南](db4a2a_zh.md)。
+
+## 记忆、资产与回答质量运维
+
+启用 v5.0.1 对应服务前检查 103–105 和实际结构清单。在 Dashboard“工作区 →
+工作交接”分别使用资产、便签、复盘/回答验收区域；平台配置保留在 Dashboard，
+Portal 会话不授予管理权限。完整示例与授权要求见[记忆与便签](memory-working-notes_zh.md)、
+[Agent 资产](agent-context-assets_zh.md)、[回答质量](answer-quality_zh.md)。
+
+回答不可用时，检查请求/实际检索策略、通道降级、证据状态、当前人员/Agent 读者、
+披露策略及模型健康/版本。区分没有证据、部分覆盖、来源矛盾和模型失败。通用模型
+回答需要当前补充授权和独立来源说明；关闭后，旧排队补充在派发/发布前也会被阻止。
+
+便签或资产过时，先读取 Work/便签/绑定版本、有效期和精确来源权限。不能通过静默
+替换预期版本来消除并发冲突。到期/退役可阻止当前上下文使用，同时保留获准历史。
+记忆恢复创建新后继并保存历史来源回执。
+
+同步失败时检查配置 HTTPS 地址/固定提交、允许路径/类型、总字节限制、凭据引用、
+来源状态、尝试次数、错误和当前租约栅栏。失败读取不能推进检查点，404 不授权删除
+先前发布知识。复盘或验收失败时保留原任务关联、冻结的模型/策略/来源修订及输出摘要。
+发送不明保持 `UNOBSERVED`，不自动重发或清理账本/租约。候选需独立审核并显式发布；
+最终回答按标准另做事实/引用审核。私有配置、加密证据和凭据不进入公开包或支持摘录。
 
 ## 发布判断
 

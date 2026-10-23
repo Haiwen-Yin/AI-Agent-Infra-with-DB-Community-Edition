@@ -18,7 +18,7 @@ def test_application_release_retains_complete_bootstrap_chain(monkeypatch, datab
 
 @pytest.mark.parametrize('current', [None, 'FAILED', 'APPLIED'])
 @pytest.mark.parametrize('historical', ['APPLIED', 'FAILED', 'TAMPERED'])
-@pytest.mark.parametrize('release', ['4.4.16', '4.5.0', '4.5.1'])
+@pytest.mark.parametrize('release', ['4.4.16', '4.5.0', '4.5.1', '4.5.2', '5.0.0', '5.0.1'])
 @pytest.mark.parametrize('implicit', [False, True])
 def test_historical_successor_does_not_override_current_failure(monkeypatch, current, historical, release, implicit):
     root = Path(__file__).resolve().parents[2]
@@ -45,6 +45,6 @@ def test_historical_successor_does_not_override_current_failure(monkeypatch, cur
     kwargs = {} if implicit else {'version': release}
     assert runner._step_objects_complete(None, 'pg', script, **kwargs) == (
         current == 'APPLIED' or current is None and historical == 'APPLIED')
-    fallback = {'4.4.16': ['4.4.15'], '4.5.0': ['4.4.16', '4.4.15'],
-                '4.5.1': ['4.5.0', '4.4.16', '4.4.15']}[release]
+    chain = ['4.4.15', '4.4.16', '4.5.0', '4.5.1', '4.5.2', '5.0.0', '5.0.1']
+    fallback = list(reversed(chain[:chain.index(release)]))
     assert calls == ([release] + fallback if current is None else [release])

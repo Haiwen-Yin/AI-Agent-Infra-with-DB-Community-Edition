@@ -1,4 +1,4 @@
-# API reference v5.0.0
+# API reference v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -57,10 +57,16 @@ handled separately; repeated unauthorized calls are not retries.
 | `/api/platform/native-bootstrap` | Native management identity bootstrap/status |
 | `/api/principal-options`, `/api/users`, `/api/organization/*` | Current authorized identity directory and organization projections |
 | `/api/security-domains`, `/api/security-domains/{domain_id}/members` | Domain creation, membership, bindings and lifecycle |
+| `POST /api/agents/{agent_id}/offboard` | `agents.offboard` plus exact Agent access; platform revocation and separately audited native-login/local-connection result |
 
 Select Principals by readable name/type; submit the immutable identifier returned
 by the authorized candidate directory. Duplicate display names are not identities.
 Domain membership precedes Channel membership and is not replaced by it.
+For offboarding, inspect `native_identity_revocation` rather than treating HTTP
+success or a disabled Principal as complete native closure. A COMPLETE result
+also needs `audit_status=RECORDED`; it does not assert termination of external
+existing sessions. Preconditions, request fields and recovery are in
+[native identity operations](native-identity.md).
 
 ## External Agent registration and collaboration
 
@@ -69,14 +75,22 @@ Domain membership precedes Channel membership and is not replaced by it.
 2. The external runtime redeems the one-time grant at
    `POST /api/enrollment/redeem`, storing any one-time secret privately or
    supplying the configured public-key proof.
-3. Complete credential proof and activation through the advertised Gateway
-   workflow. Request an exact scoped token at `POST /api/gateway/token`.
+3. Complete credential proof and activation through `POST /api/gateway/activate`.
    Registration alone does not grant model, tool or data access.
-4. Use `POST /api/gateway/instances` for an authorized Domain/Channel binding.
+4. Exchange the registered credential proof at `POST /api/gateway/token` for
+   exact scopes. For the first instance, omit `instance_id` and submit the
+   already authorized Domain/Channel binding; retain the returned instance ID
+   and its token. For an existing instance, submit its exact ID and proof.
+   Creation does not grant Domain or Channel membership.
+5. Only when an additional instance is needed, use
+   `POST /api/gateway/instances` with the current bearer token and an authorized
+   binding, then exchange registered credential proof at `/api/gateway/token`
+   with the new instance ID for that instance's own token. A token remains
+   bound to its original instance; a body identifier cannot transfer it.
    Claim bounded delivery batches with
    `POST /api/gateway/events/claim` and acknowledge with
    `POST /api/gateway/events/{delivery_id}/ack` using the claim token.
-5. Send heartbeats, observe containment and handle credential expiry/revocation.
+6. Send heartbeats, observe containment and handle credential expiry/revocation.
    Recheck scope before each resource operation.
 
 The root [SKILL.md](../SKILL.md) and
@@ -137,6 +151,63 @@ Candidate creation does not publish truth. Snapshot resolution rechecks current
 sources, digests, validity and authority. Logical unavailability retains history;
 physical erasure is a separate retention/legal-hold workflow. Managed inputs and
 derived context preserve exact source linkage.
+
+## Memory quality, Agent assets and answer evaluation
+
+The following routes use the `/api/agent-extensions` prefix. Migration 103
+provides temporal evidence, working notes and retrospectives; 104 provides
+assets, synchronization and context-budget facts; 105 provides durable final
+answer runs. Verify all three actual schemas as well as their APPLIED checksums
+before use. Their presence does not establish release acceptance.
+
+| Method and suffix | Required route action; purpose |
+|---|---|
+| `POST /memory/time-evidence` | `workspaces.read`; read authorized exact memory-time facts |
+| `POST /memory/{family_id}/restore` | `workspaces.write`; restore history as a new successor |
+| `POST /memory/reconciliations`, `GET /memory/reconciliations/{proposal_id}`, `POST .../{proposal_id}/reviews` | Workspace write/read/write; propose and independently review exact memory relationships |
+| `GET/POST /works/{work_id}/notes`, `GET /work-notes/{note_id}` | Workspace read/write/read; list, create and read typed Work notes |
+| `POST /work-notes/{note_id}/revisions`, `POST .../{note_id}/state` | `workspaces.write`; versioned note edits and retirement |
+| `POST /retrospectives`, `GET /retrospectives/{job_id}`, `POST .../{job_id}/run` | Workspace write/read/write; explicit Task-linked model job producing a pending candidate |
+| `GET /directory`, `POST /directory/recommend`, `POST /directory/load` | `workspaces.read`; authorized metadata selection and exact content loading |
+| `GET/POST /asset-bindings`, `GET /asset-bindings/{binding_id}` | Workspace read / `agents.operate` / workspace read; Agent asset eligibility |
+| `POST /asset-bindings/{binding_id}/revisions`, `POST .../{binding_id}/state` | `agents.operate`; expected-version changes |
+| `POST /asset-bindings/assemble` | `workspaces.write`; assemble currently authorized bound sources |
+| `GET/POST /sources`, `GET /sources/{source_id}`, `POST .../{source_id}/state` | Workspace read / `platform.manage` / workspace read / `platform.manage`; configured HTTPS or pinned GitHub source |
+| `POST /sources/{source_id}/sync`, `GET /source-sync-jobs/{job_id}`, `POST .../{job_id}/run` | `agents.operate` / workspace read / `agents.operate`; explicit fenced incremental import |
+| `POST /context/budget`, `POST /context/derive`, `GET /context/derivations/{derivation_id}` | `workspaces.read`; conservative budget and source-bound derivation |
+| `GET/POST /answer-evaluation/cases`, `POST /answer-evaluation/results` | `platform.manage`; versioned cases and explicitly reported results |
+| `POST /answer-evaluation/rubrics`, `POST /answer-evaluation/runs`, `GET /answer-evaluation/runs/{run_id}` | `platform.manage`; frozen standards and queued final-answer evaluation |
+| `POST /answer-evaluation/runs/{run_id}/execute`, `POST .../{run_id}/reviews` | `platform.manage`; explicit generation and independent Human review of the exact output digest |
+
+Route actions are prerequisites. Services also check current Work/Domain,
+ownership, Agent visibility and every underlying source; Memory restoration
+needs `memory.write`, source management checks Knowledge permissions, and
+reconciliation review requires an independent authorized reviewer. Never infer
+these from Domain membership or a route grant alone. Writes require CSRF for a
+Human session. Conflicts require re-reading the relevant current version;
+idempotency keys cannot be reused for different payloads.
+
+The time-evidence, restore and reconciliation endpoints use a `value` object
+wrapper. For example, `POST /memory/{family_id}/restore` takes:
+
+```json
+{
+  "value": {
+    "expected_version_id": "CURRENT_VERSION_ID",
+    "historical_version_id": "HISTORICAL_VERSION_ID",
+    "reason": "Restore the reviewed historical content as a new version",
+    "idempotency_key": "restore-request-001"
+  }
+}
+```
+
+Use actual IDs from an authorized read. Note, asset, source and quality models
+use their typed bodies directly, without that wrapper. Note creation includes
+`expected_work_version`; note/asset/source updates use `expected_version`.
+Examples, limits and recovery steps are in [memory and working notes](memory-working-notes.md),
+[Agent assets](agent-context-assets.md) and [answer quality](answer-quality.md).
+Source import never automatically publishes Knowledge. Queuing a job never
+proves generation, delivery or successful factual review.
 
 ## Models, Embedding and governance
 

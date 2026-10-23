@@ -1,4 +1,4 @@
-# Migration guide v5.0.0
+# Migration guide v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -10,6 +10,9 @@ This package supports **oracle, pg, yashandb**. Its generated baseline manifest 
 checksums define the ordered deployment contract. v5.0.0 preserves the existing
 schema and adds `102_v5_0_0_network_access.sql` for source IP policy entities.
 Packaging and product identity changes do not justify modifying applied SQL.
+v5.0.1 adds migrations 103–105 for memory quality, context assets and final-answer
+evaluation; its generated target ends at 105. This target description does not
+declare completed database or release acceptance.
 
 Single-backend baselines are at `scripts/deploy/baseline_v*.json`. In the
 unified Community package, each backend has exactly one baseline under
@@ -47,13 +50,24 @@ or support archive. Confirm prerequisites from the selected backend and
 [minimum privileges](minimum-privileges.md); an ordinary Agent must not acquire
 the deployment owner's credentials.
 
+Before upgrading an Oracle or YashanDB installation to v5.0.1, have SYS apply
+the selected backend's separate `0_<database>_v5_0_1_native_identity_prerequisites.sql`
+in the exact existing application PDB. It creates the narrowly projected,
+read-only `SYS.CX_AGENT_ACCOUNT_STATUS` interface and grants only the exact
+Owner SELECT without grant option. This administrator action is not an
+application migration, is not run automatically by the installer, and does not
+change historical SQL/checksums or terminal migration 105. Read-only preflight
+must block a missing, inaccessible or incompatible interface; do not bypass the
+check with DBA, full dictionary access or Owner credentials for Agents.
+See [native identity prerequisites and revocation](native-identity.md).
+
 ## Run the journaled upgrade
 
 Use the installed package's Python environment and work from its root:
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
@@ -94,6 +108,18 @@ checked, not discarded.
 | 98–100 | Agent extensions, fixed-framework lock and root-filesystem digest |
 | 101 | Unified A2A/DB4A2A Task Plan/Step association and fenced attempts |
 | 102 | Source IP policy pointer, immutable revisions and rules; default disabled |
+| 103 | Memory-time/reconciliation/restore facts, immutable working notes and explicit Task-linked retrospectives |
+| 104 | Context budgets/representations, Agent asset bindings, configured source revisions and fenced sync/import checkpoints |
+| 105 | Versioned answer rubrics, Task-linked runs, encrypted input/output, exact sources and independent Human reviews |
+
+For a v5.0.1 target, verify all three added scripts and schema manifests, including
+their actual tables, keys, constraints and native protection. A successful 105
+ledger entry does not imply that 103/104 objects exist. Source/model jobs reuse
+the existing Task continuity chain; do not introduce a second scheduler or grant
+Agent SQL access to their control-plane tables. New time fields remain unknown
+for historical evidence that has no reliable event time; never backfill an
+invented local timestamp. See [memory evidence](memory-working-notes.md),
+[Agent assets](agent-context-assets.md) and [answer quality](answer-quality.md).
 
 PostgreSQL retains service-side stable-plan validation where the historical
 status-partitioned Task Plan table has no global PLAN_ID key. This is an
@@ -107,10 +133,10 @@ checksum, skip a failed fragment or assume an interrupted statement committed.
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -124,7 +150,7 @@ verified, stop and use the database's documented recovery procedure.
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json
 ```
 

@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Event Bus + Hook Execution
+"""AI Agent Infra v5.0.1 - Community Edition - Event Bus + Hook Execution
 
 Event publishing, subscription management, and LOOP_HOOKS execution engine.
 Agent capability discovery.

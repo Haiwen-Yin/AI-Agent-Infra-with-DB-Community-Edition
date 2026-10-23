@@ -8,6 +8,7 @@ selected database.
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -48,7 +49,15 @@ def test_legacy_fusion_scheduler_is_not_active():
 
 def test_versioned_memory_lifecycle_round_trip():
     marker = f"v432-live-{uuid.uuid4().hex[:12]}"
-    actor = "admin"
+    principal = lifecycle.execute_query_one(
+        "SELECT p.PRINCIPAL_ID FROM CX_PRINCIPALS p "
+        "JOIN CX_HUMAN_IDENTITIES i ON i.PRINCIPAL_ID=p.PRINCIPAL_ID "
+        "WHERE i.IDENTITY_TYPE='LOCAL' AND i.USERNAME=:username "
+        "AND i.STATUS='ACTIVE' AND p.STATUS='ACTIVE'",
+        {"username": "admin"},
+    )
+    assert principal, "The isolated installation must have an active admin Principal"
+    actor = str(principal["principal_id"])
     first = lifecycle.create_family(
         {
             "title": f"{marker} source",
@@ -63,6 +72,15 @@ def test_versioned_memory_lifecycle_round_trip():
     )
     family_id = first["family_id"]
     first_version_id = first["version_id"]
+
+    version = json.loads((PACKAGE_ROOT / "build-manifest.json").read_text())["version"]
+    if tuple(int(part) for part in version.split(".")) >= (5, 0, 1):
+        time_facts = lifecycle.execute_query_one(
+            "SELECT CREATED_BY,EVENT_TIME_STATE FROM CX_MEMORY_TIME_FACTS WHERE VERSION_ID=:version_id",
+            {"version_id": first_version_id},
+        )
+        assert time_facts and time_facts["created_by"] == actor
+        assert time_facts["event_time_state"] == "UNKNOWN"
 
     family = lifecycle.get_family(family_id, include_history=True)
     assert family and family["current"]["version_id"] == first_version_id

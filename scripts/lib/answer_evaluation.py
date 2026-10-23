@@ -103,5 +103,7 @@ def run_shared_case(actor, case_id, case_version, agent_id, profile_id, configur
     observed_entities = {item.get('entity_id') for item in retrieval['items']}
     passed = retrieval['status'] == case['expected_mode'] and expected_entities.issubset(observed_entities)
     policy_digest = digest(configured)
-    result = record_result(actor, case_id, case_version, profile_id, profile_version, entry_kind, prepared['answer_source'], passed, max(0, round((time.monotonic() - started) * 1000)), policy_digest, {'retrieval_status': retrieval['status'], 'retrieval_mode': retrieval.get('retrieval_mode'), 'citations': prepared['citations'], 'missing_parts': retrieval.get('missing_parts', [])})
-    return {'case': case, 'retrieval': retrieval, 'prepared': {key: value for key, value in prepared.items() if key != 'messages'}, 'result': result}
+    result = record_result(actor, case_id, case_version, profile_id, profile_version, entry_kind, prepared['answer_source'], passed, max(0, round((time.monotonic() - started) * 1000)), policy_digest, {'evaluation_phase': 'RETRIEVAL_PREPARATION', 'final_answer_observed': False, 'retrieval_status': retrieval['status'], 'retrieval_mode': retrieval.get('retrieval_mode'), 'citations': prepared['citations'], 'missing_parts': retrieval.get('missing_parts', [])})
+    return {'case': case, 'retrieval': retrieval, 'prepared': {key: value for key, value in prepared.items() if key != 'messages'}, 'result': result,
+            'evaluation_phase': 'RETRIEVAL_PREPARATION', 'final_answer_observed': False,
+            'next_operation': 'answer-evaluation/runs'}

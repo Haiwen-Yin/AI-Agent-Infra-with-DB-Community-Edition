@@ -1,4 +1,4 @@
-# Chuanxu v5.0.0 Operations and Technical Documentation
+# Chuanxu v5.0.1 Operations and Technical Documentation
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -42,7 +42,7 @@ not create clusters, change firewalls or replace DBA authorization.
 
 | Database | Check before initialization |
 | --- | --- |
-| Oracle AI Database 26ai | AL32UTF8, Partitioning, valid Oracle Text, bounded tablespace quotas and the packaged `0_oracle_database_prerequisites.sql`. Enterprise also requires End User, DATA ROLE, DATA GRANT and session-role prerequisites. Thin-client settings must match database transport encryption; do not disable encryption to bypass a connection failure. |
+| Oracle AI Database 26ai | AL32UTF8, Partitioning, valid Oracle Text, bounded tablespace quotas and the packaged `0_oracle_database_prerequisites.sql`. Both Community and Enterprise require the managed End User, DATA ROLE, DATA GRANT and session-role prerequisites. Thin-client settings must match database transport encryption; do not disable encryption to bypass a connection failure. |
 | PostgreSQL 18 | The authorized environment currently uses 18.6. Check role management, AGE, vector and job-extension prerequisites in `0_pg_database_prerequisites.sql`. The Owner and each Agent have separate LOGIN roles; ordinary Agents cannot bypass forced RLS. |
 | YashanDB 23.5.4+ | Verify the correct PDB DSN, separate user, object grants, character set, tablespaces and packaged prerequisites. Match the native client and yaspy to the server. Oracle-only syntax and error handling are not portable. |
 
@@ -67,7 +67,7 @@ Community. For other supported targets, select `oracle` / `yashandb` and
 `community` / `enterprise` as appropriate:
 
 ```bash
-bash scripts/install_platform.sh initialize --version 5.0.0 \
+bash scripts/install_platform.sh initialize --version 5.0.1 \
   --database pg --edition community --config config.json
 bash start_web_server.sh start
 ```
@@ -76,7 +76,11 @@ Initialization verifies an empty target, prerequisites, ordered migrations and
 the baseline manifest. It prompts for a deployment-specific administrator
 password of at least 12 characters, creates the Human administrator and native
 management Agent, and retires the temporary deployment identity. There is no
-universal default password. After interruption, inspect the journal and resume
+universal default password. Oracle/YashanDB v5.0.1 fresh deployment and upgrade
+also require SYS to prepare the narrow account-status view in the exact
+application PDB before preflight. A missing or incompatible view blocks
+deployment; the application does not repair it. See
+[native identity prerequisites](native-identity.md). After interruption, inspect the journal and resume
 through the same entry point. Do not skip failed steps or treat unknown objects
 as an empty target.
 
@@ -91,7 +95,7 @@ readiness, and the management page for database governance. These are separate
 checks; none alone establishes release acceptance. Reverify the deployment with:
 
 ```bash
-bash scripts/install_platform.sh verify --version 5.0.0 \
+bash scripts/install_platform.sh verify --version 5.0.1 \
   --database pg --edition community --config config.json
 ```
 
@@ -104,7 +108,8 @@ installation. See [deployment](deployment.md).
 ## Upgrade and migration
 
 v4.4.14 was a normal release ending at migration 82. v4.4.15, v4.4.16 and
-v4.5.0 end at 97; v4.5.1 ends at 100; v4.5.2 and v5.0.0 end at 101.
+v4.5.0 end at 97; v4.5.1 ends at 100; v4.5.2 ends at 101; v5.0.0 ends at
+102. v5.0.1 adds 103–105; its target contract does not establish release acceptance.
 Single-backend packages use their sole `scripts/deploy/baseline_v*.json`;
 unified packages use the selected manifest under `scripts/deploy/<database>/`.
 Historical template filenames do not define the deployment terminal.
@@ -170,6 +175,17 @@ carry messages without widening data access. Enterprise approval, audit and
 emergency controls are enforced by the server and database. See
 [security](security.md) and [minimum privileges](minimum-privileges.md).
 
+## Native Agent offboarding
+
+Use the authorized Agent offboarding workflow, not a direct account DDL or
+compatibility decommission operation. Inspect `native_identity_revocation` and
+require `status=COMPLETE` with `audit_status=RECORDED` for the reported
+new-login/local-connection result. Keep PENDING/PARTIAL failures for exact
+reconciliation and retain identity mappings and audit. A disabled Principal,
+revoked token or locked login does not prove every existing external session
+or remote process has stopped. Follow [native identity operations](native-identity.md)
+for permission, disposition, result and incident-containment boundaries.
+
 ## Models, MCP and A2A
 
 Model/tool posture distinguishes `OFF`, `READ_ONLY`, `PROPOSAL_ONLY` and
@@ -224,6 +240,41 @@ and immutable history provide concurrency control and traceability. Native
 resource links use stable IDs, never mutable Task status. See
 [Graph engineering](graph-engineering.md), [organization governance](organization-governance.md)
 and [DB4A2A](db4a2a.md).
+
+## Memory, assets and answer-quality operations
+
+Verify migrations 103–105 and actual schema manifests before enabling their
+v5.0.1 service paths. In Dashboard **Workspaces → Work continuity**, use the
+separate asset, note and retrospective/answer-evaluation panels. Platform
+configuration stays in Dashboard; a Portal session does not grant management.
+Follow [memory and notes](memory-working-notes.md),
+[Agent assets](agent-context-assets.md) and [answer quality](answer-quality.md)
+for complete examples and permission requirements.
+
+For an unavailable answer, inspect requested/actual retrieval strategy,
+channel degradations, evidence status, current Human/Agent readers, disclosure
+policy and Profile health/version. Distinguish no evidence, partial coverage,
+contradictions and model failure. A generic model answer requires current
+supplement permission and an independent source notice. Turning permission off
+also blocks an old queued supplement before dispatch/publication.
+
+For stale notes or assets, read Work/note/binding versions, validity and exact
+source authority before editing. Never solve a version conflict by silently
+substituting the latest expected version. Expiry/retirement can block current
+context use while authorized history remains retained. Restore memory as a new
+successor and keep its historical origin receipt.
+
+For sync failures, inspect the configured HTTPS endpoint/pinned commit, allowed
+paths/content types, total byte limit, credential reference, source state,
+attempt count, error and current lease/fence. No failed fetch may advance the
+checkpoint. A 404 does not authorize deleting previously published Knowledge.
+For retrospective or evaluation failures, preserve the original Task link,
+frozen Profile/policy/source revisions and output digest. Unknown model sends
+remain `UNOBSERVED`; do not automatically resend or clear ledger/lease state.
+Pending candidates require independent review and explicit publication; final
+answers require distinct factual/citation review where the rubric demands it.
+Keep private configuration, encrypted evidence and credentials outside public
+packages and support excerpts.
 
 ## Release decision
 

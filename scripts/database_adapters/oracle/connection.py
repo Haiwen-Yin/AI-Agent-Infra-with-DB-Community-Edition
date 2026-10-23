@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.1 - Community Edition - Database Connection Pool Manager
 
 Unified oracledb connection pool with bind-variable support.
 Replaces all SQLcl subprocess calls with direct oracledb access.
@@ -28,10 +28,12 @@ from contextvars import ContextVar
 import logging
 from contextlib import contextmanager
 from decimal import Decimal
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import get_config, DatabaseConfig, AgentModeConfig
+from lib.transaction_reads import TransactionReads, connection_identity
 
 _logger = logging.getLogger(__name__)
 
@@ -41,6 +43,15 @@ oracledb.defaults.fetch_lobs = False
 
 _pool: Optional[oracledb.ConnectionPool] = None
 _lock = threading.Lock()
+
+
+def _timestamp_input_type_handler(cursor, value, arraysize):
+    # python-oracledb otherwise binds datetime as DATE and discards fractions,
+    # even when the destination column is TIMESTAMP. Exact revision digests and
+    # UTC lease instants must retain their original microsecond precision.
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return cursor.var(oracledb.DB_TYPE_TIMESTAMP, arraysize=arraysize)
+    return None
 
 
 def _init_pool(cfg: DatabaseConfig) -> oracledb.ConnectionPool:
@@ -80,6 +91,7 @@ def get_connection():
     conn = pool.acquire()
     had_agent_context = get_current_agent_id() is not None
     try:
+        conn.inputtypehandler = _timestamp_input_type_handler
         apply_agent_context(conn)
         yield conn
     finally:
@@ -98,6 +110,8 @@ _current_agent_id: ContextVar[Optional[str]] = ContextVar("cx_oracle_agent_id", 
 
 _end_user_connections: Dict[tuple[int, str], oracledb.Connection] = {}
 _end_user_lock = threading.Lock()
+_end_user_generations: Dict[str, int] = {}
+_revoked_end_users: set[str] = set()
 
 _agent_eu_creds: Optional[Dict[str, str]] = None
 _agent_eu_lock = threading.Lock()
@@ -124,6 +138,15 @@ def set_agent_context(agent_id: Optional[str]) -> None:
 def get_current_agent_id() -> Optional[str]:
     return _current_agent_id.get()
 
+
+def _transaction_read_identity():
+    cfg = get_config()
+    credentials = _load_agent_eu_creds() if cfg.agent.mode == "agent" else None
+    return connection_identity(cfg, get_current_agent_id(), credentials)
+
+
+_transaction_reads = TransactionReads(_transaction_read_identity)
+
 def _agent_id_to_end_user_name(agent_id: str) -> str:
     return agent_id.replace('-', '_').upper()
 
@@ -147,6 +170,9 @@ def get_end_user_connection(agent_id: str) -> Optional[oracledb.Connection]:
         return _get_agent_mode_end_user_connection(agent_id)
 
     with _end_user_lock:
+        if agent_id in _revoked_end_users:
+            return None
+        generation = _end_user_generations.setdefault(agent_id, 0)
         existing = _end_user_connections.get(key)
         if existing:
             try:
@@ -160,32 +186,42 @@ def get_end_user_connection(agent_id: str) -> Optional[oracledb.Connection]:
                     pass
                 _end_user_connections.pop(key, None)
 
-        pwd = _get_end_user_password(agent_id)
-        if not pwd:
-            _logger.debug("No end user password for %s; denying independent connection", agent_id)
-            return None
+    pwd = _get_end_user_password(agent_id)
+    if not pwd:
+        _logger.debug("No end user password for %s; denying independent connection", agent_id)
+        return None
 
-        eu_name = _agent_id_to_end_user_name(agent_id)
-        db_cfg = cfg.database
-        try:
-            conn = oracledb.connect(
-                user=eu_name,
-                password=pwd,
-                dsn=db_cfg.dsn,
-            )
-            with conn.cursor() as cur:
-                cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {cfg.database.user}")
+    eu_name = _agent_id_to_end_user_name(agent_id)
+    db_cfg = cfg.database
+    conn = None
+    try:
+        conn = oracledb.connect(user=eu_name, password=pwd, dsn=db_cfg.dsn)
+        conn.inputtypehandler = _timestamp_input_type_handler
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {cfg.database.user}")
+        with _end_user_lock:
+            if agent_id in _revoked_end_users or _end_user_generations.get(agent_id, 0) != generation:
+                conn.close()
+                return None
             _end_user_connections[key] = conn
-            _logger.info("Created Deep Sec End User connection for %s (EU: %s)", agent_id, eu_name)
-            return conn
-        except oracledb.Error as e:
-            _logger.debug("End User connection failed for %s (EU: %s): %s", agent_id, eu_name, e)
-            return None
+        _logger.info("Created Deep Sec End User connection for %s (EU: %s)", agent_id, eu_name)
+        return conn
+    except oracledb.Error as e:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _logger.debug("End User connection failed for %s (EU: %s): %s", agent_id, eu_name, e)
+        return None
 
 
 def _get_agent_mode_end_user_connection(agent_id: str) -> Optional[oracledb.Connection]:
     key = (threading.get_ident(), agent_id)
     with _end_user_lock:
+        if agent_id in _revoked_end_users:
+            return None
+        generation = _end_user_generations.setdefault(agent_id, 0)
         existing = _end_user_connections.get(key)
         if existing:
             try:
@@ -207,9 +243,13 @@ def _get_agent_mode_end_user_connection(agent_id: str) -> Optional[oracledb.Conn
             password=creds["password"],
             dsn=creds["dsn"],
         )
+        conn.inputtypehandler = _timestamp_input_type_handler
         with conn.cursor() as cur:
             cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {cfg.database.user}")
         with _end_user_lock:
+            if agent_id in _revoked_end_users or _end_user_generations.get(agent_id, 0) != generation:
+                conn.close()
+                return None
             _end_user_connections[key] = conn
         _logger.info("Created Agent-mode End User connection for %s (EU: %s)", agent_id, creds["username"])
         return conn
@@ -218,14 +258,36 @@ def _get_agent_mode_end_user_connection(agent_id: str) -> Optional[oracledb.Conn
         return None
 
 
+def evict_agent_connections(agent_id: str, *, revoke: bool = False) -> dict:
+    """Retire only this Agent's local connections, including in-flight installs.
+
+    This does not claim to terminate other processes or external DB sessions.
+    """
+    with _end_user_lock:
+        _end_user_generations[agent_id] = _end_user_generations.get(agent_id, 0) + 1
+        if revoke:
+            _revoked_end_users.add(agent_id)
+        keys = [key for key in _end_user_connections if key[1] == agent_id]
+        retired = [(key, _end_user_connections.pop(key)) for key in keys]
+    closed = failed = 0
+    for key, conn in retired:
+        try:
+            conn.close()
+            closed += 1
+        except Exception:
+            failed += 1
+            # Keep failed closes retryable, but never return them from the
+            # normal (thread, Agent) cache lookup or overwrite a new connection.
+            with _end_user_lock:
+                _end_user_connections[(key[0], agent_id, "retired", id(conn))] = conn
+    return {"closed": closed, "failed": failed}
+
+
 def close_end_user_connections():
     with _end_user_lock:
-        for agent_id, conn in _end_user_connections.items():
-            try:
-                conn.close()
-            except Exception:
-                pass
-        _end_user_connections.clear()
+        agents = set(_end_user_generations) | {key[1] for key in _end_user_connections}
+    for agent_id in agents:
+        evict_agent_connections(agent_id)
 
 @contextmanager
 def get_connection_for_agent(agent_id: Optional[str] = None):
@@ -293,7 +355,7 @@ def execute(sql: str, params: Optional[Dict[str, Any]] = None) -> int:
 
 def execute_query(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     sql = sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())")
-    with get_connection_for_agent() as conn:
+    with _transaction_reads.connection(get_connection_for_agent) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params or {})
             columns = [col[0].lower() for col in cur.description]
@@ -391,9 +453,10 @@ def execute_transaction_callback(callback):
     with get_connection_for_agent() as conn:
         tx = _Transaction(conn)
         try:
-            result = callback(tx)
-            conn.commit()
-            return result
+            with _transaction_reads.bind(conn):
+                result = callback(tx)
+                conn.commit()
+                return result
         except Exception:
             conn.rollback()
             raise

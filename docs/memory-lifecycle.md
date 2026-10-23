@@ -1,4 +1,4 @@
-# Versioned Memory Lifecycle - AI Agent Infra with DB v5.0.0
+# Versioned Memory Lifecycle - AI Agent Infra with DB v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -33,6 +33,13 @@ cannot claim to recall content already consumed by a model or exported outside
 the platform.
 
 ## Representations, Chains, And Jobs
+
+For event time, observation/applicability intervals, exact reconciliation,
+restore-as-successor, Work notes and explicit retrospective jobs, see
+[memory evidence and working notes](memory-working-notes.md). These migration
+103 facts extend the current Memory/Work/candidate entities; they do not replace
+this lifecycle or authorize direct control-plane SQL. Historical missing event
+time remains unknown. Relation review and candidate publication are separate.
 
 One governed source representation can have atomic-fact, short, standard,
 topic, and chain summaries. Each records source versions, digest, generation
@@ -105,7 +112,7 @@ or hidden Dashboard control does not grant access.
 Run the journaled upgrade with a recoverable backup record:
 
 ```bash
-bash scripts/install_platform.sh upgrade --version 5.0.0 \
+bash scripts/install_platform.sh upgrade --version 5.0.1 \
   --edition community --database pg --config config.json \
   --confirm-database-backup
 ```

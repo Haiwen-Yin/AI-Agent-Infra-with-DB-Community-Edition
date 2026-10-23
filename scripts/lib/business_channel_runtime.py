@@ -41,6 +41,17 @@ def validate_grounding(agent_id, payload):
     contract = payload.get('knowledge_contract')
     if not isinstance(contract, dict) or contract.get('policy_version') != configured['version']:
         raise PermissionError('Channel knowledge policy changed; submit a new request')
+    source = payload.get('answer_source')
+    if (source is None and payload.get('messages') and not payload.get('knowledge_citations')
+            and not payload.get('knowledge_reply')):
+        source = 'MODEL_SUPPLEMENT'
+    if source is not None and (not isinstance(source, str) or source not in {
+            'MODEL_SUPPLEMENT', 'MIXED_SOURCES', 'KNOWLEDGE_GROUNDED', 'KNOWLEDGE_EXTRACTS',
+            'INSUFFICIENT_KNOWLEDGE', 'CLARIFICATION_REQUIRED'}):
+        raise PermissionError('Channel answer source is invalid')
+    may_supplement = configured['mode'] == 'KNOWLEDGE_FIRST' and configured['allow_model_supplement'] == 'Y'
+    if source in {'MODEL_SUPPLEMENT', 'MIXED_SOURCES'} and not may_supplement:
+        raise PermissionError('Channel model supplementation is no longer permitted')
     dispatch = payload['channel_dispatch']
     agent = validate(agent_id, dispatch)['agent']
     if agent['llm_profile_id'] != contract.get('profile_id'):
@@ -80,8 +91,14 @@ def require_result_reader(principal, agent_id, execution_id):
     return source if row.get('status') in {'CLAIMED', 'COMPLETED'} else None
 
 
+@identity_api.cached_authorization()
 def filter_messages(principal, messages):
-    """Use the same read guard for Dashboard polling and Agent Gateway events."""
+    """Guard every reply using one operation's role/permission snapshot.
+
+    Membership, execution provenance and knowledge citations remain checked
+    for each reply. The existing bounded authorization context is discarded
+    on return (including errors), so later polls see current permissions.
+    """
     for message in messages:
         message.pop('answer_source', None)
         if (message.get('channel_id') == 'CH_PLATFORM_ADMINISTRATION'
@@ -180,13 +197,7 @@ def enqueue(actor: str, channel_id: str, message_id: str, agent_id: str,
         configured = _policy()
         payload['knowledge_contract'] = {'policy_version': configured['version'],
                                          'profile_id': agent['llm_profile_id']}
-        try:
-            knowledge = answer_planning.retrieve(actor, agent_id, body)
-        except (PermissionError, knowledge_grounding.GroundingError):
-            # Knowledge is an optional channel context.  A missing Agent
-            # grant must not turn an otherwise valid conversational mention
-            # into a dispatch failure; the model receives no source data.
-            knowledge = {'items': [], 'status': 'UNAVAILABLE'}
+        knowledge = answer_planning.retrieve(actor, agent_id, body)
         readers = _audience(dispatch) if knowledge['items'] else set()
         shared_sources = []
         for item in knowledge['items']:
@@ -199,6 +210,8 @@ def enqueue(actor: str, channel_id: str, message_id: str, agent_id: str,
         planned = answer_planning.prepare(body, agent['llm_profile_id'], configured, knowledge)
         payload['answer_source'] = planned['answer_source']
         payload['retrieval_status'] = planned['retrieval_status']
+        payload['answer_metadata'] = planned['answer_metadata']
+        payload['answer_source_scope'] = planned['answer_source_scope']
         payload['knowledge_citations'] = planned['citations']
         if planned['knowledge_reply'] is not None:
             payload['knowledge_reply'] = planned['knowledge_reply']

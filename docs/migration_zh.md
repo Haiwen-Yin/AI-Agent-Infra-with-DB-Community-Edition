@@ -1,4 +1,4 @@
-# 迁移指南 v5.0.0
+# 迁移指南 v5.0.1
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -7,6 +7,8 @@
 ## 当前合同
 
 此包支持 **oracle, pg, yashandb**。其生成的基线清单和校验和定义了有序的部署合同。v5.0.0 保留现有架构，并通过 `102_v5_0_0_network_access.sql` 增加来源 IP 策略实体；打包和产品标识的变化不构成重命名或修改已应用 SQL 的理由。
+v5.0.1 新增 103–105，分别提供记忆质量、上下文资产及最终回答验收，生成的目标终点
+为 105。这里说明目标合同，不表示数据库或发布验收已经完成。
 
 单后端基线位于 `scripts/deploy/baseline_v*.json`。在统一的 Community 包中，每个后端在 `scripts/deploy/<database>/` 下恰好有一个基线。仅使用所选后端的脚本、驱动和配置。OpenTenBase AgentX 只能使用 PostgreSQL 链。
 
@@ -28,13 +30,21 @@
 
 保留私有配置、主加密密钥和 `.runtime/deployment/` 日志/密钥文件。切勿将这些放入公共发布或支持归档中。从所选后端确认先决条件以及 [最小权限](minimum-privileges_zh.md)；普通 Agent 不得获取部署所有者的凭据。
 
+Oracle、YashanDB 升级至 v5.0.1 前，需由 SYS 在原有的确切应用 PDB 中单独执行
+本底座的 `0_<database>_v5_0_1_native_identity_prerequisites.sql`。该管理员脚本
+创建仅投影账户名称和状态的只读 `SYS.CX_AGENT_ACCOUNT_STATUS`，只向确切 Owner
+授予不带转授权权利的 SELECT。它不是应用迁移，不由安装器自动执行，也不修改
+历史 SQL、校验和或终点 105。接口缺失、不可读或结构不符时，只读预检必须阻断；
+不能通过 DBA、完整目录访问或给 Agent 配置 Owner 凭据绕过。
+详见[原生身份前置与撤销操作](native-identity_zh.md)。
+
 ## 按账本升级
 
 使用已安装包中的 Python 环境，并从其根目录开始工作：
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
@@ -62,6 +72,15 @@ Oracle 任务迁移 85 使用可恢复的复制，并在最终切换前进行检
 | 98–100 | Agent 扩展、固定框架锁和根文件系统摘要 |
 | 101 | 统一的 A2A/DB4A2A Task Plan/Step 关联和带围栏令牌的执行尝试 |
 | 102 | 来源 IP 策略指针、不可变修订及规则，初始关闭 |
+| 103 | 记忆时间/协调/恢复事实、不可变工作便签及显式关联任务的复盘 |
+| 104 | 上下文预算/表示、Agent 资产绑定、配置来源修订及带栅栏的同步/导入检查点 |
+| 105 | 版本化回答标准、关联任务的运行、加密输入/输出、精确来源及独立人工审核 |
+
+v5.0.1 目标需检查三项新脚本及结构清单，包括实际表、键、约束和原生保护。
+终点 105 账本成功不代表 103、104 对象存在。来源/模型作业复用既有任务连续性链，
+不另建调度器，也不授予 Agent 对控制面表的 SQL 访问。历史证据缺少可靠事件时间时，
+新时间字段保持未知，不得补造本地时间戳。见[记忆证据](memory-working-notes_zh.md)、
+[Agent 资产](agent-context-assets_zh.md)及[回答验收](answer-quality_zh.md)。
 
 PostgreSQL 在历史状态分区 Task Plan 表没有全局 PLAN_ID 键的情况下，保留服务端的稳定计划验证。这是一个明确的契约，而不是跳过验证的许可。
 
@@ -71,10 +90,10 @@ PostgreSQL 在历史状态分区 Task Plan 表没有全局 PLAN_ID 键的情况�
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -84,7 +103,7 @@ bash scripts/install_platform.sh resume \
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.0 \
+  --database pg --edition community --version 5.0.1 \
   --config /absolute/path/config.json
 ```
 

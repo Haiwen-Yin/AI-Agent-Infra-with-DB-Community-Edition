@@ -101,6 +101,36 @@ def test_model_failure_never_becomes_simulated_success(flow):
     with pytest.raises(RuntimeError): call()
 
 
+def test_mixed_answer_keeps_source_scope_when_model_omits_it_and_rechecks_access(flow, monkeypatch):
+    policy, retrieval, citation, model = flow
+    monkeypatch.setattr(portal, 'policy', lambda: dict(policy))
+    policy.update(disclosure_profiles=['model'], allow_model_supplement='Y')
+    item = {'entity_id': 'k1', 'title': 'Atlas routing', 'content': 'Atlas routing uses route-742.', 'digest': 'd1'}
+    retrieval.side_effect = lambda actor, agent, query, **kw: {
+        'status': 'MATCHED' if query == 'Atlas routing' else 'NO_MATCH',
+        'items': [item] if query == 'Atlas routing' else []}
+    model.return_value = {'content': 'Based on authorized sources: route-742 [1]. Light bends at a boundary.'}
+    def mixed():
+        return portal.answer({'principal_id': 'human', 'agent_id': 'agent'},
+                             'Atlas routing and explain refraction briefly.', {'profile_id': 'model'}, supplement=True)
+    result = mixed()
+    assert result['answer_source'] == 'MIXED_SOURCES'
+    assert 'question part(s) 2 have no authorized evidence' in result['reply']
+    assert result['reply'].endswith(model.return_value['content'])
+    assert result['citations'][0]['entity_id'] == 'k1'
+    citation.assert_called_with('human', 'agent', 'k1', 'd1')
+    citation.side_effect = PermissionError('revoked after generation')
+    with pytest.raises(PermissionError):
+        mixed()
+    citation.side_effect = None
+    def change_policy(*args):
+        policy['version'] += 1
+        return {'content': 'route-742 [1]. Light bends.'}
+    model.side_effect = change_policy
+    with pytest.raises(knowledge.GroundingError, match='changed during'):
+        mixed()
+
+
 def test_query_has_both_acl_predicates(monkeypatch):
     monkeypatch.setattr(knowledge, "require_reader", Mock())
     query = Mock(return_value=[])

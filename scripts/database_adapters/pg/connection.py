@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.1 - Community Edition - Database Connection Pool Manager
 
 psycopg2-based connection pool with parameterized query support.
 Supports Admin/Agent separation modes (standalone, admin, agent).
@@ -18,6 +18,7 @@ from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor
 
 from .config import get_config, DatabaseConfig, AgentModeConfig
+from lib.transaction_reads import TransactionReads, connection_identity
 
 logger = logging.getLogger(__name__)
 DATABASE_DIALECT = "postgresql"
@@ -83,6 +84,9 @@ def get_pool() -> pg_pool.ThreadedConnectionPool:
 _agent_eu_creds = None
 _agent_eu_lock = threading.Lock()
 _end_user_connections: dict = {}
+_end_user_lock = threading.Lock()
+_end_user_generations: dict[str, int] = {}
+_revoked_end_users: set[str] = set()
 
 
 def _load_agent_eu_creds() -> dict:
@@ -140,11 +144,9 @@ def _load_admin_mode_agent_credentials(agent_id: str) -> dict:
 def get_connection():
     cfg = get_config()
     if cfg.agent.mode == "agent":
-        conn = _get_agent_mode_connection()
-        try:
+        creds = _load_agent_eu_creds()
+        with _independent_agent_connection(creds, creds.get("agent_id") or "agent") as conn:
             yield conn
-        finally:
-            conn.close()
         return
     pool = get_pool()
     slots = _pool_slots
@@ -193,8 +195,65 @@ def set_agent_context(agent_id: Optional[str]) -> None:
     _agent_context.set(agent_id)
 
 
+def _transaction_read_identity():
+    cfg = get_config()
+    credentials = _load_agent_eu_creds() if cfg.agent.mode == "agent" else None
+    return connection_identity(cfg, get_current_agent_id(), credentials)
+
+
+_transaction_reads = TransactionReads(_transaction_read_identity)
+
+
+def evict_agent_connections(agent_id: str, *, revoke: bool = False) -> dict:
+    """Close only locally tracked connections, never shared roles or sessions."""
+    with _end_user_lock:
+        _end_user_generations[agent_id] = _end_user_generations.get(agent_id, 0) + 1
+        if revoke:
+            _revoked_end_users.add(agent_id)
+        keys = [key for key in _end_user_connections if key[1] == agent_id]
+        retired = [(key, _end_user_connections.pop(key)) for key in keys]
+    closed = failed = 0
+    for key, conn in retired:
+        try:
+            conn.close()
+            closed += 1
+        except Exception:
+            failed += 1
+            with _end_user_lock:
+                _end_user_connections[(key[0], agent_id, "retired", id(conn))] = conn
+    return {"closed": closed, "failed": failed}
+
+
 def close_end_user_connections():
-    pass
+    with _end_user_lock:
+        agents = set(_end_user_generations) | {key[1] for key in _end_user_connections}
+    for agent_id in agents:
+        evict_agent_connections(agent_id)
+
+
+@contextmanager
+def _independent_agent_connection(creds: dict, agent_id: str):
+    with _end_user_lock:
+        if agent_id in _revoked_end_users:
+            raise RuntimeError("Agent native identity is revoked")
+        generation = _end_user_generations.setdefault(agent_id, 0)
+    conn = _connect_with_credentials(creds)
+    key = (threading.get_ident(), agent_id, id(conn))
+    try:
+        apply_agent_context(conn, agent_id)
+        with _end_user_lock:
+            if agent_id in _revoked_end_users or _end_user_generations.get(agent_id, 0) != generation:
+                raise RuntimeError("Agent native identity changed during connection")
+            _end_user_connections[key] = conn
+        yield conn
+    finally:
+        with _end_user_lock:
+            _end_user_connections.pop(key, None)
+        try:
+            if not conn.closed:
+                conn.rollback()
+        finally:
+            conn.close()
 
 
 @contextmanager
@@ -206,27 +265,13 @@ def get_connection_for_agent(agent_id: Optional[str] = None):
         configured_agent_id = creds.get("agent_id")
         if aid and configured_agent_id and aid != configured_agent_id:
             raise RuntimeError("Agent identity does not match agent_config.json")
-        conn = _get_agent_mode_connection()
-        try:
-            apply_agent_context(conn, configured_agent_id or aid)
+        with _independent_agent_connection(creds, configured_agent_id or aid or "agent") as conn:
             yield conn
-        finally:
-            try:
-                conn.rollback()
-            finally:
-                conn.close()
         return
     if aid:
         creds = _load_admin_mode_agent_credentials(aid)
-        conn = _connect_with_credentials(creds)
-        try:
-            apply_agent_context(conn, aid)
+        with _independent_agent_connection(creds, aid) as conn:
             yield conn
-        finally:
-            try:
-                conn.rollback()
-            finally:
-                conn.close()
         return
     with get_connection() as conn:
         yield conn
@@ -247,6 +292,7 @@ def clear_agent_context(conn) -> None:
 
 def close_pool():
     global _pool, _pool_slots
+    close_end_user_connections()
     if _pool is not None:
         _pool.closeall()
         _pool = None
@@ -335,7 +381,7 @@ def execute(sql: str, params: Optional[Dict[str, Any]] = None) -> int:
 
 def execute_query(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     sql, pg_params = _convert_params(sql, params)
-    with get_connection_for_agent() as conn:
+    with _transaction_reads.connection(get_connection_for_agent) as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, pg_params)
             return [dict(row) for row in cur.fetchall()]
@@ -343,11 +389,12 @@ def execute_query(sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dic
 
 def execute_query_one(sql: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     sql, pg_params = _convert_params(sql, params)
-    with get_connection_for_agent() as conn:
+    with _transaction_reads.connection(get_connection_for_agent) as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, pg_params)
             row = cur.fetchone()
-            conn.commit()
+            if not _transaction_reads.owns(conn):
+                conn.commit()
             return dict(row) if row else None
 
 
@@ -587,9 +634,10 @@ def execute_transaction_callback(callback):
     with get_connection_for_agent() as conn:
         tx = _Transaction(conn)
         try:
-            result = callback(tx)
-            conn.commit()
-            return result
+            with _transaction_reads.bind(conn):
+                result = callback(tx)
+                conn.commit()
+                return result
         except Exception:
             conn.rollback()
             raise

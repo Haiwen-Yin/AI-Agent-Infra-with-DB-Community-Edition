@@ -3301,6 +3301,8 @@ def offboard_agent(actor_principal_id: str, agent_id: str, *, owner_type: str = 
     _require(actor_principal_id, "agents.offboard")
     if not _agent_visible_to(actor_principal_id, agent_id):
         raise PermissionError("Agent is outside the delegated scope")
+    if str(agent_id).upper().startswith("SYSTEM_"):
+        raise IdentityError("System Agents are not offboarded through this workflow")
     disposition = governed_contracts.owner_disposition(
         owner_type=owner_type, has_responsible_group=has_responsible_group,
         agent_environment=environment, evidence=reason,
@@ -3310,6 +3312,8 @@ def offboard_agent(actor_principal_id: str, agent_id: str, *, owner_type: str = 
         "SYSTEM_MANAGED": "ACTIVE", "UNCLAIMED": "OWNER_TRANSFER_REQUIRED", "DEMO_ISOLATED": "DISABLED",
     }[disposition["disposition"]]
     flag = True if _dialect() in {"postgresql", "pg"} else "Y"
+    native_required = bool(disposition["revoke_credentials"]) and target_status != "ACTIVE"
+    native_operation_id = _id("NR") if native_required else None
     def work(tx: Any) -> Dict[str, Any]:
         current = _row(tx.query_one(
             "SELECT PRINCIPAL_ID, STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID = :agent_id AND PRINCIPAL_TYPE = 'AGENT' FOR UPDATE",
@@ -3317,8 +3321,11 @@ def offboard_agent(actor_principal_id: str, agent_id: str, *, owner_type: str = 
         ))
         if not current:
             raise IdentityError("Agent is unavailable")
+        registry = _row(tx.query_one("SELECT AGENT_ROLE FROM AGENT_REGISTRY WHERE AGENT_ID=:agent_id", {"agent_id": agent_id}))
+        if registry and str(registry.get("agent_role", "")).upper() == "SYSTEM":
+            raise IdentityError("System Agents are not offboarded through this workflow")
         tx.execute(
-            "UPDATE CX_PRINCIPALS SET STATUS = :status, UPDATED_AT = CURRENT_TIMESTAMP "
+            "UPDATE CX_PRINCIPALS SET STATUS = :status, PERMISSION_VERSION=PERMISSION_VERSION+1, UPDATED_AT = CURRENT_TIMESTAMP "
             "WHERE PRINCIPAL_ID = :agent_id AND PRINCIPAL_TYPE = 'AGENT'",
             {"status": target_status, "agent_id": agent_id},
         )
@@ -3353,13 +3360,18 @@ def offboard_agent(actor_principal_id: str, agent_id: str, *, owner_type: str = 
             "SELECT :history_id, :agent_id, r.PRINCIPAL_ID, NULL, :actor, 1, :credential_rotated, :grants_reevaluated, :reason "
             "FROM CX_AGENT_RELATIONSHIPS r WHERE r.AGENT_ID = :agent_id AND r.RELATIONSHIP_ROLE = 'PRIMARY_OWNER' AND r.STATUS = 'ACTIVE'",
             {"history_id": _id("AOH"), "agent_id": agent_id, "actor": actor_principal_id,
-             "credential_rotated": flag if disposition["revoke_credentials"] else (True if _dialect() in {"postgresql", "pg"} else "N"),
+             # Revocation does not issue a replacement credential or rotate a
+             # native password. Keep that historical fact truthful.
+             "credential_rotated": False if _dialect() in {"postgresql", "pg"} else "N",
              "grants_reevaluated": flag, "reason": reason[:2000]},
         )
         _audit_tx(
             tx, actor_principal_id, "AGENT_OFFBOARD_" + disposition["disposition"],
             "AGENT", agent_id, "ALLOW", reason,
         )
+        if native_required:
+            _audit_tx(tx, actor_principal_id, "AGENT_NATIVE_REVOKE_PENDING", "AGENT", agent_id,
+                      "PENDING", json.dumps({"operation_id": native_operation_id, "principal_status": target_status}, sort_keys=True))
         return {"revoked_instances": int(instances or 0), "revoked_credentials": int(credentials or 0),
                 "revoked_derived_objects": int(derived or 0),
                 "requeued_claimed_deliveries": int(deliveries or 0),
@@ -3367,7 +3379,31 @@ def offboard_agent(actor_principal_id: str, agent_id: str, *, owner_type: str = 
                 "requires_reenrollment": bool(disposition["revoke_credentials"]),
                 "grants_reevaluated": True}
     result = connection.execute_transaction_callback(work)
-    return {"agent_id": agent_id, "status": target_status, **disposition, **result}
+    native_result = {"status": "SKIPPED", "reason_code": "DISPOSITION_RETAINS_NATIVE_IDENTITY"}
+    if native_required:
+        # Oracle/Yashan account DDL has implicit commits. Persist the normal
+        # disable and its pending audit first; never pretend cross-layer atomicity.
+        from . import agent_api
+        from .native_identity import failure_code
+        try:
+            native_result = agent_api.revoke_native_identity(agent_id, reason=reason)
+        except Exception as exc:
+            native_result = {"status": "PARTIAL", "error_code": failure_code(exc),
+                             "new_connections_blocked": None, "existing_sessions_closed": None,
+                             "business_access_blocked": None}
+        native_result["operation_id"] = native_operation_id
+        try:
+            detail = {key: native_result.get(key) for key in (
+                "operation_id", "status", "database_fingerprint", "new_connections_blocked",
+                "local_connections_closed", "local_connection_close_failures", "error_code")}
+            connection.execute_transaction_callback(lambda tx: _audit_tx(
+                tx, actor_principal_id, "AGENT_NATIVE_REVOKE_RESULT", "AGENT", agent_id,
+                native_result["status"], json.dumps(detail, sort_keys=True)))
+            native_result["audit_status"] = "RECORDED"
+        except Exception:
+            native_result.update(status="PARTIAL", audit_status="UNAVAILABLE")
+    return {"agent_id": agent_id, "status": target_status, **disposition, **result,
+            "native_identity_revocation": native_result}
 
 
 def create_channel(principal_id: str, name: str, security_domain_id: str, *, classification: str = "INTERNAL", channel_type: str = "TEAM") -> Dict[str, Any]:

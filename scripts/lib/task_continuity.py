@@ -302,11 +302,13 @@ def claim_attempt(tx: Any, *, continuity_id: str, worker_id: str, business_key: 
     """Claim one fenced attempt; expired leases are replaced atomically."""
     now = _now()
     expiry = now + timedelta(seconds=max(1, min(int(lease_seconds), 3600)))
-    link = _row(tx.query_one("SELECT STATUS FROM CX_TASK_CONTINUITY_LINKS WHERE CONTINUITY_ID=:id FOR UPDATE", {"id": continuity_id}))
+    link = _row(tx.query_one("SELECT STATUS,ACTOR_ID,REQUEST_DIGEST FROM CX_TASK_CONTINUITY_LINKS WHERE CONTINUITY_ID=:id FOR UPDATE", {"id": continuity_id}))
     if not link or link.get("status") in {"SUCCEEDED", "FAILED", "CANCELLED"}:
         raise ContinuityError("TERMINAL_TASK", "A terminal or missing task cannot be claimed")
     if link.get("status") == "UNOBSERVED":
         raise ContinuityConflict("UNKNOWN_SEND", "Reconcile the unknown send before starting another attempt")
+    if link.get("request_digest") != request_digest:
+        raise ContinuityConflict("REQUEST_MISMATCH", "The attempt does not match the admitted task request")
     lease = _row(tx.query_one("SELECT LEASE_OWNER,FENCING_TOKEN,LEASE_EXPIRES_AT,STATUS FROM CX_TASK_CONTINUITY_LEASES WHERE CONTINUITY_ID=:id FOR UPDATE", {"id": continuity_id}))
     lease_expiry = _utc_naive(lease.get("lease_expires_at")) if lease else None
     if lease and lease.get("status") == "ACTIVE" and lease_expiry and lease_expiry > now:
@@ -324,16 +326,17 @@ def claim_attempt(tx: Any, *, continuity_id: str, worker_id: str, business_key: 
     if lease and lease.get("status") == "ACTIVE" and lease_expiry and lease_expiry <= now:
         # The external outcome of an expired SENDING attempt is unknown.  Do
         # not issue a new request until a caller reconciles its business key.
+        # Use the same UTC instant as the lease check, not session-local time.
         stale = _row(tx.query_one(
             "SELECT ATTEMPT_ID FROM CX_TASK_CONTINUITY_ATTEMPTS WHERE CONTINUITY_ID=:id "
-            "AND STATUS='SENDING' AND LEASE_EXPIRES_AT<=CURRENT_TIMESTAMP ORDER BY ATTEMPT_NO DESC",
-            {"id": continuity_id}))
+            "AND STATUS='SENDING' AND LEASE_EXPIRES_AT<=:utc_now ORDER BY ATTEMPT_NO DESC",
+            {"id": continuity_id, "utc_now": now}))
         if stale:
             tx.execute("UPDATE CX_TASK_CONTINUITY_ATTEMPTS SET STATUS='UNOBSERVED',COMPLETED_AT=CURRENT_TIMESTAMP,ERROR_CODE='LEASE_EXPIRED',ERROR_MESSAGE='External outcome was not observed before lease expiry' WHERE ATTEMPT_ID=:attempt AND STATUS='SENDING'",
                        {"attempt": stale["attempt_id"]})
             tx.execute("UPDATE CX_TASK_CONTINUITY_LEASES SET STATUS='EXPIRED',UPDATED_AT=CURRENT_TIMESTAMP WHERE CONTINUITY_ID=:id AND FENCING_TOKEN=:token",
                        {"id": continuity_id, "token": lease.get("fencing_token")})
-            _transition(tx, continuity_id, worker_id, "UNOBSERVED", "attempt lease expired before outcome", request_digest)
+            _transition(tx, continuity_id, str(link["actor_id"]), "UNOBSERVED", "attempt lease expired before outcome", request_digest)
             # The caller receives a durable refusal rather than an exception;
             # raising here would roll the state back in normal transaction
             # runners and erase the very uncertainty we must preserve.
@@ -350,10 +353,12 @@ def claim_attempt(tx: Any, *, continuity_id: str, worker_id: str, business_key: 
     current = _row(tx.query_one("SELECT COALESCE(MAX(ATTEMPT_NO),0) AS ATTEMPT_NO FROM CX_TASK_CONTINUITY_ATTEMPTS WHERE CONTINUITY_ID=:id", {"id": continuity_id}))
     number = int(current.get("attempt_no") or 0) + 1
     attempt_id = _id("TCA")
-    tx.execute("INSERT INTO CX_TASK_CONTINUITY_ATTEMPTS(ATTEMPT_ID,CONTINUITY_ID,ATTEMPT_NO,FENCING_TOKEN,STATUS,BUSINESS_KEY,REQUEST_DIGEST,LEASE_EXPIRES_AT) VALUES(:attempt,:id,:number,:token,'SENDING',:business,:digest,:until)",
-               {"attempt": attempt_id, "id": continuity_id, "number": number, "token": token,
+    tx.execute("INSERT INTO CX_TASK_CONTINUITY_ATTEMPTS(ATTEMPT_ID,CONTINUITY_ID,ATTEMPT_NO,FENCING_TOKEN,STATUS,BUSINESS_KEY,REQUEST_DIGEST,LEASE_EXPIRES_AT) VALUES(:attempt,:id,:v_attempt_no,:token,'SENDING',:business,:digest,:until)",
+               {"attempt": attempt_id, "id": continuity_id, "v_attempt_no": number, "token": token,
                 "business": str(business_key)[:256], "digest": request_digest, "until": expiry})
-    _transition(tx, continuity_id, worker_id, "RUNNING", "fenced attempt claimed", request_digest)
+    # A machine worker identity is a lease owner, not a Principal. The
+    # admission's authenticated Principal remains the audit/FK authority.
+    _transition(tx, continuity_id, str(link["actor_id"]), "RUNNING", "fenced attempt claimed", request_digest)
     return {"attempt_id": attempt_id, "continuity_id": continuity_id, "attempt_no": number, "fencing_token": token, "lease_expires_at": expiry}
 
 
@@ -363,17 +368,19 @@ def finish_attempt(tx: Any, *, attempt_id: str, worker_id: str, fencing_token: i
     target = str(status or "").upper()
     if target not in ATTEMPT_STATES:
         raise ContinuityError("INVALID_ATTEMPT_STATE", "Unknown attempt state")
-    row = _row(tx.query_one("SELECT a.CONTINUITY_ID,a.FENCING_TOKEN,a.STATUS,a.LEASE_EXPIRES_AT,l.LEASE_OWNER,l.FENCING_TOKEN AS LEASE_TOKEN FROM CX_TASK_CONTINUITY_ATTEMPTS a JOIN CX_TASK_CONTINUITY_LEASES l ON l.CONTINUITY_ID=a.CONTINUITY_ID WHERE a.ATTEMPT_ID=:attempt FOR UPDATE", {"attempt": attempt_id}))
+    row = _row(tx.query_one("SELECT a.CONTINUITY_ID,a.FENCING_TOKEN,a.STATUS,a.REQUEST_DIGEST,a.LEASE_EXPIRES_AT,l.LEASE_OWNER,l.FENCING_TOKEN AS LEASE_TOKEN,c.ACTOR_ID FROM CX_TASK_CONTINUITY_ATTEMPTS a JOIN CX_TASK_CONTINUITY_LEASES l ON l.CONTINUITY_ID=a.CONTINUITY_ID JOIN CX_TASK_CONTINUITY_LINKS c ON c.CONTINUITY_ID=a.CONTINUITY_ID WHERE a.ATTEMPT_ID=:attempt FOR UPDATE", {"attempt": attempt_id}))
     if not row or int(row.get("fencing_token") or 0) != int(fencing_token) or int(row.get("lease_token") or 0) != int(fencing_token) or str(row.get("lease_owner")) != str(worker_id):
         raise ContinuityConflict("FENCING_MISMATCH", "The worker lease is stale")
     if row.get("status") != "SENDING":
         raise ContinuityConflict("ATTEMPT_TERMINAL", "The attempt has already been completed")
+    if row.get("request_digest") != request_digest:
+        raise ContinuityConflict("REQUEST_MISMATCH", "The result does not match the admitted task request")
     expires = _utc_naive(row.get("lease_expires_at"))
     if expires and expires <= _now():
         # Preserve the unknown-send fact before rejecting the stale worker.
         tx.execute("UPDATE CX_TASK_CONTINUITY_ATTEMPTS SET STATUS='UNOBSERVED',COMPLETED_AT=CURRENT_TIMESTAMP,ERROR_CODE='LEASE_EXPIRED',ERROR_MESSAGE='Stale worker completed after lease expiry' WHERE ATTEMPT_ID=:attempt AND STATUS='SENDING' AND FENCING_TOKEN=:token",
                    {"attempt": attempt_id, "token": fencing_token})
-        _transition(tx, str(row["continuity_id"]), worker_id, "UNOBSERVED", "stale worker result rejected; outcome is unobserved", request_digest)
+        _transition(tx, str(row["continuity_id"]), str(row["actor_id"]), "UNOBSERVED", "stale worker result rejected; outcome is unobserved", request_digest)
         tx.execute("UPDATE CX_TASK_CONTINUITY_LEASES SET STATUS='EXPIRED',UPDATED_AT=CURRENT_TIMESTAMP WHERE CONTINUITY_ID=:id AND FENCING_TOKEN=:token",
                    {"id": row["continuity_id"], "token": fencing_token})
         return {"attempt_id": attempt_id, "continuity_id": row["continuity_id"], "status": "UNOBSERVED",
@@ -381,7 +388,7 @@ def finish_attempt(tx: Any, *, attempt_id: str, worker_id: str, fencing_token: i
     tx.execute("UPDATE CX_TASK_CONTINUITY_ATTEMPTS SET STATUS=:status,COMPLETED_AT=CURRENT_TIMESTAMP,ERROR_CODE=:code,ERROR_MESSAGE=:message WHERE ATTEMPT_ID=:attempt AND STATUS='SENDING' AND FENCING_TOKEN=:token",
                {"status": target, "attempt": attempt_id, "token": fencing_token, "code": error_code, "message": error_message})
     mapped = {"SUCCEEDED": "SUCCEEDED", "FAILED": "FAILED", "CANCELLED": "CANCELLED", "UNOBSERVED": "UNOBSERVED"}[target]
-    _transition(tx, str(row["continuity_id"]), worker_id, mapped, error_message or "attempt completed", request_digest)
+    _transition(tx, str(row["continuity_id"]), str(row["actor_id"]), mapped, error_message or "attempt completed", request_digest)
     tx.execute("UPDATE CX_TASK_CONTINUITY_LEASES SET STATUS='RELEASED',UPDATED_AT=CURRENT_TIMESTAMP WHERE CONTINUITY_ID=:id AND FENCING_TOKEN=:token",
                {"id": row["continuity_id"], "token": fencing_token})
     return {"attempt_id": attempt_id, "continuity_id": row["continuity_id"], "status": target, "fencing_token": fencing_token}

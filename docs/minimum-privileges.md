@@ -1,4 +1,4 @@
-# Minimum database privileges v5.0.0
+# Minimum database privileges v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -52,11 +52,19 @@ the exact required grants for schema DDL, APIs, scheduler jobs, triggers,
 native graph and Oracle Text. Text setup includes CTXAPP and explicit
 EXECUTE on CTXSYS.CTX_DDL; these are deployment Owner permissions.
 
-Oracle Enterprise additionally requires supported End User, Data Role and
-Data Grant facilities. Their deployment grants must be direct where stored
+Both Oracle Community and Enterprise use supported End User, Data Role and
+Data Grant facilities for their database identity boundary. These are not
+Enterprise-only platform features. Deployment grants must be direct where stored
 PL/SQL or Data Grant parsing cannot use inherited role privileges. The
 consolidated prerequisite establishes `DEEP_SEC_SESSION_ROLE` with only
 CREATE SESSION and the Owner's ADMIN OPTION for managed attachment.
+
+For v5.0.1, SYS separately runs
+`0_oracle_v5_0_1_native_identity_prerequisites.sql` in the exact application PDB.
+`SYS.CX_AGENT_ACCOUNT_STATUS` projects only `USERNAME, ACCOUNT_STATUS` from
+`SYS.DBA_END_USERS`, with `WITH READ ONLY`. Only the exact configured Owner
+receives SELECT, without grant option; PUBLIC, Agents and runtime roles receive
+none. Do not grant the Owner direct access to the full source dictionary.
 
 Do not grant DBA, SELECT ANY DICTIONARY or UNLIMITED TABLESPACE as a shortcut.
 Use a finite quota and exact catalog access when version/object inspection
@@ -77,6 +85,13 @@ DDL privileges and CREATE USER/ALTER USER to provision and rotate independent
 Agent logins. The prerequisite establishes the minimal session role and
 Owner management grant; it does not grant DBA, SYSDBA or unrestricted data.
 
+For v5.0.1, SYS separately runs
+`0_yashandb_v5_0_1_native_identity_prerequisites.sql` in the exact application PDB.
+Its `SYS.CX_AGENT_ACCOUNT_STATUS` view projects only `USERNAME, ACCOUNT_STATUS`
+from `SYS.DBA_USERS`, with `WITH READ ONLY`. Grant only the exact Owner SELECT,
+without grant option; do not grant PUBLIC, Agents or runtime roles access, or
+expose the full `DBA_USERS` dictionary to the Owner.
+
 Migration 70 and successors bind authorized views and private-write entry
 points to SESSION_USER. Legacy definer packages and base tables are not
 business-Agent APIs. Current schema ownership cannot be selected by a caller
@@ -91,6 +106,11 @@ Run the current journaled deployment preflight and `verify` operation from
 Inspect required structures, current invalid objects, migration digests,
 credential provisioning and native negative tests. A grant inventory alone
 does not demonstrate enforcement.
+
+The native account-status prerequisite is a separate DBA action, not an
+automatic grant or a change to an applied migration. Missing or incompatible
+access blocks v5.0.1 preflight. See [native identity operations](native-identity.md)
+for exact-PDB checks and the limited new-login revocation contract.
 
 Remove an excessive privilege only after resolving the exact principal,
 current dependencies, replacement grants and recovery route. Use a dedicated

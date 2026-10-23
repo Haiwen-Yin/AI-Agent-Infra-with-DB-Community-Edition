@@ -20,6 +20,7 @@ import re
 import sys
 import zipfile
 from email.parser import Parser
+from pathlib import Path
 
 MIN_PYTHON = (3, 14)
 # Full platform support baseline: RHEL 9.8+ (Oracle Linux 9.8+) or an equivalent Linux host.
@@ -664,7 +665,32 @@ def _dependency_closure(
             queue.append((dependency_name, chosen))
     return errors, dependency_names
 
+def _requirements_path(project_dir: Path, script_dir: Path, *, database: str = "") -> Path:
+    """Verify the complete selected deployment, never just its shared subset."""
+    selected = os.environ.get("CX_REQUIREMENTS_FILE")
+    if (project_dir / "build-manifest.json").is_file():
+        from lib.database_selection import configured_database, requirements_for_database
+        key = configured_database(project_dir, explicit_database=database)
+        expected = requirements_for_database(project_dir, key)
+        if selected and Path(selected).resolve() != expected:
+            raise ValueError("selected requirements differ from the configured database profile")
+        return expected
+    if database or os.environ.get("CX_DATABASE_DIALECT"):
+        raise ValueError("Database verification requires a generated product package")
+    if selected:
+        path = Path(selected).resolve()
+        if not path.is_relative_to(project_dir.resolve()):
+            raise ValueError("selected requirements must be inside the package")
+        return path
+    return next((path for path in (project_dir / "requirements.txt", script_dir / "requirements.txt")
+                 if path.is_file()), project_dir / "requirements.txt")
+
+
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database", default="", help="oracle, pg or yashandb; must agree with configuration")
+    arguments = parser.parse_args()
     runtime = _runtime_python()
     if runtime < MIN_PYTHON:
         print(
@@ -684,18 +710,10 @@ def main():
         os.path.join(script_dir, "vendor"),
     ]
     vendor_dir = next((path for path in vendor_candidates if os.path.isdir(path)), vendor_candidates[0])
-    req_candidates = [
-        os.path.join(project_dir, "requirements.txt"),
-        os.path.join(script_dir, "requirements.txt"),
-    ]
-    req_file = next((path for path in req_candidates if os.path.isfile(path)), req_candidates[0])
-    selected_requirements = os.environ.get("CX_REQUIREMENTS_FILE")
-    if selected_requirements:
-        from pathlib import Path
-        selected = Path(selected_requirements).resolve()
-        if not selected.is_relative_to(Path(project_dir).resolve()):
-            raise SystemExit("[ERROR] selected requirements must be inside the package")
-        req_file = str(selected)
+    try:
+        req_file = str(_requirements_path(Path(project_dir), Path(script_dir), database=arguments.database))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"[ERROR] {exc}") from None
 
     if not os.path.isdir(vendor_dir):
         print(f"[ERROR] vendor/ directory not found: {vendor_dir}")

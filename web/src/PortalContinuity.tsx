@@ -41,6 +41,6 @@ export default function PortalContinuity() {
   return <main className="portal-continuity cx-app"><header className="page-toolbar"><a className="secondary-button" href="/portal/chat">{text("返回 Portal", "Back to Portal")}</a><button className="small-button" onClick={() => setLang(lang === "zh" ? "en" : "zh")}>{lang === "zh" ? "English" : "中文"}</button><button className="small-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{text(theme === "dark" ? "浅色" : "深色", theme === "dark" ? "Light" : "Dark")}</button></header>
     <h1>{text("工作交接", "Work continuity")}</h1><p>{text("在当前权限范围内记录目标、处理交接和审核候选。", "Record objectives, manage handoffs and review candidates within your current permissions.")} {session?.release_version && `v${session.release_version}`}</p>
     {error && <p role="alert">{error}</p>}
-    {session && <>{session.read_only && <p role="status">{text("当前页面仅可读取；写入需要有效的页面租约和操作权限。", "This page is read-only; writes require a current page lease and operation permissions.")}</p>}<ContinuityWorkbench request={request} text={text} principalId={session.principal_id} canWrite={session.can_write && !session.read_only} /></>}
+    {session && <>{session.read_only && <p role="status">{text("当前页面仅可读取；写入需要有效的页面租约和操作权限。", "This page is read-only; writes require a current page lease and operation permissions.")}</p>}<ContinuityWorkbench request={request} text={text} principalId={session.principal_id} canWrite={session.can_write && !session.read_only} canManage={false} canOperateAgents={false} /></>}
   </main>;
 }

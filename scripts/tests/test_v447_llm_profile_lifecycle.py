@@ -81,12 +81,13 @@ def test_retire_unreferenced_llm_profile_revokes_secret(monkeypatch):
 
 
 def test_llm_probe_accepts_provider_namespace_but_rejects_wrong_model():
-    assert native_agent_api._llm_model_matches("qwen3.8-27b", "qwen/qwen3.8-27b")
+    assert native_agent_api._llm_model_matches("qwopus3.6-35b-a3b-coder-mtp", "qwopus3.6-35b-a3b-coder-mtp")
+    assert native_agent_api._llm_model_matches("qwopus3.6-35b-a3b-coder-mtp", "vendor/qwopus3.6-35b-a3b-coder-mtp")
     assert native_agent_api._llm_model_matches("deepseek-v4-flash", "deepseek-v4-flash-0731")
     assert native_agent_api._llm_model_matches("vendor/deepseek-v4-flash", "deepseek/deepseek-v4-flash-2026-07-31")
     assert not native_agent_api._llm_model_matches("deepseek-v4-flash", "deepseek-v4-flash-other")
-    assert not native_agent_api._llm_model_matches("qwen3.6-35b-a3b-claude-4.6-opus-reasoning-distilled", "qwen/qwen3.8-27b")
-    assert not native_agent_api._llm_model_matches("qwen3.8-27b", "")
+    assert not native_agent_api._llm_model_matches("legacy-model", "qwopus3.6-35b-a3b-coder-mtp")
+    assert not native_agent_api._llm_model_matches("qwopus3.6-35b-a3b-coder-mtp", "")
     assert "LLM provider probe failed" in (LIB_ROOT / "native_agent_api.py").read_text(encoding="utf-8")
 
 
@@ -99,4 +100,7 @@ def test_async_forms_do_not_use_react_current_target_after_await():
     profiles = source.split("function LLMProviderProfilesPanel", 1)[1].split("function PlatformOperationsPage", 1)[0]
     assert "const probe = async" in profiles
     assert "LLM provider returned a different model" in (LIB_ROOT / "native_agent_api.py").read_text(encoding="utf-8")
-    assert "refreshProfileHealth" in source
+    native = source.split("function NativeAgentsPage", 1)[1].split("function MemoryLifecyclePage", 1)[0]
+    assert "refreshProfileHealth" not in native
+    assert "/probe" not in native
+    assert "onClick={() => void probe(" in profiles

@@ -1,11 +1,14 @@
-# Agent extensions — Chuanxu v5.0.0
+# Agent extensions — Chuanxu v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
+
+[简体中文](agent-extensions_zh.md)
 
 This guide applies to both editions. Database entities retain identity,
 authorization, exact revisions, source lineage, attempts, leases and audit facts.
 An integration setting does not grant permissions. Install the complete additive
-migration chain through 102 and verify deployment before starting the new workers.
+migration chain for the exact package and verify deployment before starting new
+workers. v5.0.0 ends at 102; v5.0.1 requires 103–105 as well.
 The package's generated baseline manifest determines the actual migration list.
 
 ## Model support and answer quality
@@ -24,6 +27,16 @@ Ambiguous vendor/company/database questions request clarification. Answer-qualit
 cases and results preserve the entry kind, case/profile revision, policy digest
 and authorized citations. A result cannot be carried over to a changed profile.
 
+For final-answer evaluation, use **Workspaces → Work continuity → Retrospective
+and answer evaluation → Answer evaluation**. A platform manager registers a
+versioned case and rubric, queues a run for an authorized active Agent, and
+explicitly starts any model request. Read the actual final output and digest;
+a different authorized Human reviews facts and citation support. Queue/preparation
+success, phrase assertions and an explicitly reported `passed` flag are separate
+from this review. Profile, policy or source changes block stale runs; unknown
+sends are not automatically repeated. See [answer quality](answer-quality.md)
+for exact methods, bodies, states and recovery.
+
 ## Tools, Skills and context
 
 Use the directory to search authorized Tool/Skill metadata, then load the selected
@@ -37,6 +50,15 @@ The conservative UTF-8 upper bound reserves output and instructions. Extractive
 derivations retain constraints, decisions and incomplete work verbatim; a budget
 too small for those obligations is rejected. Reading a derivation rechecks every
 original source, digest, domain and assembly expiry.
+
+The Work continuity **Agent assets** area supports exact Knowledge/Memory/Skill/
+Graph/Source bindings, query-ranked Skill metadata selection, model-aware source
+budgets and configured document/pinned GitHub synchronization. Source managers
+need `platform.manage`; binding/sync operators need `agents.operate` in addition
+to current source/Domain permissions. Import remains a pending candidate and
+never executes code or automatically publishes. Portal does not grant platform
+management. See [Agent assets](agent-context-assets.md) and
+[memory and working notes](memory-working-notes.md) for full workflows.
 
 ## Graph operations
 
@@ -75,7 +97,7 @@ unknown-send reconciliation; see [continuity operations](continuity-operations.m
 Start `scripts/agent_integration_worker.py` under the operator's service manager
 to deliver registered telemetry and reconcile uncertain calls. Prepare a new
 framework rootfs with `scripts/prepare_framework_rootfs.py --rootfs
-/var/lib/chuanxu/framework-v5.0.0`, then configure its verified Linux
+/var/lib/chuanxu/framework-v5.0.1`, then configure its verified Linux
 sandbox target. The framework receives bounded messages; platform entities remain
 the source of execution and authorization facts. Generic framework execution,
 live effect replay, live migration and global autonomy remain disabled.

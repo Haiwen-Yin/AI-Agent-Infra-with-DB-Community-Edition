@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Agent API
+"""AI Agent Infra v5.0.1 - Community Edition - Agent API
 
 Agent registration, session management, access audit logging,
 collaboration tracking, pool management, and Admin/Agent separation support.
@@ -887,7 +887,13 @@ def _provision_agent_login(agent_id: str) -> Dict[str, Any]:
                         JOIN pg_namespace pn ON pn.oid=p.pronamespace
                         WHERE n.nspname=t.table_schema AND c.relname=t.table_name
                           AND pn.nspname='public'
-                          AND p.proname='cx86_reject_history_mutation'
+                          AND p.proname IN (
+                              'cx86_reject_history_mutation',
+                              'cx101_reject_task_continuity_mutation',
+                              'cx103_reject_history_mutation',
+                              'cx104_reject_context_asset_mutation',
+                              'cx105_reject_answer_mutation'
+                          )
                           AND NOT g.tgisinternal
                     )
                 )
@@ -964,6 +970,101 @@ def ensure_external_agent_identity(agent_id: str) -> None:
     )
     _ensure_agent_login(agent_id)
     _get_agent_login_credentials(agent_id)
+
+
+def native_identity_snapshot(agent_id: str, *, _connection=None) -> Dict[str, Any]:
+    """Read the database-bound role mapping, never pg_authid or credentials."""
+    from contextlib import nullcontext
+    from .config import get_config
+    from . import connection as native_connection
+    from lib.native_identity import snapshot_record, set_principal, fingerprint, finish_snapshot, failure_code
+    value = snapshot_record(agent_id, "pg")
+    try:
+        cfg = get_config()
+        if cfg.agent.mode == "agent" or native_connection.get_current_agent_id():
+            raise RuntimeError("Owner context required")
+        with (nullcontext(_connection) if _connection is not None else get_connection()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT session_user, current_database()")
+                owner, database = cur.fetchone()
+                if str(owner) != str(cfg.database.user) or str(database) != str(cfg.database.dbname):
+                    raise RuntimeError("Native Owner/database identity mismatch")
+                value["database_fingerprint"] = fingerprint("pg", f"{cfg.database.host}:{cfg.database.port}", owner, database)
+                cur.execute("SELECT p.status,p.permission_version,r.status,r.agent_role "
+                            "FROM cx_principals p JOIN agent_registry r ON r.agent_id=p.principal_id "
+                            "WHERE p.principal_id=%s AND p.principal_type='AGENT'", (agent_id,))
+                if not set_principal(value, cur.fetchone()):
+                    return finish_snapshot(value)
+                cur.execute("SELECT role_name FROM agent_db_identity WHERE agent_id=%s", (agent_id,))
+                mappings = cur.fetchall()
+                username = _agent_role_name(agent_id, database)
+                value["username"] = username
+                if len(mappings) != 1 or str(mappings[0][0]) != username:
+                    value["mapping_state"] = "AMBIGUOUS" if mappings else "UNAVAILABLE"
+                    return finish_snapshot(value)
+                if username in {str(owner), _RUNTIME_ROLE, "postgres", "pgsql"}:
+                    value["mapping_state"] = "PROTECTED"
+                    return finish_snapshot(value)
+                cur.execute("SELECT COUNT(*) FROM agent_db_identity WHERE role_name=%s", (username,))
+                value["mapping_state"] = "OBSERVED" if int(cur.fetchone()[0]) == 1 else "AMBIGUOUS"
+                cur.execute("SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=%s", (username,))
+                rows = cur.fetchall()
+                if len(rows) > 1:
+                    value["mapping_state"] = "AMBIGUOUS"
+                else:
+                    enabled = bool(rows[0][0]) if rows else False
+                    value.update(native_state="OBSERVED", native_exists=bool(rows), login_enabled=enabled,
+                                 account_status=("LOGIN" if enabled else "NOLOGIN") if rows else "ABSENT",
+                                 native_privileged=any(rows[0][1:]) if rows else False)
+    except Exception as exc:
+        value["error_code"] = failure_code(exc)
+    return finish_snapshot(value)
+
+
+def revoke_native_identity(agent_id: str, *, snapshot=None, reason: str) -> Dict[str, Any]:
+    """Set only the exact disabled Agent role NOLOGIN; retain shared roles."""
+    from . import connection as native_connection
+    from lib.native_identity import revoke_record, revocation_guard, failure_code
+    if not str(reason or "").strip():
+        raise ValueError("A revocation reason is required")
+    current = native_identity_snapshot(agent_id)
+    result = revoke_record(current)
+    denied = revocation_guard(current, snapshot)
+    if denied:
+        result.update(status="PENDING", error_code=denied)
+        return result
+    try:
+        with get_connection() as conn:
+            try:
+                with conn.cursor() as cur:
+                    # PostgreSQL role changes are transactional. Hold the exact
+                    # Principal row until NOLOGIN commits, not a cluster lock.
+                    cur.execute("SELECT principal_id FROM cx_principals WHERE principal_id=%s AND principal_type='AGENT' FOR UPDATE", (agent_id,))
+                    if not cur.fetchone():
+                        raise RuntimeError("Managed Principal unavailable")
+                confirmed = native_identity_snapshot(agent_id, _connection=conn)
+                denied = revocation_guard(confirmed, current)
+                if denied:
+                    conn.rollback()
+                    result.update(status="PARTIAL", error_code=denied, post_snapshot=confirmed)
+                    return result
+                retired = native_connection.evict_agent_connections(agent_id, revoke=True)
+                result.update(local_connections_closed=retired["closed"], local_connection_close_failures=retired["failed"])
+                if confirmed["login_enabled"] is not False:
+                    with conn.cursor() as cur:
+                        cur.execute(pg_sql.SQL('ALTER ROLE {} NOLOGIN').format(pg_sql.Identifier(confirmed["username"])))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        post = native_identity_snapshot(agent_id)
+        result["post_snapshot"] = post
+        result["new_connections_blocked"] = (post.get("login_enabled") is False) if post.get("native_state") == "OBSERVED" else None
+        result["status"] = "COMPLETE" if result["new_connections_blocked"] and not retired["failed"] and not revocation_guard(post) else "PARTIAL"
+    except Exception as exc:
+        result.update(status="PARTIAL", error_code=failure_code(exc))
+        result["post_snapshot"] = native_identity_snapshot(agent_id)
+    return result
 
 
 def elastic_pool_scale(target_pool_size: int) -> Dict[str, Any]:

@@ -48,6 +48,9 @@ def store(monkeypatch):
     monkeypatch.setattr(business.connection, 'execute_transaction_callback', lambda fn: fn(tx))
     monkeypatch.setattr(identity_api, '_require', lambda *_: None)
     monkeypatch.setattr(identity_api, 'effective_access', lambda *_: {'decision': 'DENY'})
+    monkeypatch.setattr(business.answer_planning, 'retrieve', lambda *_a, **_k: {
+        'status': 'NO_MATCH', 'items': [], 'missing_parts': [],
+        'answer_metadata': {'evidence_status': 'NO_MATCH', 'policy_revision': 'answer-evidence-v1'}})
     monkeypatch.setattr(native_agent_api, '_audit', lambda *_: None)
     yield db
     db.close()
@@ -70,14 +73,86 @@ def test_explicit_human_mention_queues_once_and_preserves_source(store):
 
 def test_channel_includes_governed_knowledge_context_when_available(store, monkeypatch):
     monkeypatch.setattr(identity_api, 'effective_access', lambda *_: {'decision': 'ALLOW'})
-    monkeypatch.setattr(business.knowledge_grounding, 'search', lambda *args, **kwargs: {
-        'status': 'MATCHED', 'items': [{'entity_id': 'K1', 'title': '川序介绍',
-        'content': '川序是数据库智能平台。', 'digest': 'd1'}]})
+    monkeypatch.setattr(business.answer_planning, 'retrieve', lambda *args, **kwargs: {
+        'status': 'MATCHED', 'missing_parts': [],
+        'items': [{'entity_id': 'K1', 'title': '川序介绍', 'content': '川序是数据库智能平台。', 'digest': 'd1'}],
+        'answer_metadata': {'evidence_status': 'MATCHED', 'policy_revision': 'answer-evidence-v1'}})
     monkeypatch.setattr(business.knowledge_grounding, 'citation', lambda *args: {})
     enqueue()
     payload = json.loads(store.execute('SELECT INPUT_JSON FROM CX_RUNTIME_EXECUTIONS').fetchone()[0])
     assert payload['knowledge_citations'][0]['entity_id'] == 'K1'
+    assert payload['answer_metadata']['evidence_status'] == 'MATCHED'
     assert payload['messages'][1]['content'].startswith('Authorized knowledge references.')
+
+
+def test_knowledge_authority_failure_does_not_degrade_into_model_only_dispatch(store, monkeypatch):
+    def denied(*_args, **_kwargs):
+        raise PermissionError('Knowledge permission revoked')
+    monkeypatch.setattr(business.answer_planning, 'retrieve', denied)
+    with pytest.raises(PermissionError):
+        enqueue()
+    assert store.execute('SELECT COUNT(*) FROM CX_RUNTIME_EXECUTIONS').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('fallback,revoked', [(False, False), (True, False), (False, True)])
+def test_mixed_source_scope_survives_channel_publication_and_runtime_storage(store, monkeypatch, fallback, revoked):
+    from lib import continuity_runtime
+    from unittest.mock import Mock
+    store.execute("UPDATE CX_CHANNEL_MESSAGES SET BODY_TEXT='Atlas routing and explain refraction briefly.'")
+    monkeypatch.setattr(business.answer_planning, 'retrieve', lambda *a, **kw: {
+        'status': 'PARTIAL_MATCH', 'missing_parts': ['explain refraction briefly.'],
+        'items': [{'entity_id': 'K1', 'title': 'Atlas routing', 'content': 'route-742', 'digest': 'd1'}]})
+    monkeypatch.setattr(business.knowledge_grounding, 'citation', lambda *args: {})
+    enqueue()
+    store.execute("UPDATE CX_RUNTIME_EXECUTIONS SET STATUS='CLAIMED'")
+    execution = dict(store.execute('SELECT * FROM CX_RUNTIME_EXECUTIONS').fetchone())
+    execution = {key.lower(): value for key, value in execution.items()}
+    payload = json.loads(execution['input_json'])
+    assert payload['answer_source_scope'] == {'uncovered_question_parts': [2]}
+    monkeypatch.setattr(native_agent_api, 'reconcile_expired_runtime', lambda **kw: None)
+    monkeypatch.setattr(native_agent_api, 'claim_runtime', lambda *a, **kw: [execution])
+    monkeypatch.setattr(native_runtime, '_admit_execution', lambda *a: None)
+    monkeypatch.setattr(native_runtime, '_llm_profile', lambda *a: {'profile_id': 'model'})
+    monkeypatch.setattr(native_runtime, '_set_profile_health', lambda *a: None)
+    monkeypatch.setattr(continuity_runtime, 'binding', lambda *a: None)
+    query = native_runtime.connection.execute_query_one
+    def lease_query(sql, params=None):
+        if 'FENCING_TOKEN=:token' in sql:
+            return {'execution_id': execution['execution_id']}
+        return query(sql, params)
+    monkeypatch.setattr(native_runtime.connection, 'execute_query_one', lease_query)
+    monkeypatch.setattr(identity_api, 'begin_channel_agent_response', lambda *a, **kw: None)
+    updates = []
+    def publish(agent, channel, content, **kwargs):
+        business.validate_response(agent, channel, kwargs['execution_id'])
+        updates.append((content, kwargs.get('completed', False)))
+    monkeypatch.setattr(identity_api, 'update_channel_agent_response', publish)
+    monkeypatch.setattr(native_runtime, '_write_channel_response', lambda *a, **kw: None)
+    finish = Mock()
+    monkeypatch.setattr(native_runtime, '_finish', finish)
+    raw = 'Atlas uses route-742 [1]. Light bends at a boundary.'
+    def stream(profile, messages, callback):
+        if fallback:
+            raise RuntimeError('LLM provider returned no content')
+        callback(raw)
+        if revoked:
+            store.execute("UPDATE CX_DOMAIN_MEMBERS SET STATUS='REVOKED' WHERE PRINCIPAL_ID='agent'")
+        return {'content': raw, 'model': 'test'}
+    monkeypatch.setattr(native_runtime, '_stream_llm', stream)
+    call = Mock(return_value={'content': raw, 'model': 'test'})
+    monkeypatch.setattr(native_runtime, '_call_llm', call)
+    result = native_runtime.execute_one('worker', 'node')
+    assert call.call_count == int(fallback)
+    assert all('question part(s) 2 have no authorized evidence' in content for content, _ in updates)
+    if revoked:
+        assert result['status'] == 'FAILED'
+        assert not any(completed for _, completed in updates)
+        assert 'output' not in finish.call_args.kwargs
+    else:
+        assert result['status'] == 'COMPLETED'
+        content = finish.call_args.kwargs['output']['content']
+        assert updates[-1] == (content, True)
+        assert content.endswith(raw) and content.count('**来源范围 / Source scope**') == 1
 
 
 @pytest.mark.parametrize('sql', [

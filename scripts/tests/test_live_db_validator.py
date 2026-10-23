@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import live_db_validator as validator
 import pytest
 
@@ -46,3 +48,49 @@ def test_pg_extra_migrations_follow_package_layout(tmp_path, monkeypatch, name):
     (tmp_path / "build-manifest.json").write_text("{}")
     # Even a missing packaged migration must not fall back to a source tree.
     assert validator._migration_path("pg", name) == tmp_path / "scripts/deploy" / name
+
+
+def test_v501_live_contract_accepts_v500_network_policy_successor(tmp_path, monkeypatch):
+    runner = importlib.import_module("migration_runner")
+    names = (
+        "102_v5_0_0_network_access.sql", "103_v5_0_1_memory_quality.sql",
+        "104_v5_0_1_context_assets.sql", "105_v5_0_1_answer_quality.sql",
+    )
+    paths = {name: tmp_path / name for name in names}
+    for path in paths.values():
+        path.write_text("-- test migration\n")
+    monkeypatch.setattr(validator, "_migration_path", lambda _db, name: paths[name])
+    rows = {
+        (names[0], "5.0.0"): {"status": "APPLIED", "checksum": "102-digest"},
+        (names[1], "5.0.1"): {"status": "APPLIED", "checksum": "103-digest"},
+        (names[2], "5.0.1"): {"status": "APPLIED", "checksum": "104-digest"},
+        (names[3], "5.0.1"): {"status": "APPLIED", "checksum": "105-digest"},
+    }
+    monkeypatch.setattr(runner, "_step_row", lambda _c, _db, path, *, version=None: rows.get((path.name, version)))
+    monkeypatch.setattr(runner, "_checksum", lambda path: path.name[:3] + "-digest")
+    monkeypatch.setattr(runner, "_step_objects_complete", lambda *_a, **_kw: True)
+
+    result = validator._capture_v501_migrations(object(), "pg", "5.0.1", names)
+
+    assert result["passed"] is True
+    assert result["steps"][names[0]]["version"] == "5.0.0"
+    assert all(value["passed"] for value in result["steps"].values())
+
+
+@pytest.mark.parametrize("failure", ["ledger", "checksum", "objects"])
+def test_v501_live_contract_blocks_incomplete_migration(tmp_path, monkeypatch, failure):
+    runner = importlib.import_module("migration_runner")
+    name = "103_v5_0_1_memory_quality.sql"
+    path = tmp_path / name
+    path.write_text("-- test migration\n")
+    monkeypatch.setattr(validator, "_migration_path", lambda _db, _name: path)
+    status = "FAILED" if failure == "ledger" else "APPLIED"
+    checksum = "wrong" if failure == "checksum" else "103-digest"
+    monkeypatch.setattr(runner, "_step_row", lambda *_a, **_kw: {"status": status, "checksum": checksum})
+    monkeypatch.setattr(runner, "_checksum", lambda _path: "103-digest")
+    monkeypatch.setattr(runner, "_step_objects_complete", lambda *_a, **_kw: failure != "objects")
+
+    result = validator._capture_v501_migrations(object(), "pg", "5.0.1", (name,))
+
+    assert result["passed"] is False
+    assert result["steps"][name]["passed"] is False

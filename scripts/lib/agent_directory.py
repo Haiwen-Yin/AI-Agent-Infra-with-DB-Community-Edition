@@ -102,3 +102,48 @@ def load(actor, domain, family, entity_id, version, content_digest):
         _authority(tx, actor, domain, family)
         return {**metadata, "content": content, "execution_authorized": False}
     return connection.execute_transaction_callback(perform)
+
+
+def recommend(actor, domain, query, *, limit=5, candidate_limit=50):
+    """Rank authorized Skill metadata, loading exact bodies only if selected.
+
+    A zero-match result is valid. No result from this method confers invocation
+    authority, and load() rechecks its revision/digest independently.
+    """
+    from .context_selection import score
+    if not isinstance(query, str) or not query.strip() or len(query) > 4000:
+        raise ValueError('A bounded question or task is required')
+    if isinstance(limit, bool) or isinstance(candidate_limit, bool) or not 1 <= int(limit) <= 10 or not int(limit) <= int(candidate_limit) <= 100:
+        raise ValueError('Invalid Skill selection limits')
+    def perform(tx):
+        access = _authority(tx, actor, domain, 'SKILL')
+        params = {'candidate_limit': int(candidate_limit)}
+        predicate = "e.ENTITY_TYPE='SKILL' AND e.STATUS='ACTIVE' AND sm.SKILL_STATUS='ACTIVE'"
+        if 'ALL' not in access.get('scopes', []):
+            predicate += " AND (e.OWNED_BY_AGENT=:actor OR e.VISIBILITY='PUBLIC')"
+            params['actor'] = actor
+        rows = [row(item) for item in tx.query(
+            "SELECT e.ENTITY_ID,e.TITLE,sm.SKILL_NAME,sm.SKILL_VERSION,sm.SKILL_DESCRIPTION,sm.RESOURCE_CHECKSUM "
+            "FROM ENTITIES e JOIN SKILL_META sm ON sm.ENTITY_ID=e.ENTITY_ID WHERE " + predicate +
+            " ORDER BY e.ENTITY_ID" + identity_api._limit_clause('candidate_limit'), params)]
+        ranked = sorted(((score(query, item.get('skill_name') or item.get('title'), item.get('skill_description')), item)
+                         for item in rows), key=lambda item: (-item[0], str(item[1]['entity_id'])))
+        selected, reasons = [], []
+        for relevance, candidate in ranked:
+            if relevance == 0 or len(selected) >= int(limit):
+                reasons.append({'entity_id': str(candidate['entity_id']), 'reason': 'NO_RELEVANCE' if relevance == 0 else 'SELECTION_LIMIT'})
+                continue
+            # Metadata may change between ranking and body loading. Refuse
+            # that selection rather than silently using a different revision.
+            value = skill_api.get_skill(candidate['entity_id'])
+            if not value or value.get('status') != 'ACTIVE' or value.get('skill_status') != 'ACTIVE' or not _skill_visible(actor, value, access):
+                raise PermissionError('The selected Skill is no longer available')
+            if any(str(value.get(key) or '') != str(candidate.get(key) or '') for key in ('skill_name', 'skill_version', 'skill_description', 'resource_checksum')):
+                raise ValueError('Selected Skill metadata changed during selection')
+            metadata, _ = _metadata('SKILL', value)
+            selected.append({**metadata, 'rank_score': relevance, 'selection_reason': 'QUERY_METADATA_RELEVANCE'})
+        _authority(tx, actor, domain, 'SKILL')
+        return {'items': selected, 'excluded': reasons, 'policy': 'QUERY_METADATA_V1',
+                'candidate_count': len(rows), 'candidate_window': int(candidate_limit),
+                'body_loaded_for_client': False, 'discovery_grants_execution': False}
+    return connection.execute_transaction_callback(perform)

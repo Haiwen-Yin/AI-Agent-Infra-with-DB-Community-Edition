@@ -35,6 +35,8 @@ class Family(str, Enum):
     GRAPH = 'GRAPH'
     DB4A2A = 'DB4A2A'
     AUDIT = 'AUDIT'
+    WORKING_NOTE = 'WORKING_NOTE'
+    SOURCE = 'SOURCE'
 
 
 class SourceRef(Contract):
@@ -182,6 +184,15 @@ class AssemblyRequest(Contract):
     work_contract_id: Identifier | None = None
     handoff_id: Identifier | None = None
     sources: Annotated[tuple[SourceRef, ...], Field(max_length=100)] = ()
+    mandatory_sources: Annotated[tuple[SourceRef, ...], Field(max_length=100)] = ()
+    query_text: Annotated[str, StringConstraints(strict=True, max_length=4000)] = ''
+    context_window: Annotated[StrictInt, Field(ge=1, le=1000000)] | None = None
+    output_reserve: Annotated[StrictInt, Field(ge=0, le=999999)] = 0
+    system_text: Annotated[str, StringConstraints(strict=True, max_length=16000)] = ''
+    tool_text: Annotated[str, StringConstraints(strict=True, max_length=16000)] = ''
+    model_name: Annotated[str, StringConstraints(strict=True, max_length=200)] = ''
+    byte_budget: Annotated[StrictInt, Field(ge=1, le=1048576)] = 1048576
+    allow_partial: StrictBool = False
     token_budget: Annotated[StrictInt, Field(ge=1, le=131072)] = 4096
     entry_limit: Annotated[StrictInt, Field(ge=0, le=100)] = 20
     ttl_seconds: Annotated[StrictInt, Field(ge=30, le=3600)] = 300

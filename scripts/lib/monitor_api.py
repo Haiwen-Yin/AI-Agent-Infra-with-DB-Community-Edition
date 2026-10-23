@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Monitoring & Observability
+"""AI Agent Infra v5.0.1 - Community Edition - Monitoring & Observability
 
 Agent health dashboard, system overview, stalled detection,
 performance metrics, and drift detection.
@@ -8,6 +8,7 @@ Tables: AGENT_REGISTRY, AGENT_SESSION, TASK_PLANS, LOOP_RUNS,
 """
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .connection import execute, execute_query, execute_query_one, sanitize_row
@@ -16,35 +17,40 @@ from . import cursor_pagination
 logger = logging.getLogger(__name__)
 
 
-def get_agent_health(agent_id: Optional[str] = None) -> Dict[str, Any]:
-    if agent_id:
-        agent = execute_query_one(
-            "SELECT * FROM AGENT_REGISTRY WHERE AGENT_ID = :aid",
-            {"aid": agent_id},
-        )
-        if not agent:
-            return {"error": f"Agent not found: {agent_id}"}
-        session = execute_query_one(
-            "SELECT * FROM AGENT_SESSION WHERE AGENT_ID = :aid AND IS_ACTIVE = 'Y' FETCH FIRST 1 ROWS ONLY",
-            {"aid": agent_id},
-        )
-        plan_count = execute_query_one(
-            "SELECT COUNT(*) AS CNT FROM TASK_PLANS WHERE AGENT_ID = :aid AND STATUS = 'RUNNING'",
-            {"aid": agent_id},
-        )
-        run_count = execute_query_one(
-            "SELECT COUNT(*) AS CNT FROM LOOP_RUNS WHERE AGENT_ID = :aid AND STATUS = 'RUNNING'",
-            {"aid": agent_id},
-        )
+def _agent_health_rows(agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Read related health facts in bounded batches, not once per Agent.
+
+    The legacy inventory can contain more than Oracle's IN-expression limit.
+    Keep each batch below that limit, and constrain all related reads to the
+    already-selected registry population.  The cursor caller selects its
+    authorized page before invoking this helper.
+    """
+    agents = [sanitize_row(agent) for agent in agents]
+    health: Dict[str, Dict[str, Any]] = {}
+    for offset in range(0, len(agents), 500):
+        agent_ids = list(dict.fromkeys(str(agent["agent_id"]) for agent in agents[offset:offset + 500]))
+        params = {f"health_agent_{index}": agent_id for index, agent_id in enumerate(agent_ids)}
+        selected = ",".join(":" + key for key in params)
+        for sql, field in (
+            ("SELECT AGENT_ID, MIN(SESSION_ID) AS CURRENT_SESSION_ID FROM AGENT_SESSION "
+             "WHERE IS_ACTIVE = 'Y' AND AGENT_ID IN (" + selected + ") GROUP BY AGENT_ID", "current_session_id"),
+            ("SELECT AGENT_ID, COUNT(*) AS ACTIVE_PLAN_COUNT FROM TASK_PLANS "
+             "WHERE STATUS = 'RUNNING' AND AGENT_ID IN (" + selected + ") GROUP BY AGENT_ID", "active_plan_count"),
+            ("SELECT AGENT_ID, COUNT(*) AS RUNNING_LOOP_COUNT FROM LOOP_RUNS "
+             "WHERE STATUS = 'RUNNING' AND AGENT_ID IN (" + selected + ") GROUP BY AGENT_ID", "running_loop_count"),
+        ):
+            for row in execute_query(sql, params):
+                row = sanitize_row(row)
+                health.setdefault(str(row["agent_id"]), {})[field] = row[field]
+
+    result = []
+    for agent in agents:
+        agent_id = str(agent["agent_id"])
+        facts = health.get(agent_id, {})
         last_active = agent.get("last_active_at")
-        import datetime
         stale_seconds = None
-        if last_active:
-            if isinstance(last_active, str):
-                stale_seconds = None
-            else:
-                delta = datetime.datetime.now(last_active.tzinfo) if last_active.tzinfo else datetime.datetime.now() - last_active
-                stale_seconds = int(delta.total_seconds())
+        if isinstance(last_active, datetime):
+            stale_seconds = int((datetime.now(last_active.tzinfo) - last_active).total_seconds())
 
         status = "ONLINE"
         if agent.get("status") == "POOL":
@@ -54,27 +60,34 @@ def get_agent_health(agent_id: Optional[str] = None) -> Dict[str, Any]:
         elif stale_seconds and stale_seconds > 600:
             status = "STALLED"
 
-        return {
+        result.append({
             "agent_id": agent_id,
             "agent_name": agent.get("agent_name"),
             "status": status,
             "db_status": agent.get("status"),
-            "current_session_id": session.get("session_id") if session else None,
-            "active_plan_count": plan_count.get("cnt", 0) if plan_count else 0,
-            "running_loop_count": run_count.get("cnt", 0) if run_count else 0,
+            "current_session_id": facts.get("current_session_id"),
+            "active_plan_count": facts.get("active_plan_count", 0),
+            "running_loop_count": facts.get("running_loop_count", 0),
             "last_active_at": str(last_active) if last_active else None,
             "stale_seconds": stale_seconds,
-        }
+        })
+    return result
+
+
+def get_agent_health(agent_id: Optional[str] = None) -> Dict[str, Any]:
+    if agent_id:
+        agent = execute_query_one(
+            "SELECT AGENT_ID, AGENT_NAME, STATUS, LAST_ACTIVE_AT FROM AGENT_REGISTRY WHERE AGENT_ID = :aid",
+            {"aid": agent_id},
+        )
+        if not agent:
+            return {"error": f"Agent not found: {agent_id}"}
+        return _agent_health_rows([agent])[0]
     else:
         agents = execute_query(
-            "SELECT AGENT_ID, AGENT_NAME, STATUS, LAST_SEEN_AT, LAST_ACTIVE_AT FROM AGENT_REGISTRY ORDER BY AGENT_NAME",
+            "SELECT AGENT_ID, AGENT_NAME, STATUS, LAST_ACTIVE_AT FROM AGENT_REGISTRY ORDER BY AGENT_NAME",
         )
-        result = []
-        for a in agents:
-            a = sanitize_row(a)
-            health = get_agent_health(a.get("agent_id"))
-            result.append(health)
-        return {"agents": result}
+        return {"agents": _agent_health_rows(agents)}
 
 
 def get_agent_health_cursor(principal_id: str, *, page_size: int = 20, cursor: str = "") -> Dict[str, Any]:
@@ -105,11 +118,12 @@ def get_agent_health_cursor(principal_id: str, *, page_size: int = 20, cursor: s
         conditions.append("1=0")
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     rows = execute_query(
-        "SELECT a.AGENT_ID FROM AGENT_REGISTRY a" + where + " ORDER BY a.AGENT_ID FETCH FIRST :row_limit ROWS ONLY",
+        "SELECT a.AGENT_ID, a.AGENT_NAME, a.STATUS, a.LAST_ACTIVE_AT FROM AGENT_REGISTRY a"
+        + where + " ORDER BY a.AGENT_ID FETCH FIRST :row_limit ROWS ONLY",
         params,
     )
-    values = [get_agent_health(str(row.get("agent_id"))) for row in rows]
-    result = cursor_pagination.page(values, context, lambda item: {"agent_id": str(item["agent_id"])})
+    result = cursor_pagination.page(rows, context, lambda item: {"agent_id": str(item["agent_id"])})
+    result["items"] = _agent_health_rows(result["items"])
     count_conditions = [condition for condition in conditions if condition != "a.AGENT_ID > :after"]
     count_where = " WHERE " + " AND ".join(count_conditions) if count_conditions else ""
     count_params = {key: value for key, value in params.items() if key not in {"row_limit", "after"}}

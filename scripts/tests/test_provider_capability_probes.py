@@ -3,7 +3,7 @@ import json
 import pytest
 from lib import provider_capability_probes as probes, native_agent_api
 
-PROFILE = {"model_id": "qwen/qwen3.8-27b", "profile_id": "profile", "version": 3}
+PROFILE = {"model_id": "qwopus3.6-35b-a3b-coder-mtp", "profile_id": "profile", "version": 3}
 
 
 def completion(content="CX_OK", **message):

@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Spec API Tests"""
+"""AI Agent Infra v5.0.1 - Spec API Tests"""
 
 import sys
 import os

@@ -8,7 +8,11 @@ from jsonschema.exceptions import ValidationError, SchemaError
 from . import provider_capability_probes
 from . import agent_directory, context_derivations, graph_inspection, registered_protocols, managed_inputs, agent_diagnostics, answer_evaluation
 from . import telemetry_delivery
+from . import answer_quality
+from . import agent_assets, agent_source_sync, continuity_notes, continuity_retrospectives, memory_quality
 from .agent_extension_contracts import bounded_json
+from .continuity_contracts import AssemblyRequest, Contract
+from .continuity_state import ContinuityError
 from .cursor_pagination import normalize_page_size
 
 
@@ -73,6 +77,37 @@ class AnswerEvalResultBody(BaseModel):
     detail: dict = Field(default_factory=dict)
 
 
+class AnswerRubricBody(BaseModel):
+    case_id: str = Field(min_length=1, max_length=128)
+    case_version: int = Field(ge=1)
+    rubric: answer_quality.Rubric
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class AnswerReviewBody(BaseModel):
+    output_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    factual_correct: bool
+    citations_supported: bool
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class RecommendationBody(Contract):
+    security_domain_id: str = Field(min_length=1, max_length=128)
+    query: str = Field(min_length=1, max_length=2000)
+    limit: int = Field(default=5, ge=1, le=20)
+    candidate_limit: int = Field(default=50, ge=1, le=100)
+
+
+class AssetAssemblyBody(Contract):
+    binding_ids: list[str] = Field(min_length=1, max_length=50)
+    assembly: AssemblyRequest
+
+
+class ReconciliationReviewBody(Contract):
+    decision: str = Field(pattern="^(APPROVED|REJECTED)$")
+    reason: str = Field(min_length=3, max_length=1000)
+
+
 def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/api"):
     from .edition_features import AGENT_EXTENSIONS_ENABLED
     if not AGENT_EXTENSIONS_ENABLED:
@@ -83,6 +118,9 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
             from .continuity_bindings import authenticated_transport
             with schema_owner_context(), authenticated_transport(session.get("continuity_transport")):
                 return operation(str(session["principal_id"]), *args, **kwargs)
+        except ContinuityError as exc:
+            raise HTTPException(status_code=409 if exc.code in {"VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT", "FENCING_MISMATCH", "LEASE_HELD", "UNKNOWN_SEND", "STALE_OUTPUT"} else 422,
+                                detail={"code": exc.code, "message": str(exc)}) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ValidationError, SchemaError, KeyError) as exc:
@@ -111,6 +149,115 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
     def directory(security_domain_id: str, family: str, query: str = "", after: str = "", limit: int = Query(20, ge=1, le=50), session=Depends(require_action("workspaces.read"))):
         return invoke(agent_directory.search, session, security_domain_id, family, query, after=after, limit=limit)
 
+    @router.post(root + "/directory/recommend")
+    def directory_recommend(body: RecommendationBody, session=Depends(require_action("workspaces.read"))):
+        return invoke(agent_directory.recommend, session, body.security_domain_id, body.query,
+                      limit=body.limit, candidate_limit=body.candidate_limit)
+
+    @router.post(root + "/asset-bindings")
+    def asset_binding(body: agent_assets.AssetBinding, session=Depends(require_action("agents.operate"))):
+        return invoke(agent_assets.bind, session, body)
+
+    @router.get(root + "/asset-bindings")
+    def asset_bindings(security_domain_id: str, agent_id: str, limit: int = Query(20, ge=1, le=50), after: str = "", session=Depends(require_action("workspaces.read"))):
+        return invoke(agent_assets.list_bindings, session, security_domain_id, agent_id, limit=limit, after=after)
+
+    @router.post(root + "/asset-bindings/assemble")
+    def asset_assemble(body: AssetAssemblyBody, session=Depends(require_action("workspaces.write"))):
+        return invoke(agent_assets.assemble, session, body.binding_ids, body.assembly)
+
+    @router.get(root + "/asset-bindings/{binding_id}")
+    def asset_binding_read(binding_id: str, session=Depends(require_action("workspaces.read"))):
+        return invoke(agent_assets.load, session, binding_id)
+
+    @router.post(root + "/asset-bindings/{binding_id}/revisions")
+    def asset_binding_revise(binding_id: str, body: agent_assets.AssetRevision, session=Depends(require_action("agents.operate"))):
+        return invoke(agent_assets.revise, session, binding_id, body)
+
+    @router.post(root + "/asset-bindings/{binding_id}/state")
+    def asset_binding_state(binding_id: str, body: agent_assets.AssetState, session=Depends(require_action("agents.operate"))):
+        return invoke(agent_assets.change_state, session, binding_id, body)
+
+    @router.post(root + "/sources")
+    def source_configure(body: agent_source_sync.SourceConfiguration, session=Depends(require_action("platform.manage"))):
+        return invoke(agent_source_sync.configure, session, body)
+
+    @router.get(root + "/sources")
+    def sources(security_domain_id: str, agent_id: str, limit: int = Query(20, ge=1, le=50), after: str = "", session=Depends(require_action("workspaces.read"))):
+        return invoke(agent_source_sync.list_sources, session, security_domain_id, agent_id, limit=limit, after=after)
+
+    @router.get(root + "/sources/{source_id}")
+    def source_read(source_id: str, session=Depends(require_action("workspaces.read"))):
+        return invoke(agent_source_sync.read_source, session, source_id)
+
+    @router.post(root + "/sources/{source_id}/state")
+    def source_state(source_id: str, body: agent_source_sync.SourceState, session=Depends(require_action("platform.manage"))):
+        return invoke(agent_source_sync.change_state, session, source_id, body)
+
+    @router.post(root + "/sources/{source_id}/sync")
+    def source_sync(source_id: str, body: agent_source_sync.SyncRequest, session=Depends(require_action("agents.operate"))):
+        return invoke(agent_source_sync.enqueue, session, source_id, body)
+
+    @router.get(root + "/source-sync-jobs/{job_id}")
+    def source_job(job_id: str, session=Depends(require_action("workspaces.read"))):
+        return invoke(agent_source_sync.read_job, session, job_id)
+
+    @router.post(root + "/source-sync-jobs/{job_id}/run")
+    def source_job_run(job_id: str, session=Depends(require_action("agents.operate"))):
+        return invoke(agent_source_sync.run, session, job_id)
+
+    @router.post(root + "/works/{work_id}/notes")
+    def work_note_create(work_id: str, body: continuity_notes.NewNote, session=Depends(require_action("workspaces.write"))):
+        return invoke(continuity_notes.create_note, session, work_id, body)
+
+    @router.get(root + "/works/{work_id}/notes")
+    def work_notes(work_id: str, limit: int = Query(20, ge=1, le=100), after: str = "", session=Depends(require_action("workspaces.read"))):
+        return invoke(continuity_notes.list_notes, session, work_id, limit=limit, after=after)
+
+    @router.get(root + "/work-notes/{note_id}")
+    def work_note(note_id: str, revision: int | None = Query(None, ge=1), session=Depends(require_action("workspaces.read"))):
+        return invoke(continuity_notes.read_note, session, note_id, revision)
+
+    @router.post(root + "/work-notes/{note_id}/revisions")
+    def work_note_revise(note_id: str, body: continuity_notes.ReviseNote, session=Depends(require_action("workspaces.write"))):
+        return invoke(continuity_notes.revise_note, session, note_id, body)
+
+    @router.post(root + "/work-notes/{note_id}/state")
+    def work_note_state(note_id: str, body: continuity_notes.NoteState, session=Depends(require_action("workspaces.write"))):
+        return invoke(continuity_notes.change_state, session, note_id, body)
+
+    @router.post(root + "/memory/time-evidence")
+    def memory_time(body: BoundedBody, session=Depends(require_action("workspaces.read"))):
+        return invoke(memory_quality.read_time, session, bounded_json(body.value))
+
+    @router.post(root + "/memory/{family_id}/restore")
+    def memory_restore(family_id: str, body: BoundedBody, session=Depends(require_action("workspaces.write"))):
+        return invoke(memory_quality.restore_version, session, family_id, bounded_json(body.value))
+
+    @router.post(root + "/memory/reconciliations")
+    def memory_reconcile(body: BoundedBody, session=Depends(require_action("workspaces.write"))):
+        return invoke(memory_quality.propose_reconciliation, session, bounded_json(body.value))
+
+    @router.get(root + "/memory/reconciliations/{proposal_id}")
+    def memory_reconciliation(proposal_id: str, session=Depends(require_action("workspaces.read"))):
+        return invoke(memory_quality.read_reconciliation, session, proposal_id)
+
+    @router.post(root + "/memory/reconciliations/{proposal_id}/reviews")
+    def memory_reconciliation_review(proposal_id: str, body: ReconciliationReviewBody, session=Depends(require_action("workspaces.write"))):
+        return invoke(memory_quality.review_reconciliation, session, proposal_id, decision=body.decision, reason=body.reason)
+
+    @router.post(root + "/retrospectives")
+    def retrospective_create(body: continuity_retrospectives.NewRetrospective, session=Depends(require_action("workspaces.write"))):
+        return invoke(continuity_retrospectives.create_job, session, body)
+
+    @router.get(root + "/retrospectives/{job_id}")
+    def retrospective(job_id: str, session=Depends(require_action("workspaces.read"))):
+        return invoke(continuity_retrospectives.read_job, session, job_id)
+
+    @router.post(root + "/retrospectives/{job_id}/run")
+    def retrospective_run(job_id: str, session=Depends(require_action("workspaces.write"))):
+        return invoke(continuity_retrospectives.run_once, session, job_id, worker_id="retrospective-http-worker")
+
     @router.get(root + "/answer-evaluation/cases")
     def answer_eval_cases(include_retired: bool = False, limit: int = Query(100, ge=1, le=100), session=Depends(require_action("platform.manage"))):
         return invoke(answer_evaluation.list_cases, session, include_retired=include_retired, limit=limit)
@@ -125,6 +272,28 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
         return invoke(answer_evaluation.record_result, session, body.case_id, body.case_version,
                       body.profile_id, body.profile_version, body.entry_kind, body.observed_mode,
                       body.passed, body.latency_ms, body.policy_digest, body.detail)
+
+    @router.post(root + "/answer-evaluation/rubrics")
+    def answer_rubric(body: AnswerRubricBody, session=Depends(require_action("platform.manage"))):
+        return invoke(answer_quality.register_rubric, session, body.case_id, body.case_version,
+                      body.rubric.model_dump(mode="json"), body.reason)
+
+    @router.post(root + "/answer-evaluation/runs")
+    def answer_run(body: answer_quality.NewRun, session=Depends(require_action("platform.manage"))):
+        return invoke(answer_quality.enqueue, session, body)
+
+    @router.get(root + "/answer-evaluation/runs/{run_id}")
+    def answer_run_read(run_id: str, session=Depends(require_action("platform.manage"))):
+        return invoke(answer_quality.read_run, session, run_id)
+
+    @router.post(root + "/answer-evaluation/runs/{run_id}/execute")
+    def answer_run_execute(run_id: str, session=Depends(require_action("platform.manage"))):
+        return invoke(answer_quality.execute, session, run_id)
+
+    @router.post(root + "/answer-evaluation/runs/{run_id}/reviews")
+    def answer_run_review(run_id: str, body: AnswerReviewBody, session=Depends(require_action("platform.manage"))):
+        return invoke(answer_quality.review, session, run_id, body.output_digest, body.factual_correct,
+                      body.citations_supported, body.reason)
 
     @router.post(root + "/directory/load")
     def directory_load(body: BoundedBody, session=Depends(require_action("workspaces.read"))):

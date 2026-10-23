@@ -38,6 +38,9 @@ def database(monkeypatch):
         def execute(self, statement, params):
             return db.execute(statement.replace(' FOR UPDATE', ''), params).rowcount
         def query(self, statement, params):
+            # SQLite's clock is UTC; adapt only these vendor time expressions.
+            statement = statement.replace('SYS_EXTRACT_UTC(SYSTIMESTAMP)', 'CURRENT_TIMESTAMP')
+            statement = statement.replace("CURRENT_TIMESTAMP AT TIME ZONE 'UTC'", 'CURRENT_TIMESTAMP')
             return [{key.lower(): row[key] for key in row.keys()}
                     for row in db.execute(statement.replace(' FOR UPDATE', ''), params)]
         def query_one(self, statement, params):

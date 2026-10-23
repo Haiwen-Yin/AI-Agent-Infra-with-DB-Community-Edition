@@ -1,4 +1,4 @@
-# Security contract v5.0.0
+# Security contract v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -24,6 +24,14 @@ members. Oracle uses its native End User/context and data-grant boundary.
 YashanDB uses its own user/object-grant enforcement and restricted projections.
 Coverage must be demonstrated by native negative tests, not inferred from a
 service-side filter. See [minimum privileges](minimum-privileges.md).
+
+Normal Agent offboarding commits platform revocation before the separately
+observed native login/local-connection step. Retain the identity mapping and
+audited result; a disabled Principal or HTTP success alone does not prove native
+closure. Oracle/YashanDB fresh deployments and existing-database upgrades need
+the separately prepared narrow SYS status view, not broad dictionary grants.
+New-login blocking does not terminate existing external sessions or remote
+processes. See [native identity prerequisites and offboarding](native-identity.md).
 
 ## Authentication, registration and sessions
 

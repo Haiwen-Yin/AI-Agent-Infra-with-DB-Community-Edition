@@ -34,6 +34,18 @@ def validate_product(root: Path) -> list[str]:
                     errors.append(f"missing {database} adapter: {name}")
             if not (root / "requirements" / (database + ".txt")).is_file():
                 errors.append(f"missing selected-driver requirements: {database}")
+        shared_requirements = root / "requirements.txt"
+        if shared_requirements.is_file():
+            import re
+            if any(re.match(r"^\s*(?:oracledb|psycopg2[-_]binary|yaspy)(?:\s|[<=>!~\[]|$)", line, re.I)
+                   for line in shared_requirements.read_text().splitlines()):
+                errors.append("unified common requirements must not install database drivers")
+    from shared.lib.database_selection import requirements_for_database
+    for database in product.databases:
+        try:
+            requirements_for_database(root, database)
+        except (OSError, ValueError) as exc:
+            errors.append(f"invalid {database} dependency profile: {exc}")
     if product.brand == "agentx":
         if manifest.get("brand") != {"zh": product.name_zh, "en": product.name_en}:
             errors.append("AgentX brand identity is inconsistent")

@@ -42,7 +42,7 @@ def identity(root: Path | None = None) -> dict[str, Any]:
         "brand_key": "agentx" if donated else "chuanxu",
         "brand_zh": "OpenTenBase AgentX" if donated else "川序",
         "brand_en": "OpenTenBase AgentX" if donated else "Chuanxu",
-        "version": manifest.get("version") or "5.0.0",
+        "version": manifest.get("version") or "5.0.1",
         "edition": manifest.get("edition") or "Community",
         "databases": product.get("databases") or [
             (manifest.get("database") or {}).get("key") or "pg"

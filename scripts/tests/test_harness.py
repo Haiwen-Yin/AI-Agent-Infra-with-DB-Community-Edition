@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Harness Template API Tests"""
+"""AI Agent Infra v5.0.1 - Harness Template API Tests"""
 
 import sys
 import os

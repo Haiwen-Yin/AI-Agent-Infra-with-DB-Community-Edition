@@ -57,6 +57,7 @@ from live_db_validator import (
     V411_MIGRATION_SCRIPTS,
     V452_MIGRATION_SCRIPTS,
     V500_MIGRATION_SCRIPTS,
+    V501_MIGRATION_SCRIPTS,
     migration_scripts_for_edition,
     V410_MODEL_TABLES,
     V448_PLATFORM_AGENT_ISOLATION_TABLES,
@@ -84,6 +85,7 @@ from live_db_validator import (
     validate_v446_static_contract,
     validate_v452_static_contract,
     validate_v500_static_contract,
+    validate_v501_static_contract,
 )
 
 
@@ -128,12 +130,29 @@ IDENTITY_PORTAL_GRAPH_MIGRATION_VERSIONS = frozenset({"4.4.6"})
 PLATFORM_AGENT_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.8"})
 RELEASE_SECURITY_REPAIR_MIGRATION_VERSIONS = frozenset({"4.4.9"})
 MODEL_USAGE_WALLBOARD_MIGRATION_VERSIONS = frozenset({"4.4.10"})
-RUNTIME_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0"})
+RUNTIME_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1"})
+# Only these retained releases share migration 94's checksum-bound successor
+# contract. Never infer a trusted predecessor from a version string alone.
+HANDOFF_POLICY_RELEASE_CHAIN = (
+    "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1",
+)
 SUPPORTED_V449_BASELINE_VERSION = "4.4.7"
 WITHDRAWN_SCHEMA_VERSION = "4.4.8"
 JOURNALED_MIGRATION_VERSIONS = (
     GRAPH_MIGRATION_VERSIONS | CHANNEL_MIGRATION_VERSIONS | ORGANIZATION_MIGRATION_VERSIONS | MEMORY_LIFECYCLE_MIGRATION_VERSIONS | GRAPH_ASSURANCE_MIGRATION_VERSIONS | COMPLIANCE_MIGRATION_VERSIONS | PLATFORM_CAPABILITY_MIGRATION_VERSIONS | NATIVE_AGENT_MIGRATION_VERSIONS | BOOTSTRAP_EMBEDDING_MIGRATION_VERSIONS | NATIVE_SDD_MIGRATION_VERSIONS | ADMIN_HA_MIGRATION_VERSIONS | GRAPH_OPERATIONS_MIGRATION_VERSIONS | SECURITY_DOMAIN_BINDING_MIGRATION_VERSIONS | AGENT_POOL_CLOUD_MIGRATION_VERSIONS | GRAPH_RUN_CONTRACT_MIGRATION_VERSIONS | IDENTITY_PORTAL_GRAPH_MIGRATION_VERSIONS | PLATFORM_AGENT_ISOLATION_MIGRATION_VERSIONS | RELEASE_SECURITY_REPAIR_MIGRATION_VERSIONS | MODEL_USAGE_WALLBOARD_MIGRATION_VERSIONS | RUNTIME_ISOLATION_MIGRATION_VERSIONS
 )
+
+NATIVE_SCHEMA_VERIFIED_MIGRATIONS = frozenset({
+    "86_v4_4_15_continuity_entities.sql", "87_v4_4_15_continuity_bindings.sql",
+    "88_v4_4_15_execution_links.sql", "89_v4_4_15_dynamic_mcp_exposure.sql",
+    "90_v4_4_15_mcp_native_boundary.sql", "91_v4_4_15_mcp_owner_binding.sql",
+    "92_v4_4_15_mcp_native_exception.sql", "93_v4_4_15_mcp_tool_requests.sql",
+    "94_v4_4_15_handoff_policy.sql", "95_v4_4_15_runtime_context.sql",
+    "96_v4_4_15_runtime_credentials.sql", "97_v4_4_15_native_context_sources.sql",
+    "98_v4_5_1_agent_extensions.sql", "99_v4_5_1_integration_bindings.sql",
+    "101_v4_5_2_task_continuity.sql", "102_v5_0_0_network_access.sql",
+    *V501_MIGRATION_SCRIPTS[-3:],
+})
 
 # v4.4.1 was exercised against the retained PostgreSQL and YashanDB test
 # baselines while its additive script was still being finalized.  These are
@@ -455,6 +474,19 @@ def _step_row(cursor: Any, database: str, script: Path, *, version: str | None =
             "statements_executed": int(row[2] or 0), "failed_statement": int(row[3] or 0)}
 
 
+def _handoff_policy_applied(cursor: Any, database: str, script: Path, *, version: str) -> bool:
+    """Use the nearest present trusted journal row, never an older override."""
+    versions = (version,)
+    if version in HANDOFF_POLICY_RELEASE_CHAIN:
+        versions = tuple(reversed(HANDOFF_POLICY_RELEASE_CHAIN[:HANDOFF_POLICY_RELEASE_CHAIN.index(version) + 1]))
+    for selected_version in versions:
+        row = _step_row(cursor, database, script, version=selected_version)
+        if row is not None:
+            # A present failed/running/tampered row invalidates older evidence.
+            return row['status'] == 'APPLIED' and row['checksum'] == _checksum(script)
+    return False
+
+
 def _legacy_graph_step_compatible(cursor: Any, database: str, script: Path,
                                   checksum: str) -> bool:
     """Whether a known legacy Graph step can be safely claimed by this release."""
@@ -680,7 +712,9 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
             )
         elif MIGRATION_VERSION in {"4.4.10"} | RUNTIME_ISOLATION_MIGRATION_VERSIONS:
             deploy_dir = scripts[0].parent if scripts else _deployment_script(database, "55_v4_4_10_model_usage_wallboard.sql").parent
-            if MIGRATION_VERSION == "5.0.0":
+            if MIGRATION_VERSION == "5.0.1":
+                release_scripts = V501_MIGRATION_SCRIPTS
+            elif MIGRATION_VERSION == "5.0.0":
                 release_scripts = V500_MIGRATION_SCRIPTS
             elif MIGRATION_VERSION == "4.5.2":
                 release_scripts = V452_MIGRATION_SCRIPTS
@@ -697,7 +731,9 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
                 missing = [str(path.name) for path in full_scripts if not path.is_file()]
                 if missing:
                     raise RuntimeError("v4.4.11 migration contract is incomplete: " + ",".join(missing))
-                if MIGRATION_VERSION == "5.0.0":
+                if MIGRATION_VERSION == "5.0.1":
+                    v43_static_contract = validate_v501_static_contract(database, full_scripts, MIGRATION_EDITION)
+                elif MIGRATION_VERSION == "5.0.0":
                     v43_static_contract = validate_v500_static_contract(database, full_scripts, MIGRATION_EDITION)
                 elif MIGRATION_VERSION == "4.5.2":
                     v43_static_contract = validate_v452_static_contract(database, full_scripts, MIGRATION_EDITION)
@@ -1396,6 +1432,16 @@ def _step_objects_complete(cursor: Any, database: str, script: Path, *, version:
     # Resolve it before checking historical successor evidence as well as the
     # ledger; otherwise an existing v4.4.15 handoff shape is replayed/rejected.
     version = MIGRATION_VERSION if version is None else version
+    if script.name in V501_MIGRATION_SCRIPTS[-3:]:
+        try:
+            try:
+                from lib.continuity_schema_validation import errors
+            except ModuleNotFoundError:
+                from shared.lib.continuity_schema_validation import errors
+            facts = json.loads(script.with_suffix(".schema.json").read_text(encoding="utf-8"))
+            return bool(facts) and not errors(cursor, database, facts)
+        except Exception:
+            return False
     if script.name == "102_v5_0_0_network_access.sql":
         try:
             try:
@@ -1462,17 +1508,7 @@ def _step_objects_complete(cursor: Any, database: str, script: Path, *, version:
             if script.name=='86_v4_4_15_continuity_entities.sql':
                 successor=script.with_name('94_v4_4_15_handoff_policy.sql')
                 if successor.is_file():
-                    applied=_step_row(cursor,database,successor,version=version)
-                    # Application-only releases retain the unchanged schema. An unchanged
-                    # successor applied by v4.4.15 remains valid evidence, but
-                    # never supersedes a present (possibly failed) current row.
-                    if applied is None and version == '4.5.1':
-                        applied=_step_row(cursor,database,successor,version='4.5.0')
-                    if applied is None and version in {'4.5.0', '4.5.1', '4.5.2', '5.0.0'}:
-                        applied=_step_row(cursor,database,successor,version='4.4.16')
-                    if applied is None and version in {'4.4.16', '4.5.0', '4.5.1', '4.5.2', '5.0.0'}:
-                        applied=_step_row(cursor,database,successor,version='4.4.15')
-                    if applied and applied['status']=='APPLIED' and applied['checksum']==_checksum(successor):
+                    if _handoff_policy_applied(cursor, database, successor, version=version):
                         overlay=json.loads(successor.with_suffix('.schema.json').read_text())['CX_HANDOFFS']
                         expected=dict(facts['CX_HANDOFFS'])
                         expected['keys']=[key for key in expected['keys'] if key!=['U',['ACTIVE_WORK_ID'],'',[]]]
@@ -2063,10 +2099,11 @@ def release_script_names(version: str, database: str, config_path: Path, edition
     # Application-only releases retain the reviewed schema chain.
     # v4.5.0 starts with the complete reviewed continuity schema. New schema
     # changes must extend this selection rather than mutate historical SQL.
-    source_ip_release = version == "5.0.0"
+    memory_context_release = version == "5.0.1"
+    source_ip_release = version in {"5.0.0", "5.0.1"}
     extension_release = version == "4.5.1"
-    continuity_release = version in {"4.5.2", "5.0.0"}
-    version = {"4.4.16": "4.4.15", "4.5.0": "4.4.15", "4.5.1": "4.4.15", "4.5.2": "4.4.15", "5.0.0": "4.4.15"}.get(version, version)
+    continuity_release = version in {"4.5.2", "5.0.0", "5.0.1"}
+    version = {"4.4.16": "4.4.15", "4.5.0": "4.4.15", "4.5.1": "4.4.15", "4.5.2": "4.4.15", "5.0.0": "4.4.15", "5.0.1": "4.4.15"}.get(version, version)
     selectors = {
         "4.3.7": _v437_script_names,
         "4.4.10": _v410_script_names,
@@ -2130,6 +2167,8 @@ def release_script_names(version: str, database: str, config_path: Path, edition
         ])
     if source_ip_release:
         names.append("102_v5_0_0_network_access.sql")
+    if memory_context_release:
+        names.extend(V501_MIGRATION_SCRIPTS[-3:])
     return names
 
 
@@ -2483,7 +2522,7 @@ def _apply_statement_migration(
                             )
                         conn.commit()
                     return result
-            if script.name in {'86_v4_4_15_continuity_entities.sql','87_v4_4_15_continuity_bindings.sql','88_v4_4_15_execution_links.sql','89_v4_4_15_dynamic_mcp_exposure.sql','90_v4_4_15_mcp_native_boundary.sql','91_v4_4_15_mcp_owner_binding.sql','92_v4_4_15_mcp_native_exception.sql','93_v4_4_15_mcp_tool_requests.sql','94_v4_4_15_handoff_policy.sql','95_v4_4_15_runtime_context.sql','96_v4_4_15_runtime_credentials.sql','97_v4_4_15_native_context_sources.sql','98_v4_5_1_agent_extensions.sql','99_v4_5_1_integration_bindings.sql','101_v4_5_2_task_continuity.sql','102_v5_0_0_network_access.sql'} and not _step_objects_complete(cursor, database, script):
+            if script.name in NATIVE_SCHEMA_VERIFIED_MIGRATIONS and not _step_objects_complete(cursor, database, script):
                 result.error_type = 'ContinuitySchemaMismatch'
                 result.ledger_status = 'blocked_structure_drift'
                 _upsert_step_row(cursor, database, script, result.checksum, 'FAILED', result.statements_executed,
@@ -2631,7 +2670,7 @@ def _apply_pg(config: dict[str, Any], script: Path) -> MigrationResult:
             # AGE/DDL blocks and their IF NOT EXISTS guards remain atomic.
             cursor.execute(script.read_text(encoding="utf-8"))
             result.statements_executed = len(statements) or 1
-            if script.name in {'86_v4_4_15_continuity_entities.sql','87_v4_4_15_continuity_bindings.sql','88_v4_4_15_execution_links.sql','89_v4_4_15_dynamic_mcp_exposure.sql','90_v4_4_15_mcp_native_boundary.sql','91_v4_4_15_mcp_owner_binding.sql','92_v4_4_15_mcp_native_exception.sql','93_v4_4_15_mcp_tool_requests.sql','94_v4_4_15_handoff_policy.sql','95_v4_4_15_runtime_context.sql','96_v4_4_15_runtime_credentials.sql','97_v4_4_15_native_context_sources.sql','98_v4_5_1_agent_extensions.sql','99_v4_5_1_integration_bindings.sql','101_v4_5_2_task_continuity.sql','102_v5_0_0_network_access.sql'} and not _step_objects_complete(cursor, 'pg', script):
+            if script.name in NATIVE_SCHEMA_VERIFIED_MIGRATIONS and not _step_objects_complete(cursor, 'pg', script):
                 raise RuntimeError('Continuity native structure verification failed')
             if MIGRATION_VERSION in JOURNALED_MIGRATION_VERSIONS:
                 _upsert_step_row(cursor, "pg", script, result.checksum, "APPLIED", result.statements_executed)
@@ -2662,13 +2701,15 @@ def _apply_pg(config: dict[str, Any], script: Path) -> MigrationResult:
     return result
 
 
-def _order_successor_recovery(database: str, config: dict[str, Any], scripts: list[Path]) -> list[Path]:
+def _order_successor_recovery(database: str, config: dict[str, Any], scripts: list[Path],
+                              *, version: str | None = None) -> list[Path]:
     """Resume an interrupted policy successor before verifying its retired key.
 
     Never use incomplete successor facts as verification evidence. Only an
     exact journaled attempt with all immediate predecessors APPLIED may run
     first; the normal chain still runs afterwards, including successor checks.
     """
+    version = MIGRATION_VERSION if version is None else version
     successor = next((path for path in scripts if path.name == '94_v4_4_15_handoff_policy.sql'), None)
     if successor is None:
         return scripts
@@ -2677,7 +2718,7 @@ def _order_successor_recovery(database: str, config: dict[str, Any], scripts: li
         with probe.cursor() as cursor:
             if 'AI_SCHEMA_MIGRATION_STEPS' not in _schema_tables(cursor, database):
                 return scripts
-            row = _step_row(cursor, database, successor)
+            row = _step_row(cursor, database, successor, version=version)
             if not row or row['status'] not in {'FAILED', 'RUNNING'}:
                 return scripts
             if row['checksum'] != _checksum(successor):
@@ -2687,7 +2728,7 @@ def _order_successor_recovery(database: str, config: dict[str, Any], scripts: li
             if {int(path.name.split('_',1)[0]) for path in predecessors} != expected:
                 raise ValueError('Policy recovery requires the complete predecessor chain')
             for path in predecessors:
-                prior = _step_row(cursor, database, path)
+                prior = _step_row(cursor, database, path, version=version)
                 if not prior or prior['status'] != 'APPLIED' or prior['checksum'] != _checksum(path):
                     raise ValueError('Policy recovery requires verified predecessor checksums')
             return [successor, *scripts]
@@ -2715,7 +2756,7 @@ def _connect_for_preflight(database: str, config: dict[str, Any]) -> Any:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", choices=("all", "oracle", "pg", "yashandb"), default="all")
-    parser.add_argument("--version", choices=("4.0.1", "4.1.0", "4.2.0", "4.2.1", "4.3.0", "4.3.1", "4.3.2", "4.3.3", "4.3.4", "4.3.5", "4.3.6", "4.3.7", "4.4.0", "4.4.1", "4.4.2", "4.4.3", "4.4.4", "4.4.5", "4.4.6", "4.4.8", "4.4.9", "4.4.10", "4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0"), default="4.1.0")
+    parser.add_argument("--version", choices=("4.0.1", "4.1.0", "4.2.0", "4.2.1", "4.3.0", "4.3.1", "4.3.2", "4.3.3", "4.3.4", "4.3.5", "4.3.6", "4.3.7", "4.4.0", "4.4.1", "4.4.2", "4.4.3", "4.4.4", "4.4.5", "4.4.6", "4.4.8", "4.4.9", "4.4.10", "4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1"), default="4.1.0")
     parser.add_argument("--edition", choices=("community", "enterprise"), default="community",
                         help="v4.2 scheduler scope; Community excludes Enterprise HA objects")
     parser.add_argument("--oracle-config", type=Path)
@@ -2863,7 +2904,7 @@ def main() -> int:
                 ))
                 continue
             per_script = []
-            scripts = _order_successor_recovery(database, config, scripts)
+            scripts = _order_successor_recovery(database, config, scripts, version=args.version)
             for script in scripts:
                 result = runners[database](config, script)
                 per_script.append(result)

@@ -1,9 +1,9 @@
 {
-  "version": "5.0.0",
-  "database": "yashandb",
+  "version": "5.0.1",
+  "database": "pg",
   "fresh_install": true,
   "deployment": "bootstrap-deployment-agent",
-  "required_terminal_migration": "102_v5_0_0_network_access.sql",
+  "required_terminal_migration": "105_v5_0_1_answer_quality.sql",
   "historical_chain": "retained-for-audit",
   "withdrawn_upgrade_sources": [
     "4.4.8"

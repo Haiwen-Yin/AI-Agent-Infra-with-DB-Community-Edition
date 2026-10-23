@@ -64,6 +64,12 @@ class VersionRequest:
     valid_until: Optional[str] = None
     policy_version: str = "v4.3.2"
     reason: str = ""
+    event_at: Optional[str] = None
+    observed_at: Optional[str] = None
+    applies_from: Optional[str] = None
+    applies_until: Optional[str] = None
+    corrects_version_id: Optional[str] = None
+    correction_scope: Optional[str] = None
 
 
 def _id(prefix: str) -> str:
@@ -106,6 +112,9 @@ def _request(value: Mapping[str, Any] | VersionRequest) -> VersionRequest:
             workspace_id=value.get("workspace_id"), security_domain_id=value.get("security_domain_id"),
             source_ref=value.get("source_ref"), source_digest=value.get("source_digest"), valid_until=value.get("valid_until"),
             policy_version=str(value.get("policy_version") or "v4.3.2"), reason=str(value.get("reason") or ""),
+            event_at=value.get("event_at"), observed_at=value.get("observed_at"),
+            applies_from=value.get("applies_from"), applies_until=value.get("applies_until"),
+            corrects_version_id=value.get("corrects_version_id"), correction_scope=value.get("correction_scope"),
         )
     if not request.title.strip():
         raise MemoryLifecycleError("INVALID_ARGUMENT", "memory title is required")
@@ -113,7 +122,15 @@ def _request(value: Mapping[str, Any] | VersionRequest) -> VersionRequest:
     _normal(request.memory_scope, MEMORY_SCOPES, "memory_scope")
     if request.classification not in CLASSIFICATION_LEVELS:
         raise MemoryLifecycleError("INVALID_ARGUMENT", "unsupported memory classification")
+    if _has_temporal_facts(request):
+        from .memory_quality import temporal_facts
+        temporal_facts(request.__dict__)
     return request
+
+
+def _has_temporal_facts(request):
+    return any(getattr(request, field, None) is not None for field in
+               ('event_at','observed_at','applies_from','applies_until','corrects_version_id','correction_scope'))
 
 
 def _safe_error() -> MemoryLifecycleError:
@@ -222,14 +239,18 @@ def current_memories(*, keyword: Optional[str] = None, memory_type: Optional[str
                      workspace_id: Optional[str] = None, owner_agent_id: Optional[str] = None,
                      limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return only current, ordinary-retrievable versions in legacy-compatible shape."""
-    conditions = ["f.CURRENT_VERSION_ID = v.VERSION_ID"]
+    from .memory_quality import applicable_sql
+    conditions = ["f.CURRENT_VERSION_ID = v.VERSION_ID", applicable_sql()]
     params: dict[str, Any] = {"lim": max(1, min(int(limit), 500)), "off": max(0, int(offset))}
     if lifecycle_state:
+        state = _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state")
+        if state not in ORDINARY_VISIBLE_STATES:
+            raise MemoryLifecycleError("INVALID_ARGUMENT", "historical or blocked memory requires the history endpoint")
         conditions.append("v.LIFECYCLE_STATE = :state")
-        params["state"] = _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state")
+        params["state"] = state
     else:
         conditions.append("v.LIFECYCLE_STATE IN ('ACTIVE','STALE','CONFLICTED','MIGRATED')")
-        conditions.append("(v.VALID_UNTIL IS NULL OR v.VALID_UNTIL > CURRENT_TIMESTAMP)")
+    conditions.append("(v.VALID_UNTIL IS NULL OR v.VALID_UNTIL > CURRENT_TIMESTAMP)")
     if keyword:
         conditions.append("(UPPER(v.TITLE) LIKE UPPER(:keyword) OR UPPER(v.BODY_TEXT) LIKE UPPER(:keyword))")
         params["keyword"] = f"%{keyword}%"
@@ -270,14 +291,18 @@ def current_memories_cursor(
                "workspace_id": workspace_id or "", "owner_agent_id": owner_agent_id or ""}
     context = cursor_pagination.resolve(principal_id, "memory", filters, "family_id:asc", page_size, cursor)
     context.update({"principal_id": principal_id, "resource_key": "memory", "sort_key": "family_id:asc"})
-    conditions = ["f.CURRENT_VERSION_ID = v.VERSION_ID"]
+    from .memory_quality import applicable_sql
+    conditions = ["f.CURRENT_VERSION_ID = v.VERSION_ID", applicable_sql()]
     params: dict[str, Any] = {"lim": int(context["page_size"]) + 1}
     if lifecycle_state:
+        state = _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state")
+        if state not in ORDINARY_VISIBLE_STATES:
+            raise MemoryLifecycleError("INVALID_ARGUMENT", "historical or blocked memory requires the history endpoint")
         conditions.append("v.LIFECYCLE_STATE = :state")
-        params["state"] = _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state")
+        params["state"] = state
     else:
         conditions.append("v.LIFECYCLE_STATE IN ('ACTIVE','STALE','CONFLICTED','MIGRATED')")
-        conditions.append("(v.VALID_UNTIL IS NULL OR v.VALID_UNTIL > CURRENT_TIMESTAMP)")
+    conditions.append("(v.VALID_UNTIL IS NULL OR v.VALID_UNTIL > CURRENT_TIMESTAMP)")
     if keyword:
         conditions.append("(UPPER(v.TITLE) LIKE UPPER(:keyword) OR UPPER(v.BODY_TEXT) LIKE UPPER(:keyword))")
         params["keyword"] = f"%{keyword}%"
@@ -371,6 +396,8 @@ def adopt_legacy_memory(entity_id: str, *, actor: Optional[str] = None) -> Optio
 
 def create_family(request_value: Mapping[str, Any] | VersionRequest, *, actor: str, idempotency_key: Optional[str] = None) -> dict[str, Any]:
     request = _request(request_value)
+    if request.corrects_version_id:
+        raise MemoryLifecycleError('INVALID_ARGUMENT','A correction must target an existing family successor')
     inspection = inspect_ingestion(request.body)
     if inspection["quarantine_recommended"]:
         # Persist immutable evidence, but fail closed from ordinary retrieval.
@@ -406,6 +433,8 @@ def create_successor(family_id: str, expected_version_id: str, request_value: Ma
         requested_domain = str(request.security_domain_id or "")
         if family_domain and requested_domain and family_domain != requested_domain:
             raise MemoryLifecycleError("SCOPE_CHANGE_REQUIRED", "memory Security Domain cannot change in a successor version")
+        from .memory_quality import temporal_facts, guard_successor
+        guard_successor(tx, expected_version_id, temporal_facts(request.__dict__))
         number = int((tx.query_one("SELECT COALESCE(MAX(VERSION_NUMBER),0) AS VERSION_NUMBER FROM CX_MEMORY_VERSIONS WHERE FAMILY_ID = :family_id", {"family_id": family_id}) or {}).get("version_number") or 0) + 1
         _insert_version(tx, version_id, family_id, number, request, digest, actor, lifecycle_state=next_state)
         _insert_source_representation(tx, version_id, request.body, digest)
@@ -607,13 +636,14 @@ def _select_snapshot_members(reader: Any, *, token_budget: int, limit: int = 200
     facade.  Keeping selection on the transaction used for persistence avoids
     publishing a snapshot whose members were read before a concurrent change.
     """
+    from .memory_quality import applicable_sql
     versions = reader.query(
         "SELECT f.FAMILY_ID,f.LEGACY_ENTITY_ID,v.VERSION_ID,v.VERSION_NUMBER,v.TITLE,v.BODY_TEXT,"
         "v.MEMORY_TYPE,v.MEMORY_SCOPE,v.LIFECYCLE_STATE,v.CLASSIFICATION,v.OWNER_PRINCIPAL_ID,"
         "v.OWNER_AGENT_ID,v.WORKSPACE_ID,v.SECURITY_DOMAIN_ID,v.VALID_FROM,v.VALID_UNTIL "
         "FROM CX_MEMORY_FAMILIES f JOIN CX_MEMORY_VERSIONS v ON v.VERSION_ID=f.CURRENT_VERSION_ID "
         "WHERE v.LIFECYCLE_STATE IN ('ACTIVE','STALE','CONFLICTED','MIGRATED') "
-        "AND (v.VALID_UNTIL IS NULL OR v.VALID_UNTIL > CURRENT_TIMESTAMP) "
+        "AND (v.VALID_UNTIL IS NULL OR v.VALID_UNTIL > CURRENT_TIMESTAMP) AND "+applicable_sql()+" "
         "ORDER BY v.CREATED_AT DESC FETCH FIRST :lim ROWS ONLY",
         {"lim": max(1, min(int(limit), 500))},
     )
@@ -780,9 +810,10 @@ def resolve_snapshot(snapshot_id: str, *, continuation: str = "PAUSE") -> dict[s
         if (not instance or str(instance.get("status") or "").upper() != "ACTIVE" or instance.get("revoked_at") is not None
                 or int(instance.get("fencing_token") or -1) != int(snapshot.get("agent_fencing_token") or -1)):
             raise MemoryLifecycleError("ACCESS_REVOKED", "snapshot Agent fencing changed")
+    from .memory_quality import applicable_sql
     rows = execute_query(
         "SELECT m.FAMILY_ID,m.VERSION_ID,m.REPRESENTATION_ID,m.SELECTED_TOKENS,v.LIFECYCLE_STATE,v.SECURITY_DOMAIN_ID,v.VALID_UNTIL,"
-        "CASE WHEN v.VALID_UNTIL IS NOT NULL AND v.VALID_UNTIL <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END AS IS_EXPIRED "
+        "CASE WHEN (v.VALID_UNTIL IS NOT NULL AND v.VALID_UNTIL <= CURRENT_TIMESTAMP) OR NOT ("+applicable_sql()+") THEN 1 ELSE 0 END AS IS_EXPIRED "
         "FROM CX_MEMORY_SNAPSHOT_MEMBERS m JOIN CX_MEMORY_VERSIONS v ON v.VERSION_ID=m.VERSION_ID "
         "WHERE m.SNAPSHOT_ID=:snapshot_id ORDER BY m.SELECTION_RANK",
         {"snapshot_id": snapshot_id},
@@ -791,8 +822,10 @@ def resolve_snapshot(snapshot_id: str, *, continuation: str = "PAUSE") -> dict[s
     for row in rows:
         state = str(row.get("lifecycle_state") or "").upper()
         expired = int(row.get("is_expired") or 0) == 1
-        if state in {"QUARANTINED", "UNAVAILABLE", "ARCHIVED", "EXPIRED"}:
-            security_blocked.append({"version_id": row["version_id"], "reason": state})
+        if state in {"QUARANTINED", "UNAVAILABLE", "ARCHIVED", "EXPIRED"} or expired:
+            security_blocked.append({"version_id": row["version_id"],
+                                     "reason": state if state in {"QUARANTINED", "UNAVAILABLE", "ARCHIVED", "EXPIRED"}
+                                     else "NOT_CURRENTLY_APPLICABLE"})
         elif principal_id and row.get("security_domain_id"):
             domain_member = execute_query_one(
                 "SELECT 1 AS MEMBER FROM CX_DOMAIN_MEMBERS WHERE SECURITY_DOMAIN_ID=:domain_id AND PRINCIPAL_ID=:principal_id AND STATUS='ACTIVE'",
@@ -894,14 +927,14 @@ def organize_memory(version_id: str, *, actor: str, dry_run: bool = True, token_
 
 
 def propose_llm_candidate(version_id: str, output: Mapping[str, Any], *, actor: str, endpoint_class: str,
-                          model_id: str, prompt_version: str, input_digest: str) -> dict[str, Any]:
+                          model_id: str, prompt_version: str, input_digest: str, transaction: Any = None) -> dict[str, Any]:
     """Store structured model output as an auditable candidate, never direct state."""
     if endpoint_class.upper() not in {"LOCAL", "APPROVED_INTERNAL"}:
         raise MemoryLifecycleError("POLICY_DENIED", "memory model endpoint is not approved")
     if not isinstance(output, Mapping) or not isinstance(output.get("summary"), str):
         raise MemoryLifecycleError("INVALID_ARGUMENT", "model output does not satisfy memory candidate schema")
     proposed = {"summary": str(output["summary"])[:16000], "atomic_facts": list(output.get("atomic_facts") or [])[:32], "relations": list(output.get("relations") or [])[:32], "model_id": model_id[:256], "endpoint_class": endpoint_class.upper(), "prompt_version": prompt_version[:128], "input_digest": input_digest, "output_digest": _digest(_json(output))}
-    return create_candidate("LLM_SUMMARY", version_id, proposed, actor=actor, confidence=output.get("confidence"), reason="structured model output requires review")
+    return create_candidate("LLM_SUMMARY", version_id, proposed, actor=actor, confidence=output.get("confidence"), reason="structured model output requires review", transaction=transaction)
 
 
 def chain(version_id: str, *, hops: int = 2, limit: int = 100) -> dict[str, list[dict[str, Any]]]:
@@ -945,11 +978,11 @@ def authorized_chain(principal_id: str, version_id: str, *, purpose: str = "RUNT
     return {"nodes": nodes, "relations": [row for row in raw["relations"] if str(row.get("source_version_id")) in allowed_ids and str(row.get("target_version_id")) in allowed_ids]}
 
 
-def create_candidate(candidate_type: str, source_version_id: str, proposed: Mapping[str, Any], *, actor: str, confidence: Optional[float] = None, reason: str = "", idempotency_key: Optional[str] = None) -> dict[str, Any]:
+def create_candidate(candidate_type: str, source_version_id: str, proposed: Mapping[str, Any], *, actor: str, confidence: Optional[float] = None, reason: str = "", idempotency_key: Optional[str] = None, transaction: Any = None) -> dict[str, Any]:
     candidate_type = str(candidate_type).upper()
     candidate_id = _id("MCAND")
     policy_result = "REVIEW" if candidate_type in HIGH_IMPACT_CANDIDATES else "VALIDATED"
-    execute("INSERT INTO CX_MEMORY_CANDIDATES (CANDIDATE_ID,CANDIDATE_TYPE,SOURCE_VERSION_ID,PROPOSED_JSON,CONFIDENCE,STATUS,POLICY_RESULT,CREATED_BY,REASON,IDEMPOTENCY_KEY) VALUES (:candidate_id,:candidate_type,:source_version_id,:proposed,:confidence,'PENDING',:policy_result,:actor,:reason,:idempotency_key)", {"candidate_id": candidate_id, "candidate_type": candidate_type[:32], "source_version_id": source_version_id, "proposed": _json(dict(proposed)), "confidence": confidence, "policy_result": policy_result, "actor": actor, "reason": reason, "idempotency_key": idempotency_key})
+    (transaction.execute if transaction is not None else execute)("INSERT INTO CX_MEMORY_CANDIDATES (CANDIDATE_ID,CANDIDATE_TYPE,SOURCE_VERSION_ID,PROPOSED_JSON,CONFIDENCE,STATUS,POLICY_RESULT,CREATED_BY,REASON,IDEMPOTENCY_KEY) VALUES (:candidate_id,:candidate_type,:source_version_id,:proposed,:confidence,'PENDING',:policy_result,:actor,:reason,:idempotency_key)", {"candidate_id": candidate_id, "candidate_type": candidate_type[:32], "source_version_id": source_version_id, "proposed": _json(dict(proposed)), "confidence": confidence, "policy_result": policy_result, "actor": actor, "reason": reason, "idempotency_key": idempotency_key})
     return {"candidate_id": candidate_id, "status": "PENDING", "policy_result": policy_result}
 
 
@@ -1064,20 +1097,21 @@ def claim_job(worker_id: str, *, lease_seconds: int = 120) -> Optional[dict[str,
     """Claim one queued or expired job using a conditional fenced update."""
     if not worker_id.strip():
         raise MemoryLifecycleError("INVALID_ARGUMENT", "memory job worker_id is required")
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
     candidate = execute_query_one(
         "SELECT JOB_ID FROM CX_MEMORY_JOBS WHERE STATUS = 'QUEUED' OR "
-        "(STATUS = 'RUNNING' AND LEASE_EXPIRES_AT <= CURRENT_TIMESTAMP) "
+        "(STATUS = 'RUNNING' AND LEASE_EXPIRES_AT <= :utc_now) "
         "ORDER BY CREATED_AT FETCH FIRST :lim ROWS ONLY",
-        {"lim": 1},
+        {"lim": 1, "utc_now": utc_now},
     )
     if not candidate:
         return None
-    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=max(30, min(int(lease_seconds), 3600)))
+    expires_at = utc_now + timedelta(seconds=max(30, min(int(lease_seconds), 3600)))
     claimed = execute(
         "UPDATE CX_MEMORY_JOBS SET STATUS = 'RUNNING', LEASE_OWNER = :worker_id, LEASE_EXPIRES_AT = :expires_at, "
         "FENCING_TOKEN = FENCING_TOKEN + 1, UPDATED_AT = CURRENT_TIMESTAMP "
-        "WHERE JOB_ID = :job_id AND (STATUS = 'QUEUED' OR (STATUS = 'RUNNING' AND LEASE_EXPIRES_AT <= CURRENT_TIMESTAMP))",
-        {"worker_id": worker_id, "expires_at": expires_at, "job_id": candidate["job_id"]},
+        "WHERE JOB_ID = :job_id AND (STATUS = 'QUEUED' OR (STATUS = 'RUNNING' AND LEASE_EXPIRES_AT <= :utc_now))",
+        {"worker_id": worker_id, "expires_at": expires_at, "job_id": candidate["job_id"], "utc_now": utc_now},
     )
     if claimed != 1:
         return None
@@ -1087,21 +1121,23 @@ def claim_job(worker_id: str, *, lease_seconds: int = 120) -> Optional[dict[str,
 def complete_job(job_id: str, *, worker_id: str, fencing_token: int, result: Mapping[str, Any], status: str = "COMPLETED") -> bool:
     if status not in {"COMPLETED", "FAILED", "CANCELLED"}:
         raise MemoryLifecycleError("INVALID_ARGUMENT", "terminal memory job status is invalid")
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
     changed = execute(
-        "UPDATE CX_MEMORY_JOBS SET STATUS = :status, CHECKPOINT_JSON = :result, LEASE_EXPIRES_AT = CURRENT_TIMESTAMP, UPDATED_AT = CURRENT_TIMESTAMP "
-        "WHERE JOB_ID = :job_id AND STATUS = 'RUNNING' AND LEASE_OWNER = :worker_id AND FENCING_TOKEN = :fencing_token",
-        {"status": status, "result": _json(dict(result)), "job_id": job_id, "worker_id": worker_id, "fencing_token": int(fencing_token)},
+        "UPDATE CX_MEMORY_JOBS SET STATUS = :status, CHECKPOINT_JSON = :result, LEASE_EXPIRES_AT = :utc_now, UPDATED_AT = CURRENT_TIMESTAMP "
+        "WHERE JOB_ID = :job_id AND STATUS = 'RUNNING' AND LEASE_OWNER = :worker_id AND FENCING_TOKEN = :fencing_token AND LEASE_EXPIRES_AT>:utc_now",
+        {"status": status, "result": _json(dict(result)), "job_id": job_id, "worker_id": worker_id, "fencing_token": int(fencing_token), "utc_now": utc_now},
     )
     return changed == 1
 
 
 def renew_job_lease(job_id: str, *, worker_id: str, fencing_token: int, lease_seconds: int = 120) -> bool:
     """Renew only the caller's current lease; a stale node cannot extend it."""
-    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=max(30, min(int(lease_seconds), 3600)))
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expires_at = utc_now + timedelta(seconds=max(30, min(int(lease_seconds), 3600)))
     changed = execute(
         "UPDATE CX_MEMORY_JOBS SET LEASE_EXPIRES_AT=:expires_at, UPDATED_AT=CURRENT_TIMESTAMP "
-        "WHERE JOB_ID=:job_id AND STATUS='RUNNING' AND LEASE_OWNER=:worker_id AND FENCING_TOKEN=:fencing_token AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP",
-        {"expires_at": expires_at, "job_id": job_id, "worker_id": worker_id, "fencing_token": int(fencing_token)},
+        "WHERE JOB_ID=:job_id AND STATUS='RUNNING' AND LEASE_OWNER=:worker_id AND FENCING_TOKEN=:fencing_token AND LEASE_EXPIRES_AT>:utc_now",
+        {"expires_at": expires_at, "job_id": job_id, "worker_id": worker_id, "fencing_token": int(fencing_token), "utc_now": utc_now},
     )
     return changed == 1
 
@@ -1132,31 +1168,34 @@ def retry_job(job_id: str, *, actor: str, reason: str) -> bool:
 
 def claim_job_item(job_id: str, *, worker_id: str, job_fencing_token: int, lease_seconds: int = 120) -> Optional[dict[str, Any]]:
     """Claim one bounded item while proving the enclosing job lease is still ours."""
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
     candidate = execute_query_one(
-        "SELECT ITEM_ID FROM CX_MEMORY_JOB_ITEMS WHERE JOB_ID=:job_id AND (STATUS='QUEUED' OR (STATUS='RUNNING' AND LEASE_EXPIRES_AT<=CURRENT_TIMESTAMP)) ORDER BY CREATED_AT FETCH FIRST :lim ROWS ONLY",
-        {"job_id": job_id, "lim": 1},
+        "SELECT ITEM_ID FROM CX_MEMORY_JOB_ITEMS WHERE JOB_ID=:job_id AND (STATUS='QUEUED' OR (STATUS='RUNNING' AND LEASE_EXPIRES_AT<=:utc_now)) ORDER BY CREATED_AT FETCH FIRST :lim ROWS ONLY",
+        {"job_id": job_id, "lim": 1, "utc_now": utc_now},
     )
     if not candidate:
         return None
-    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=max(30, min(int(lease_seconds), 3600)))
+    expires_at = utc_now + timedelta(seconds=max(30, min(int(lease_seconds), 3600)))
     changed = execute(
         "UPDATE CX_MEMORY_JOB_ITEMS SET STATUS='RUNNING',LEASE_OWNER=:worker_id,LEASE_EXPIRES_AT=:expires_at,FENCING_TOKEN=FENCING_TOKEN+1,ATTEMPT_COUNT=ATTEMPT_COUNT+1,UPDATED_AT=CURRENT_TIMESTAMP "
-        "WHERE ITEM_ID=:item_id AND (STATUS='QUEUED' OR (STATUS='RUNNING' AND LEASE_EXPIRES_AT<=CURRENT_TIMESTAMP)) "
-        "AND EXISTS (SELECT 1 FROM CX_MEMORY_JOBS j WHERE j.JOB_ID=:job_id AND j.STATUS='RUNNING' AND j.LEASE_OWNER=:worker_id AND j.FENCING_TOKEN=:job_fencing_token AND j.LEASE_EXPIRES_AT>CURRENT_TIMESTAMP)",
-        {"worker_id": worker_id, "expires_at": expires_at, "item_id": candidate["item_id"], "job_id": job_id, "job_fencing_token": int(job_fencing_token)},
+        "WHERE ITEM_ID=:item_id AND (STATUS='QUEUED' OR (STATUS='RUNNING' AND LEASE_EXPIRES_AT<=:utc_now)) "
+        "AND EXISTS (SELECT 1 FROM CX_MEMORY_JOBS j WHERE j.JOB_ID=:job_id AND j.STATUS='RUNNING' AND j.LEASE_OWNER=:worker_id AND j.FENCING_TOKEN=:job_fencing_token AND j.LEASE_EXPIRES_AT>:utc_now)",
+        {"worker_id": worker_id, "expires_at": expires_at, "item_id": candidate["item_id"], "job_id": job_id, "job_fencing_token": int(job_fencing_token), "utc_now": utc_now},
     )
     if changed != 1:
         return None
     return execute_query_one("SELECT * FROM CX_MEMORY_JOB_ITEMS WHERE ITEM_ID=:item_id", {"item_id": candidate["item_id"]})
 
 
-def complete_job_item(item_id: str, *, worker_id: str, fencing_token: int, result: Mapping[str, Any], status: str = "COMPLETED") -> bool:
+def complete_job_item(item_id: str, *, worker_id: str, fencing_token: int, result: Mapping[str, Any], status: str = "COMPLETED", transaction: Any = None) -> bool:
     if status not in {"COMPLETED", "FAILED", "CANCELLED"}:
         raise MemoryLifecycleError("INVALID_ARGUMENT", "terminal memory job item status is invalid")
-    changed = execute(
-        "UPDATE CX_MEMORY_JOB_ITEMS SET STATUS=:status,RESULT_JSON=:result,LEASE_EXPIRES_AT=CURRENT_TIMESTAMP,UPDATED_AT=CURRENT_TIMESTAMP "
-        "WHERE ITEM_ID=:item_id AND STATUS='RUNNING' AND LEASE_OWNER=:worker_id AND FENCING_TOKEN=:fencing_token",
-        {"status": status, "result": _json(dict(result)), "item_id": item_id, "worker_id": worker_id, "fencing_token": int(fencing_token)},
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+    changed = (transaction.execute if transaction is not None else execute)(
+        "UPDATE CX_MEMORY_JOB_ITEMS SET STATUS=:status,RESULT_JSON=:result,LEASE_EXPIRES_AT=:utc_now,UPDATED_AT=CURRENT_TIMESTAMP "
+        "WHERE ITEM_ID=:item_id AND STATUS='RUNNING' AND LEASE_OWNER=:worker_id AND FENCING_TOKEN=:fencing_token AND LEASE_EXPIRES_AT>:utc_now "
+        "AND EXISTS (SELECT 1 FROM CX_MEMORY_JOBS j WHERE j.JOB_ID=CX_MEMORY_JOB_ITEMS.JOB_ID AND j.STATUS='RUNNING' AND j.LEASE_OWNER=:worker_id AND j.LEASE_EXPIRES_AT>:utc_now)",
+        {"status": status, "result": _json(dict(result)), "item_id": item_id, "worker_id": worker_id, "fencing_token": int(fencing_token), "utc_now": utc_now},
     )
     return changed == 1
 
@@ -1170,23 +1209,36 @@ def submit_external_worker_result(item_id: str, *, worker_id: str, fencing_token
     """
     if not isinstance(output, Mapping) or not isinstance(output.get("summary"), str):
         raise MemoryLifecycleError("INVALID_ARGUMENT", "external worker output schema is invalid")
-    item = execute_query_one("SELECT ITEM_ID,SUBJECT_VERSION_ID,STATUS,LEASE_OWNER,FENCING_TOKEN,INPUT_DIGEST FROM CX_MEMORY_JOB_ITEMS WHERE ITEM_ID=:item_id", {"item_id": item_id})
-    if (not item or str(item.get("status") or "") != "RUNNING" or str(item.get("lease_owner") or "") != worker_id
-            or int(item.get("fencing_token") or -1) != int(fencing_token)):
-        raise MemoryLifecycleError("FENCING_REJECTED", "external worker lease is unavailable")
-    if str(item.get("input_digest") or "") != str(input_digest):
-        raise MemoryLifecycleError("INPUT_CONFLICT", "external worker input changed")
     output_digest = _digest(_json(output))
-    result_id = _id("MWR")
-    execute("INSERT INTO CX_MEMORY_WORKER_RESULTS (RESULT_ID,JOB_ITEM_ID,WORKER_ID,FENCING_TOKEN,INPUT_DIGEST,OUTPUT_DIGEST,SCHEMA_VERSION,RESULT_JSON,VALIDATION_STATE) VALUES (:result_id,:item_id,:worker_id,:fencing_token,:input_digest,:output_digest,:schema_version,:result,'VALID')", {"result_id": result_id, "item_id": item_id, "worker_id": worker_id, "fencing_token": int(fencing_token), "input_digest": input_digest, "output_digest": output_digest, "schema_version": schema_version[:64], "result": _json(dict(output))})
-    candidate = propose_llm_candidate(str(item.get("subject_version_id")), output, actor=worker_id,
-                                      endpoint_class="APPROVED_INTERNAL", model_id=str(output.get("model_id") or "external-worker"),
-                                      prompt_version=str(output.get("prompt_version") or "external-v1"), input_digest=input_digest)
-    completed = complete_job_item(item_id, worker_id=worker_id, fencing_token=fencing_token,
-                                  result={"worker_result_id": result_id, "candidate_id": candidate["candidate_id"], "output_digest": output_digest})
-    if not completed:
-        raise MemoryLifecycleError("FENCING_REJECTED", "external worker completion was superseded")
-    return {"worker_result_id": result_id, "candidate": candidate}
+    def commit(tx: Any) -> dict[str, Any]:
+        locator = tx.query_one("SELECT JOB_ID FROM CX_MEMORY_JOB_ITEMS WHERE ITEM_ID=:item_id", {"item_id": item_id})
+        if not locator:
+            raise MemoryLifecycleError("FENCING_REJECTED", "external worker lease is unavailable")
+        utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        # Lock parent before child so cancellation/reclaim cannot change the
+        # current job lease while accepting this exact item-fenced result.
+        # Legacy items do not record an original parent fencing token; current
+        # parent ownership is not evidence of that unrecorded historical token.
+        parent = tx.query_one("SELECT JOB_ID FROM CX_MEMORY_JOBS WHERE JOB_ID=:job_id AND STATUS='RUNNING' AND LEASE_OWNER=:worker_id AND LEASE_EXPIRES_AT>:utc_now FOR UPDATE",
+                              {"job_id": locator["job_id"], "worker_id": worker_id, "utc_now": utc_now})
+        item = tx.query_one("SELECT ITEM_ID,JOB_ID,SUBJECT_VERSION_ID,INPUT_DIGEST FROM CX_MEMORY_JOB_ITEMS WHERE ITEM_ID=:item_id AND STATUS='RUNNING' AND LEASE_OWNER=:worker_id AND FENCING_TOKEN=:fencing_token AND LEASE_EXPIRES_AT>:utc_now FOR UPDATE",
+                            {"item_id": item_id, "worker_id": worker_id, "fencing_token": int(fencing_token), "utc_now": utc_now})
+        if not parent or not item or item["job_id"] != locator["job_id"]:
+            raise MemoryLifecycleError("FENCING_REJECTED", "external worker lease is unavailable")
+        if str(item.get("input_digest") or "") != str(input_digest):
+            raise MemoryLifecycleError("INPUT_CONFLICT", "external worker input changed")
+        result_id = _id("MWR")
+        tx.execute("INSERT INTO CX_MEMORY_WORKER_RESULTS (RESULT_ID,JOB_ITEM_ID,WORKER_ID,FENCING_TOKEN,INPUT_DIGEST,OUTPUT_DIGEST,SCHEMA_VERSION,RESULT_JSON,VALIDATION_STATE) VALUES (:result_id,:item_id,:worker_id,:fencing_token,:input_digest,:output_digest,:schema_version,:result,'VALID')", {"result_id": result_id, "item_id": item_id, "worker_id": worker_id, "fencing_token": int(fencing_token), "input_digest": input_digest, "output_digest": output_digest, "schema_version": schema_version[:64], "result": _json(dict(output))})
+        candidate = propose_llm_candidate(str(item.get("subject_version_id")), output, actor=worker_id,
+                                          endpoint_class="APPROVED_INTERNAL", model_id=str(output.get("model_id") or "external-worker"),
+                                          prompt_version=str(output.get("prompt_version") or "external-v1"), input_digest=input_digest,
+                                          transaction=tx)
+        completed = complete_job_item(item_id, worker_id=worker_id, fencing_token=fencing_token,
+            result={"worker_result_id": result_id, "candidate_id": candidate["candidate_id"], "output_digest": output_digest}, transaction=tx)
+        if not completed:
+            raise MemoryLifecycleError("FENCING_REJECTED", "external worker completion was superseded")
+        return {"worker_result_id": result_id, "candidate": candidate}
+    return execute_transaction_callback(commit)
 
 
 def claim_projection_event(worker_id: str, *, lease_seconds: int = 120) -> Optional[dict[str, Any]]:
@@ -1318,6 +1370,8 @@ def record_usage(version_id: str, event_type: str, *, principal_id: Optional[str
 
 def _insert_version(tx: Any, version_id: str, family_id: str, number: int, request: VersionRequest, digest: str, actor: str, *, lifecycle_state: str = "ACTIVE") -> None:
     tx.execute("INSERT INTO CX_MEMORY_VERSIONS (VERSION_ID,FAMILY_ID,VERSION_NUMBER,TITLE,BODY_TEXT,CONTENT_DIGEST,MEMORY_TYPE,MEMORY_SCOPE,LIFECYCLE_STATE,CLASSIFICATION,SOURCE_REF,SOURCE_DIGEST,OWNER_PRINCIPAL_ID,OWNER_AGENT_ID,WORKSPACE_ID,SECURITY_DOMAIN_ID,VALID_UNTIL,POLICY_VERSION,CREATED_BY,REASON,METADATA_JSON) VALUES (:version_id,:family_id,:version_number,:title,:body,:digest,:memory_type,:memory_scope,:lifecycle_state,:classification,:source_ref,:source_digest,:owner_principal_id,:owner_agent_id,:workspace_id,:security_domain_id,:valid_until,:policy_version,:actor,:reason,'{}')", {"version_id": version_id, "family_id": family_id, "version_number": number, "title": request.title, "body": request.body, "digest": digest, "memory_type": request.memory_type.upper(), "memory_scope": request.memory_scope.upper(), "lifecycle_state": _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state"), "classification": request.classification, "source_ref": request.source_ref, "source_digest": request.source_digest, "owner_principal_id": request.owner_principal_id, "owner_agent_id": request.owner_agent_id, "workspace_id": request.workspace_id, "security_domain_id": request.security_domain_id, "valid_until": request.valid_until, "policy_version": request.policy_version, "actor": actor, "reason": request.reason})
+    from .memory_quality import record_time, temporal_facts
+    record_time(tx, version_id, temporal_facts(request.__dict__), actor=actor)
 
 
 def _insert_source_representation(tx: Any, version_id: str, body: str, digest: str) -> None:

@@ -1,4 +1,10 @@
 # Shared Python dependencies (all editions)
+# This shared section contains no database drivers. In a unified release,
+# requirements.txt alone does not provide a complete deployment. Explicitly
+# select ONE deployment with scripts/install_offline.sh --database oracle|pg|yashandb.
+# Complete profiles: requirements/oracle.txt, requirements/pg.txt,
+# and requirements/yashandb.txt.
+# YashanDB also needs the bundled native client; use the offline installer.
 annotated-types==0.7.0
 anyio==4.14.2
 annotated-doc==0.0.4

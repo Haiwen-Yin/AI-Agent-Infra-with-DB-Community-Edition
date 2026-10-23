@@ -1,4 +1,6 @@
 """Release verification must fail closed on absent or failed step evidence."""
+import json
+
 import pytest
 from lib import deployment_orchestrator as deployment
 
@@ -43,6 +45,107 @@ def test_postflight_requires_real_step_evidence(monkeypatch, database, terminal,
     monkeypatch.setattr(deployment, "_connect", lambda *_: Connection(Cursor(terminal, failed, missing)))
     result = deployment.postflight(database, "community", {}, "82_v4_4_14_governed_model_capabilities.sql")
     assert result["passed"] is passed
+
+
+@pytest.mark.parametrize("failed_migration", [None, "104_v5_0_1_context_assets.sql"])
+def test_v501_postflight_verifies_each_migration_then_reuses_prior_chain(
+    monkeypatch, tmp_path, failed_migration,
+):
+    import migration_runner
+    from lib import continuity_schema_validation
+
+    deploy_dir = tmp_path / "scripts" / "deploy"
+    deploy_dir.mkdir(parents=True)
+    terminal = "105_v5_0_1_answer_quality.sql"
+    (deploy_dir / terminal).write_text("-- terminal marker\n", encoding="ascii")
+    (deploy_dir / "baseline_v5_0_1.json").write_text(json.dumps({
+        "version": "5.0.1", "database": "pg", "required_terminal_migration": terminal,
+    }), encoding="ascii")
+    schema_manifests = (
+        "86_v4_4_15_continuity_entities.schema.json",
+        "87_v4_4_15_continuity_bindings.schema.json",
+        "88_v4_4_15_execution_links.schema.json",
+        "93_v4_4_15_mcp_tool_requests.schema.json",
+        "94_v4_4_15_handoff_policy.schema.json",
+        "95_v4_4_15_runtime_context.schema.json",
+        "96_v4_4_15_runtime_credentials.schema.json",
+        "97_v4_4_15_native_context_sources.schema.json",
+    )
+    for index, name in enumerate(schema_manifests):
+        (deploy_dir / name).write_text(json.dumps({f"TABLE_{index}": {}}), encoding="ascii")
+
+    class PostflightCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):
+            if "STATUS='FAILED'" in sql:
+                self.value = 0
+            elif "AI_SCHEMA_MIGRATION_STEPS" in sql:
+                self.value = 1
+            elif "pg_constraint" in sql:
+                self.value = 1
+            elif "CX_WORK_REVISIONS" in sql:
+                self.value = 0
+            else:
+                raise AssertionError(f"unexpected postflight query: {sql}")
+
+        def fetchone(self):
+            return (self.value,)
+
+    class PostflightConnection:
+        def __init__(self):
+            self._cursor = PostflightCursor()
+
+        def cursor(self):
+            return self._cursor
+
+        def close(self):
+            pass
+
+    checked = []
+    schema_checks = []
+
+    def verify_objects(_cursor, _database, script, *, version=None):
+        assert version in {None, "5.0.1"}
+        checked.append(script.name)
+        return script.name != failed_migration
+
+    monkeypatch.setattr(deployment, "_connect", lambda *_: PostflightConnection())
+    monkeypatch.setattr(migration_runner, "_step_objects_complete", verify_objects)
+    monkeypatch.setattr(migration_runner, "_execution_queue_complete", lambda *_: True)
+    monkeypatch.setattr(migration_runner, "_tool_mcp_exposure_complete", lambda *_: True)
+    monkeypatch.setattr(migration_runner, "_mcp_native_boundary_complete", lambda *_: True)
+    monkeypatch.setattr(migration_runner, "_mcp_owner_binding_complete", lambda *_: True)
+
+    def verify_schema(_cursor, _database, facts):
+        schema_checks.append(set(facts))
+        return []
+
+    monkeypatch.setattr(continuity_schema_validation, "errors", verify_schema)
+
+    result = deployment.postflight("pg", "community", {}, terminal, tmp_path)
+    states = {item["code"]: item["state"] for item in result["checks"]}
+    assert [item["code"] for item in result["checks"] if item["code"] in {
+        "MEMORY_QUALITY_STORAGE", "CONTEXT_ASSET_STORAGE", "ANSWER_QUALITY_STORAGE",
+    }] == ["MEMORY_QUALITY_STORAGE", "CONTEXT_ASSET_STORAGE", "ANSWER_QUALITY_STORAGE"]
+    assert states["MEMORY_QUALITY_STORAGE"] == "PASS"
+    assert states["CONTEXT_ASSET_STORAGE"] == ("BLOCKED" if failed_migration else "PASS")
+    assert states["ANSWER_QUALITY_STORAGE"] == "PASS"
+    assert checked[:8] == [
+        "103_v5_0_1_memory_quality.sql", "104_v5_0_1_context_assets.sql",
+        "105_v5_0_1_answer_quality.sql", "102_v5_0_0_network_access.sql",
+        "101_v4_5_2_task_continuity.sql", "100_v4_5_1_framework_rootfs_digest.sql",
+        "99_v4_5_1_integration_bindings.sql", "98_v4_5_1_agent_extensions.sql",
+    ]
+    assert checked[8:] == ["94_v4_4_15_handoff_policy.sql", "86_v4_4_15_continuity_entities.sql"]
+    assert any("TABLE_7" in facts for facts in schema_checks)
+    assert states["SOURCE_IP_ACCESS_STORAGE"] == "PASS"
+    assert states["TASK_CONTINUITY_STORAGE"] == "PASS"
+    assert result["passed"] is (failed_migration is None)
 
 
 def test_v415_uses_journaled_migration_execution():

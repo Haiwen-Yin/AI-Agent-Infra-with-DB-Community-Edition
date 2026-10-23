@@ -1,4 +1,4 @@
-# Model Usage Gateway And Executive Wallboard - v5.0.0
+# Model Usage Gateway And Executive Wallboard - v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -40,6 +40,32 @@ export CX_PUBLIC_BASE_URL="https://platform.example.com"
 
 Do not include the completion path in `CX_PUBLIC_BASE_URL`. The platform appends
 it. A client cannot replace this address through the routing API.
+
+## Slow Model Connection And Read Waits
+
+The local configuration accepts `llm.request_timeout_seconds`, default `180`.
+Use a JSON number from `1` through `600`; booleans, strings, null and non-finite
+numbers are rejected. Add the setting to the existing `llm` section of the
+private `config.json`, preserving its other fields, then restart the service:
+
+```json
+{"llm": {"request_timeout_seconds": 180}}
+```
+
+Native Agent calls, optional model-gateway forwarding and legacy model helpers
+use this same connection/read wait setting in both streaming and non-streaming
+mode. It is a local transport setting and is not sent as a provider parameter.
+It limits blocking socket waits; it does not impose a total generation
+deadline, and a stream that keeps supplying data may run longer.
+
+The native Worker still claims one execution at a time with its existing
+five-minute database lease. The default wait fits within that lease, but a
+higher value, preparation time or a long stream can outlast it. Changing the
+transport wait does not extend a lease or bypass fencing checks. An expired
+execution cannot publish a successful result. An uncertain send remains
+`UNOBSERVED` and is never automatically resent; confirm the provider's actual
+outcome before further model tests. Release acceptance keeps its separately
+frozen generation limit; changing this setting does not relax that limit.
 
 ## Usage And Cost Facts
 
@@ -147,7 +173,8 @@ Every canonical API error exposes `code`, `message`, `correlation_id`, and
 - Preserve usage and request rows during rollback or routing disablement so
   accounting and audit evidence remain internally consistent.
 
-Use the current package baseline through migration 102. Historical SQL remains
+Use the complete baseline manifest generated for this package and the selected
+database, including its successor migrations. Historical SQL remains
 for deterministic ordering, checksum evidence and source audit; it is not an
 instruction to stop at its introduction version. v4.4.8 remains withdrawn.
 See [migration](migration.md) for supported, journaled upgrade boundaries.

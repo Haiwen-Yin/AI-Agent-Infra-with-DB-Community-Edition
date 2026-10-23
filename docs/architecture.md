@@ -1,4 +1,4 @@
-# Chuanxu Community Edition architecture v5.0.0
+# Chuanxu Community Edition architecture v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -93,6 +93,25 @@ intersection of the Human's and Agent's current rights. References, partial
 coverage, general-model answers and unavailable models are distinguished.
 Versioned Memory, approved inputs and continuity sources reuse existing entities.
 
+| Extension | Database authority and reused execution path |
+|---|---|
+| Temporal Memory and Work notes (103) | Time/reconciliation/restore facts and immutable notes reference current Memory families, Work/Handoff participants and exact sources |
+| Explicit retrospectives (103) | Existing Task/Step continuity, leases/fencing and candidate review/publication; no second scheduler |
+| Context and assets (104) | Budget/representation and binding/use relations preserve exact sources, current authorization and separate preparation/delivery observations |
+| Configured source sync (104) | Source/revision/job/import relations, original requester, Task continuity and atomic candidate/checkpoint commit |
+| Final-answer evaluation (105) | Frozen case/rubric/Profile/policy/source relations, encrypted inputs/outputs and independent Human review on the existing Task ledger |
+
+Retrieval fusion orders authorized candidates; evidence sufficiency independently
+assesses subject, coverage and contradictions. A configured text fallback never
+widens authority. Query-aware context selects authorized metadata before exact
+content, reserves system/tool/output budgets and preserves required obligations.
+Asset bindings do not grant source access. Source sync fetches bounded approved
+HTTPS text or pinned GitHub blobs, never executes code or automatically publishes.
+These relations extend the existing candidate/version pipeline and rebuildable
+graph projections rather than introduce a parallel truth or authorization store.
+See [memory and notes](memory-working-notes.md), [Agent assets](agent-context-assets.md)
+and [answer quality](answer-quality.md).
+
 LLM Provider Profiles are versioned database records. Model names and a /v1 URL
 do not establish protocol or feature support. Health checks and capability
 probes bind evidence to the exact configuration revision. Refusals, incomplete
@@ -136,8 +155,9 @@ The bridge does not create a second identity, listener or scheduler.
 
 Bootstrap Deployment Agent executes only package-selected SQL and records
 checksums, steps, readiness and handoff. It does not turn model text into SQL or
-privileges. v5.0.0 retains the complete migration chain through
-`102_v5_0_0_network_access.sql`. Historical SQL filenames remain unchanged.
+privileges. v5.0.0 ends at 102; v5.0.1 adds 103–105 to the complete chain.
+Use this package's generated baseline and verify actual objects as well as
+APPLIED checksums. Historical SQL filenames remain unchanged.
 
 Process restart recovery uses database leases and recorded outcomes. Database
 backup, replication, standby promotion and RPO/RTO remain deployment

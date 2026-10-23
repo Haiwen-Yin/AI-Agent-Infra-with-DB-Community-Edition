@@ -3,13 +3,17 @@ import { RefreshCw } from "lucide-react";
 import ContinuityCandidates from "./ContinuityCandidates";
 import ContinuityContext from "./ContinuityContext";
 import ContinuityDiagnostics from "./ContinuityDiagnostics";
+import ContinuityAgentAssets from "./ContinuityAgentAssets";
+import ContinuityNotes from "./ContinuityNotes";
+import ContinuityQuality from "./ContinuityQuality";
 
 type Row = Record<string, any>;
-type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; principalId: string; canWrite: boolean };
+type SourceRef = { family: string; entity_id: string; revision_id: string; content_digest: string };
+type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; principalId: string; canWrite: boolean; canManage: boolean; canOperateAgents: boolean };
 const key = () => crypto.randomUUID();
 const lines = (value: FormDataEntryValue | null) => String(value || "").split("\n").map(x => x.trim()).filter(Boolean);
 
-export default function ContinuityWorkbench({ request, text, principalId, canWrite }: Props) {
+export default function ContinuityWorkbench({ request, text, principalId, canWrite, canManage, canOperateAgents }: Props) {
   const [domains, setDomains] = useState<Row[]>([]);
   const [domain, setDomain] = useState("");
   const [members, setMembers] = useState<Row[]>([]);
@@ -20,6 +24,7 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
   const [handoffHistory, setHandoffHistory] = useState<Row[]>([]);
   const [historical, setHistorical] = useState<Row | null>(null);
   const [recordedOutcome, setRecordedOutcome] = useState<Row | null>(null);
+  const [assetSources, setAssetSources] = useState<SourceRef[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,6 +73,7 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
     setMemberCursor(m.next_cursor || "");
   };
   const selectDomain = (value: string) => {
+    setAssetSources([]);
     currentDomain.current = value; setDomain(value); setWork(null); setHandoff(null); setHistorical(null); setHandoffHistory([]); setRecordedOutcome(null); setWorks([]); setHandoffs([]); setMembers([]); setWorkCursor(""); setHandoffCursor("");
     void run(() => load(value));
   };
@@ -232,6 +238,9 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
         </>}
       </section>
       {historical && <section className="panel" aria-label={text("历史版本只读预览", "Read-only historical revision")}><h3>{text("历史版本只读预览", "Read-only historical revision")}</h3><p>{text("修订", "Revision")} {historical.revision_no} · {historical.content_digest}</p>{historical.expired ? <p>{text("正文已过期，仅保留历史元数据。", "Content expired; only historical metadata remains available.")}</p> : <><p className="continuity-body">{historical.content?.objective || historical.content?.summary}</p><ul>{(historical.content?.criteria || historical.content?.next_actions || []).map((item: Row) => <li key={item.criterion_id || item.action_id}>{item.description} — {item.verification || item.acceptance}</li>)}</ul></>}<button type="button" className="small-button" onClick={() => setHistorical(null)}>{text("关闭历史预览", "Close historical preview")}</button></section>}
+      <ContinuityAgentAssets key={`${domain}-assets`} request={request} text={text} domain={domain} canWrite={canWrite} canManage={canManage} canOperateAgents={canOperateAgents} onSourceRefsChange={setAssetSources} />
+      {work && <ContinuityNotes key={`${work.work_contract_id}-notes`} request={request} text={text} work={work} sources={assetSources} canWrite={canWrite} />}
+      <ContinuityQuality key={`${domain}-quality`} request={request} text={text} domain={domain} principalId={principalId} work={work || undefined} sources={assetSources} canWrite={canWrite} canManage={canManage} />
       <ContinuityCandidates key={`${domain}-candidates`} request={request} text={text} domain={domain} principalId={principalId} canWrite={canWrite} />
       <ContinuityContext key={`context-${domain}`} request={request} text={text} domain={domain} domains={domains} workId={work?.work_contract_id} handoffId={!handoff?.expired ? handoff?.handoff_id : undefined} canWrite={canWrite} />
       <ContinuityDiagnostics key={`${domain}-diagnostics`} request={request} text={text} domain={domain} />

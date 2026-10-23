@@ -1,4 +1,4 @@
-# Graph engineering v5.0.0
+# Graph engineering v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -105,7 +105,8 @@ cross-platform A2A conformance. See [DB4A2A](db4a2a.md).
 
 ## Operations
 
-Deploy and verify the full selected baseline through migration 102. Preserve
+Deploy and verify the complete baseline manifest generated for this package
+and the selected database, including its successor migrations. Preserve
 applied SQL digests and migration history. Before restoring or upgrading,
 record current runs and drain only affected writers. Use
 [recovery](recovery.md) and [migration](migration.md) for the recovery boundary.

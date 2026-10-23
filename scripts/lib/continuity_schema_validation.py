@@ -4,16 +4,30 @@ import re
 
 def check_expression(value):
     """Canonical AST for the limited SQL CHECK grammar used by these entities."""
+    # Vendor normalization must never rewrite stored string values. Protect
+    # literals first; the temporary identifier prefix cannot occur in input.
+    prefix='__CX_CHECK_LITERAL_'
+    while prefix in value:
+        prefix='_'+prefix
+    literals={}
+    def literal(match):
+        key=prefix+str(len(literals))+'__'
+        literals[key]=match.group()
+        return key
+    value=re.sub(r"'(?:[^']|'')*'",literal,value)
     value=re.sub(r'::(?:character varying|character|text|bpchar|integer)(?:\[\])?', '', value, flags=re.I)
+    # PostgreSQL coerces integer bounds of DECIMAL checks to numeric. Only
+    # literal coercions are equivalent here; column casts remain unsupported.
+    value=re.sub(r'(\(\s*\d+\s*\)|\b\d+)::numeric\b', r'\1', value, flags=re.I)
     value=re.sub(r'=\s*ANY\s*\(\s*\(\s*ARRAY\s*\[([^]]*)\]\s*\)\s*\)',r' IN (\1)',value,flags=re.I)
     value=re.sub(r'=\s*ANY\s*\(\s*ARRAY\s*\[([^]]*)\]\s*\)',r' IN (\1)',value,flags=re.I)
     value=value.replace('"','')
-    tokens=re.findall(r"'(?:[^']|'')*'|[A-Za-z_][A-Za-z_0-9]*|\d+|<>|>=|<=|!=|[(),=<>]",value)
+    tokens=re.findall(r"'(?:[^']|'')*'|[A-Za-z_][A-Za-z_0-9]*|\d+|<>|>=|<=|!=|[(),=<>+]",value)
     if ''.join(tokens)!=re.sub(r'\s+','',value):
-        # Comparison ignores whitespace outside literals only; schema values
-        # contain no spaces. Unsupported expressions fail closed.
+        # Literal whitespace was protected above. Unsupported expressions fail
+        # closed rather than being silently simplified.
         raise ValueError('Unsupported CHECK expression')
-    tokens=[token if token.startswith("'") else token.upper() for token in tokens]
+    tokens=[literals[token] if token in literals else token.upper() for token in tokens]
     position=0
     def expression(minimum=0):
         nonlocal position
@@ -31,10 +45,17 @@ def check_expression(value):
             raise ValueError('Unsupported CHECK operand')
         while position<len(tokens):
             op=tokens[position]
-            priority={'OR':1,'AND':2,'=':3,'<>':3,'!=':3,'>':3,'<':3,'>=':3,'<=':3,'IN':3,'IS':3}.get(op,-1)
+            priority={'OR':1,'AND':2,'=':3,'<>':3,'!=':3,'>':3,'<':3,'>=':3,'<=':3,'IN':3,'IS':3,'BETWEEN':3,'+':4}.get(op,-1)
             if priority<minimum: break
             position+=1
-            if op=='IS':
+            if op=='BETWEEN':
+                lower=expression(4)
+                if position>=len(tokens) or tokens[position]!='AND':
+                    raise ValueError('Incomplete BETWEEN predicate')
+                position+=1
+                upper=expression(4)
+                left=('AND',('>=',left,lower),('<=',left,upper))
+            elif op=='IS':
                 negative=tokens[position]=='NOT'
                 position+=int(negative)
                 if tokens[position]!='NULL': raise ValueError('Unsupported IS predicate')
@@ -51,6 +72,15 @@ def check_expression(value):
                     if separator==')': break
                     if separator!=',': raise ValueError('Unsupported IN list')
                 left=('IN',left,tuple(sorted(values)))
+            elif op=='+':
+                right=expression(priority+1)
+                def integer_operand(node):
+                    if node[0]=='VALUE':
+                        return not node[1].startswith("'") and node[1] not in {'NULL','TRUE','FALSE'}
+                    return node[0]=='+' and integer_operand(node[1]) and integer_operand(node[2])
+                if not integer_operand(left) or not integer_operand(right):
+                    raise ValueError('CHECK addition requires integer columns or literals')
+                left=('+',left,right)
             else:
                 left=(op,left,expression(priority+1))
         return left
@@ -83,7 +113,7 @@ def errors(cursor,db,facts):
             rows=query("SELECT upper(a.attname),format_type(a.atttypid,a.atttypmod),a.attnotnull,pg_get_expr(d.adbin,d.adrelid) FROM pg_attribute a "
                        "LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum "
                        "WHERE a.attrelid=to_regclass(%s) AND a.attnum>0 AND NOT a.attisdropped",table)
-            columns={str(name):[str(dtype).upper().replace('CHARACTER VARYING','VARCHAR').replace('CHARACTER','CHAR').replace('TIMESTAMP WITHOUT TIME ZONE','TIMESTAMP'),bool(required),default(value)] for name,dtype,required,value in rows}
+            columns={str(name):[str(dtype).upper().replace('CHARACTER VARYING','VARCHAR').replace('CHARACTER','CHAR').replace('NUMERIC','DECIMAL').replace('TIMESTAMP WITHOUT TIME ZONE','TIMESTAMP'),bool(required),default(value)] for name,dtype,required,value in rows}
         else:
             rows=query("SELECT COLUMN_NAME,DATA_TYPE,CHAR_LENGTH,NULLABLE,DATA_PRECISION,DATA_SCALE,DATA_DEFAULT FROM USER_TAB_COLUMNS WHERE TABLE_NAME=:table_name",table)
             columns={}
@@ -97,6 +127,8 @@ def errors(cursor,db,facts):
                     dtype='INTEGER'
                 elif dtype=='NUMBER' and precision is not None and scale==0:
                     dtype='NUMBER('+str(precision)+')'
+                elif dtype=='NUMBER' and precision is not None and scale is not None and scale>0:
+                    dtype='DECIMAL('+str(precision)+','+str(scale)+')'
                 columns[str(name)]=[dtype,nullable=='N',default(value)]
         if columns!={name:[value['type'],value['not_null'],value['default']] for name,value in expected['columns'].items()}:
             failures.append(table+':COLUMNS')

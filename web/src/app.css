@@ -848,6 +848,12 @@ table {
   border-collapse: collapse;
   font-size: 12px;
 }
+.table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
 th,
 td {
   padding: 10px 9px;
@@ -3368,6 +3374,43 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 .continuity-workbench input[type="checkbox"] { width: auto; height: auto; }
 .continuity-workbench p, .continuity-workbench li, .continuity-workbench label { overflow-wrap: anywhere; }
 .continuity-body { white-space: pre-wrap; }
+.continuity-extension-panel, .continuity-quality-panel, .continuity-notes { min-width: 0; }
+.continuity-extension-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
+.continuity-extension-heading > div { min-width: 0; }
+.continuity-extension-heading p { max-width: 760px; }
+.continuity-agent-select { flex: 0 1 420px; min-width: 240px; }
+.continuity-extension-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 22px; border-bottom: 1px solid var(--line); }
+.continuity-extension-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
+.continuity-extension-tabs button.active, .continuity-extension-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--brand); }
+.continuity-extension-grid, .continuity-quality-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.continuity-extension-column { min-width: 0; }
+.continuity-extension-column > h4 { display: flex; align-items: center; gap: 8px; margin: 8px 0 16px; }
+.continuity-extension-column .operation-explainer-form, .continuity-notes .operation-explainer-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.continuity-extension-column .operation-explainer-form > legend, .continuity-extension-column .operation-explainer-form > p, .continuity-extension-column .operation-explainer-form > button, .continuity-extension-column .operation-explainer-form > details, .continuity-extension-column .operation-explainer-form > fieldset,
+.continuity-notes .operation-explainer-form > legend, .continuity-notes .operation-explainer-form > p, .continuity-notes .operation-explainer-form > button, .continuity-notes .operation-explainer-form > details, .continuity-notes .operation-explainer-form > fieldset { grid-column: 1 / -1; }
+.continuity-record-list { display: grid; gap: 0; margin: 0 0 16px; padding: 0; list-style: none; }
+.continuity-record-list > li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.continuity-record-list > li > label { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.continuity-record-list > li > :is(label, span) { flex: 1 1 0; min-width: 0; }
+.continuity-record-list > li > label > span { min-width: 0; }
+.continuity-record-list > li > .small-button { flex: 0 0 auto; white-space: nowrap; }
+.continuity-record-list small { display: block; color: var(--muted); margin-top: 3px; }
+.continuity-source-check { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.continuity-source-check input { width: auto; height: auto; margin-top: 3px; }
+.continuity-extension-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); margin-top: 20px; padding-top: 14px; color: var(--muted); }
+.continuity-notes-layout { display: grid; grid-template-columns: minmax(200px, .65fr) minmax(0, 1.35fr); gap: 24px; }
+.continuity-notes .continuity-record-list > li > .text-action { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.continuity-notes .continuity-record-list > li > span { flex: 0 0 auto; white-space: nowrap; }
+.continuity-note-preview { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
+.continuity-mode-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; grid-column: 1 / -1; }
+.continuity-mode-list > span { grid-column: 1 / -1; }
+.continuity-mode-list label { display: flex; align-items: flex-start; gap: 8px; }
+.continuity-mode-list input { width: auto; height: auto; }
+.continuity-quality-grid > section { min-width: 0; }
+.continuity-quality-grid pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.continuity-extension-panel select[multiple] { min-height: 132px; }
+.continuity-extension-panel .page-toolbar, .continuity-notes .page-toolbar { justify-content: space-between; gap: 12px; }
+.continuity-notes .page-toolbar > div { display: flex; flex-wrap: wrap; gap: 8px; }
 /* Principal identities need a readable row rather than a narrow scalar field. */
 :is(.config-field, .inline-field, .workbench-field):has(.principal-picker) { grid-column: 1 / -1; }
 .inline-field-pair:has(> .principal-picker) { grid-template-columns: minmax(0, 120px) minmax(0, 1fr); align-items: start; }
@@ -3404,6 +3447,11 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 @media (max-width: 780px) {
   .continuity-workbench .operation-explainer-form { grid-template-columns: minmax(0, 1fr); }
   .continuity-workbench .panel, .continuity-workbench fieldset { padding: 14px; }
+  .continuity-extension-heading, .continuity-notes-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .continuity-agent-select { min-width: 0; width: 100%; }
+  .continuity-extension-grid, .continuity-quality-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .continuity-extension-column .operation-explainer-form, .continuity-notes .operation-explainer-form { grid-template-columns: minmax(0, 1fr); }
+  .continuity-record-list > li { align-items: flex-start; }
 }
 /* Source policy forms keep long IPv6 rules and history inside their panel. */
 .ip-access-panel { min-width: 0; }
@@ -3419,9 +3467,10 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 .ip-access-fields > label, .ip-access-controls > label:not(.checkbox-field) { display: grid; gap: 8px; min-width: 0; }
 .ip-access-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 .ip-access-mode-control { grid-template-rows: 24px 40px; }
-.ip-access-enable-toggle { align-self: start; align-items: flex-start; height: 40px; min-height: 40px; gap: 12px; margin-top: 32px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); font-size: 15px; font-weight: 700; line-height: 1.4; }
+.ip-access-enable-toggle { align-self: start; align-items: center; height: 40px; min-height: 40px; gap: 12px; margin-top: 32px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); font-size: 15px; font-weight: 700; line-height: 1.4; }
+.ip-access-enable-toggle:has(input:checked) { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, var(--surface)); color: var(--brand-deep); }
 .ip-access-enable-toggle > span { line-height: 21px; }
-.ip-access-enable-toggle input[type="checkbox"] { appearance: none; width: 42px; min-width: 42px; max-width: 42px; height: 24px; min-height: 24px; margin: -1px 0 0; padding: 0; flex: 0 0 42px; border: 1px solid var(--line); border-radius: 999px; background: var(--line); position: relative; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.ip-access-enable-toggle input[type="checkbox"] { appearance: none; width: 42px; min-width: 42px; max-width: 42px; height: 24px; min-height: 24px; margin: 0; padding: 0; flex: 0 0 42px; border: 1px solid var(--line); border-radius: 999px; background: var(--line); position: relative; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
 .ip-access-enable-toggle input[type="checkbox"]::after { content: ""; position: absolute; width: 18px; height: 18px; top: 2px; left: 2px; border-radius: 50%; background: var(--surface-strong); box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .15s ease; }
 .ip-access-enable-toggle input[type="checkbox"]:checked { border-color: var(--brand); background: var(--brand); }
 .ip-access-enable-toggle input[type="checkbox"]:checked::after { transform: translateX(18px); }

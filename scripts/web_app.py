@@ -1,4 +1,4 @@
-"""FastAPI/Uvicorn entrypoint for the v5.0.0 Chuanxu Web application.
+"""FastAPI/Uvicorn entrypoint for the v5.0.1 Chuanxu Web application.
 
 The database-backed services are the authoritative implementation.  This
 entrypoint intentionally contains only HTTP concerns and exposes the same
@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictBool
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.concurrency import run_in_threadpool
 
 try:
     from lib import effective_capabilities, product_identity, network_access
@@ -46,7 +47,7 @@ except ModuleNotFoundError as exc:
     from shared.lib import identity_api, external_identity_api, agent_gateway_api, compliance_api, connection, governed_contracts, security_lifecycle, organization_api, security_domain_api, platform_capabilities, native_agent_api, native_runtime, model_usage_api, model_governance_api, model_capability_api, deployment_adapters, runtime_isolation, db4a2a, embedding_governance, admin_management, cursor_pagination, task_plan_api, knowledge_api, memory_lifecycle, skill_api, tool_registry, spec_api, graph_production_profile, platform_agent_pool, host_provisioning, platform_governance_graph as governance_graph_module
 
 
-VERSION = "5.0.0"
+VERSION = "5.0.1"
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 if not WEB_ROOT.is_dir():
@@ -714,6 +715,24 @@ def _legacy_dispatch(method: str, path: str, query: str, headers: Dict[str, str]
     return Response(payload, status_code=status_code, headers=response_headers)
 
 
+def _legacy_read_dispatch(request: Request, path: str, body: bytes) -> Response:
+    """Keep read admission and synchronous DB work in one fenced worker.
+
+    Legacy reads share the bounded ASGI worker pool with synchronous routes.
+    A slow query must not block the event loop or other responses. Admission
+    and dispatch stay on the same thread, and no Agent identity survives a
+    successful, denied or failed invocation of that reusable worker.
+    """
+    _clear_legacy_thread_context()
+    try:
+        denied = _legacy_gate(request, path)
+        if denied is not None:
+            return denied
+        return _legacy_dispatch(request.method, path, request.url.query, dict(request.headers), body)
+    finally:
+        _clear_legacy_thread_context()
+
+
 def _legacy_required_action(path: str, method: str) -> Optional[str]:
     """Map compatibility APIs to the same coarse permission boundary as React."""
     rules = (
@@ -949,6 +968,7 @@ class MfaEnrollBody(BaseModel):
 class MfaConfirmBody(BaseModel):
     factor_id: str = Field(min_length=1, max_length=128)
     code: str = Field(min_length=6, max_length=32)
+    reason: str = Field(default="MFA enrollment confirmation", min_length=1, max_length=2000)
 
 
 class OrganizationChangeBody(BaseModel):
@@ -7002,6 +7022,9 @@ _install_standard_a2a(app, _continuity_gateway_action, _schema_owner_context)
 async def legacy_compatibility(path: str, request: Request) -> Response:
     """Keep every existing Dashboard, Portal and Agent API route available."""
     normalized = "/" + path
+    if request.method in {"GET", "HEAD"}:
+        body = await request.body()
+        return await run_in_threadpool(_legacy_read_dispatch, request, normalized, body)
     gate_response = _legacy_gate(request, normalized)
     if gate_response is not None:
         return gate_response

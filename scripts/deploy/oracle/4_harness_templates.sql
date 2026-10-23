@@ -1,4 +1,4 @@
--- AI Agent Infra v5.0.0 - Phase 4: Harness Templates
+-- AI Agent Infra v5.0.1 - Phase 4: Harness Templates
 
 WHENEVER SQLERROR CONTINUE;
 

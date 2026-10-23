@@ -241,6 +241,10 @@ V452_MIGRATION_SCRIPTS = V451_MIGRATION_SCRIPTS + (
     "101_v4_5_2_task_continuity.sql",
 )
 V500_MIGRATION_SCRIPTS = V452_MIGRATION_SCRIPTS + ("102_v5_0_0_network_access.sql",)
+V501_MIGRATION_SCRIPTS = V500_MIGRATION_SCRIPTS + (
+    "103_v5_0_1_memory_quality.sql", "104_v5_0_1_context_assets.sql",
+    "105_v5_0_1_answer_quality.sql",
+)
 ENTERPRISE_ONLY_MIGRATION_SCRIPTS = frozenset({
     "29_v4_3_4_agent_compliance.sql",
     "30_v4_3_4_compliance_hardening.sql",
@@ -1670,6 +1674,28 @@ def validate_v500_static_contract(database: str, scripts: Sequence[Path], editio
             "passed": bool(base.get("passed")) and bool(control["passed"])}
 
 
+def validate_v501_static_contract(database: str, scripts: Sequence[Path], edition: str = "enterprise") -> dict[str, Any]:
+    """Require the complete additive chain and generated native schema facts."""
+    base = validate_v500_static_contract(database, scripts, edition)
+    selected = {path.name: path for path in scripts}
+    required = migration_scripts_for_edition(V501_MIGRATION_SCRIPTS, edition)
+    missing = [name for name in required if name not in selected or not selected[name].is_file()]
+    invalid = []
+    for name in V501_MIGRATION_SCRIPTS[-3:]:
+        path = selected.get(name)
+        try:
+            facts = json.loads(path.with_suffix(".schema.json").read_text(encoding="utf-8"))
+            if not facts or not all(item.get("columns") and item.get("immutable_columns") and item.get("trigger")
+                                    for item in facts.values()):
+                invalid.append(name)
+        except (AttributeError, OSError, ValueError, TypeError):
+            invalid.append(name)
+    control = {"scripts_missing": missing, "schema_manifests_invalid": invalid,
+               "passed": not missing and not invalid}
+    return {"database": database, "v500": base, "v501_memory_context_quality": control,
+            "passed": bool(base.get("passed")) and control["passed"]}
+
+
 def _pg_runtime_permission_contract(cursor: Any) -> dict[str, Any]:
     """Read actual PostgreSQL grants; absence of the runtime role is a failure."""
     cursor.execute("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ai_agent_runtime')")
@@ -1819,10 +1845,54 @@ class ProbeResult:
     v410_model_usage_wallboard_contract: dict[str, Any] = field(default_factory=dict)
     v411_runtime_isolation_db4a2a_contract: dict[str, Any] = field(default_factory=dict)
     v452_task_continuity_contract: dict[str, Any] = field(default_factory=dict)
+    v500_source_ip_access_contract: dict[str, Any] = field(default_factory=dict)
+    v501_memory_context_quality_contract: dict[str, Any] = field(default_factory=dict)
     error_type: str = ""
 
 
-def _capture_v43_catalog(cursor: Any, database: str, result: ProbeResult) -> None:
+def _capture_v501_migrations(cursor: Any, database: str, target_version: str,
+                             names: Sequence[str]) -> dict[str, Any]:
+    """Verify release migration ledgers and live objects for the selected package."""
+    try:
+        import migration_runner as runner
+    except ImportError:
+        try:
+            from shared import migration_runner as runner
+        except ImportError as exc:
+            return {"passed": False, "error": type(exc).__name__, "steps": {}}
+
+    steps: dict[str, dict[str, Any]] = {}
+    for name in names:
+        path = _migration_path(database, name)
+        versions = [target_version]
+        if name == "102_v5_0_0_network_access.sql" and target_version == "5.0.1":
+            versions.append("5.0.0")
+        observation = None
+        for version in dict.fromkeys(versions):
+            try:
+                row = runner._step_row(cursor, database, path, version=version)
+            except Exception:
+                row = None
+            if row is not None:
+                observation = {"version": version, "ledger_status": row["status"],
+                               "checksum_matches": row["checksum"] == runner._checksum(path)}
+                break
+        try:
+            objects_complete = bool(path.is_file() and runner._step_objects_complete(
+                cursor, database, path, version=target_version))
+        except Exception:
+            objects_complete = False
+        ledger_complete = bool(observation and observation["ledger_status"] == "APPLIED"
+                               and observation["checksum_matches"])
+        steps[name] = {**(observation or {"version": "", "ledger_status": "MISSING",
+                                          "checksum_matches": False}),
+                       "objects_complete": objects_complete,
+                       "passed": ledger_complete and objects_complete}
+    return {"steps": steps, "passed": bool(steps) and all(item["passed"] for item in steps.values())}
+
+
+def _capture_v43_catalog(cursor: Any, database: str, result: ProbeResult,
+                         target_version: str = "4.3.0") -> None:
     """Attach the read-only v4.3 catalog contract to a live probe result."""
     snapshot = v43_catalog_snapshot(cursor, database, include_permissions=database == "pg")
     result.v43_schema_contract = validate_v43_catalog_snapshot(
@@ -1857,6 +1927,18 @@ def _capture_v43_catalog(cursor: Any, database: str, result: ProbeResult) -> Non
         result.v452_task_continuity_contract["tables_missing"],
         result.v452_task_continuity_contract["columns_missing"],
     ))
+    try:
+        release_tuple = tuple(int(part) for part in target_version.split(".")[:3])
+    except ValueError:
+        release_tuple = (0, 0, 0)
+    if release_tuple >= (5, 0, 0):
+        result.v500_source_ip_access_contract = _capture_v501_migrations(
+            cursor, database, target_version, ("102_v5_0_0_network_access.sql",))
+    if release_tuple >= (5, 0, 1):
+        result.v501_memory_context_quality_contract = _capture_v501_migrations(
+            cursor, database, target_version,
+            ("103_v5_0_1_memory_quality.sql", "104_v5_0_1_context_assets.sql",
+             "105_v5_0_1_answer_quality.sql"))
     result.v431_organization_contract = _capture_v431_organization(cursor, database)
     result.v434_compliance_contract = {
         "tables_missing": sorted(set(V434_COMPLIANCE_TABLES) - set(snapshot["tables"])),
@@ -2046,7 +2128,8 @@ def _scalar(row: Any) -> Any:
     return row[0]
 
 
-def _probe_oracle(config: dict[str, Any], *, enterprise: bool = True) -> ProbeResult:
+def _probe_oracle(config: dict[str, Any], *, enterprise: bool = True,
+                  target_version: str = "4.3.0") -> ProbeResult:
     import oracledb
 
     result = ProbeResult(database="oracle", connected=False, product="Oracle AI Database")
@@ -2092,7 +2175,7 @@ def _probe_oracle(config: dict[str, Any], *, enterprise: bool = True) -> ProbeRe
                 "domidx_opstatus": index_status[1] if len(index_status) > 1 else "",
                 "passed": preference_present and index_status == ("VALID", "VALID"),
             }
-            _capture_v43_catalog(cursor, "oracle", result)
+            _capture_v43_catalog(cursor, "oracle", result, target_version)
         result.core_tables_present = len(present.intersection(CORE_TABLES))
         result.v401_tables_present = len(present.intersection(V401_TABLES))
         result.v401_tables_missing = sorted(set(V401_TABLES) - present)
@@ -2111,7 +2194,8 @@ def _probe_oracle(config: dict[str, Any], *, enterprise: bool = True) -> ProbeRe
         conn.close()
 
 
-def _probe_pg(config: dict[str, Any], *, enterprise: bool = True) -> ProbeResult:
+def _probe_pg(config: dict[str, Any], *, enterprise: bool = True,
+              target_version: str = "4.3.0") -> ProbeResult:
     import psycopg2
 
     result = ProbeResult(database="pg", connected=False, product="PostgreSQL")
@@ -2136,7 +2220,7 @@ def _probe_pg(config: dict[str, Any], *, enterprise: bool = True) -> ProbeResult
                 "WHERE table_schema = current_schema() AND table_name = 'skill_meta'"
             )
             skill_columns = {str(row[0]).upper() for row in cursor.fetchall()}
-            _capture_v43_catalog(cursor, "pg", result)
+            _capture_v43_catalog(cursor, "pg", result, target_version)
         conn.rollback()
         result.core_tables_present = len(present.intersection(CORE_TABLES))
         result.v401_tables_present = len(present.intersection(V401_TABLES))
@@ -2154,7 +2238,8 @@ def _probe_pg(config: dict[str, Any], *, enterprise: bool = True) -> ProbeResult
         conn.close()
 
 
-def _probe_yashandb(config: dict[str, Any], *, enterprise: bool = True) -> ProbeResult:
+def _probe_yashandb(config: dict[str, Any], *, enterprise: bool = True,
+                    target_version: str = "4.3.0") -> ProbeResult:
     import yaspy
 
     result = ProbeResult(database="yashandb", connected=False, product="YashanDB")
@@ -2177,7 +2262,7 @@ def _probe_yashandb(config: dict[str, Any], *, enterprise: bool = True) -> Probe
                 "SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = 'SKILL_META'"
             )
             skill_columns = {str(row[0]).upper() for row in cursor.fetchall()}
-            _capture_v43_catalog(cursor, "yashandb", result)
+            _capture_v43_catalog(cursor, "yashandb", result, target_version)
         result.core_tables_present = len(present.intersection(CORE_TABLES))
         result.v401_tables_present = len(present.intersection(V401_TABLES))
         result.v401_tables_missing = sorted(set(V401_TABLES) - present)
@@ -2265,10 +2350,15 @@ def main() -> int:
     requires_v410 = at_least((4, 4, 10))
     requires_v411 = at_least((4, 4, 11))
     requires_v452 = at_least((4, 5, 2))
+    requires_v500 = at_least((5, 0, 0))
+    requires_v501 = at_least((5, 0, 1))
     static_contracts: dict[str, dict[str, Any]] = {}
     if requires_v43:
         for database in available_databases:
-            if at_least((5, 0, 0)):
+            if at_least((5, 0, 1)):
+                migration_scripts = migration_scripts_for_edition(V501_MIGRATION_SCRIPTS, edition)
+                validator = lambda database, scripts: validate_v501_static_contract(database, scripts, edition)
+            elif at_least((5, 0, 0)):
                 migration_scripts = migration_scripts_for_edition(V500_MIGRATION_SCRIPTS, edition)
                 validator = lambda database, scripts: validate_v500_static_contract(database, scripts, edition)
             elif requires_v452:
@@ -2332,7 +2422,8 @@ def main() -> int:
         if path is None:
             parser.error(f"--{database}-config is required for {database}")
         try:
-            result = PROBES[database](_load_database_config(path), enterprise=enterprise)
+            result = PROBES[database](_load_database_config(path), enterprise=enterprise,
+                                      target_version=target_version)
             if not legacy_catalog_required:
                 result.v401_tables_required = 0
                 result.v401_tables_missing = []
@@ -2384,6 +2475,8 @@ def main() -> int:
                 and (not requires_v410 or result.v410_model_usage_wallboard_contract.get("passed") is True)
                 and (not requires_v411 or result.v411_runtime_isolation_db4a2a_contract.get("passed") is True)
                 and (not requires_v452 or result.v452_task_continuity_contract.get("passed") is True)
+                and (not requires_v500 or result.v500_source_ip_access_contract.get("passed") is True)
+                and (not requires_v501 or result.v501_memory_context_quality_contract.get("passed") is True)
                 and not result.v43_partial_schema
             ))
             and (not requires_v431 or result.v431_organization_contract.get("passed") is True)

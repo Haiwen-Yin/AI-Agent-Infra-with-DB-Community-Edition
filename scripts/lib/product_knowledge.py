@@ -4,8 +4,75 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from . import builtin_knowledge, connection, identity_api, product_identity
+
+
+def _entity_key(product: dict, database: str, section_key: str) -> str:
+    identifier = hashlib.sha256((product["product_key"] + ":" + product["version"]
+                                + ":" + database + ":" + section_key).encode()).hexdigest()
+    # PG uses BIGINT; retain the exact JavaScript integer range.
+    return str((1 << 52) + int(identifier[:13], 16)) if database == "pg" else "CXK_" + identifier[:36]
+
+
+def _version(value: str) -> int:
+    if not isinstance(value, str) or not re.fullmatch(r"\d+\.\d+\.\d+", value):
+        raise ValueError("Product knowledge version is invalid")
+    return sum(int(part) * factor for part, factor in zip(value.split("."), (1000000, 1000, 1)))
+
+
+def _supersede_product_entities(tx, actor, product, database):
+    """Archive untouched projections of verified earlier product snapshots.
+
+    Published snapshots remain immutable historical records. Only their exact
+    public entity projections leave active retrieval, in the same transaction
+    that publishes the installed version. Never infer ownership from a title.
+    """
+    rows = tx.query(
+        "SELECT VERSION,CONTENT_JSON,CONTENT_DIGEST,SIGNATURE,SIGNATURE_STATUS "
+        "FROM CX_PLATFORM_KNOWLEDGE WHERE KNOWLEDGE_KEY=:key "
+        "AND KNOWLEDGE_KIND='BUILTIN_PACKAGE' AND AUDIENCE='PUBLIC' "
+        "AND SCOPE_TYPE='PUBLIC' AND STATUS='PUBLISHED' AND VERSION<:version FOR UPDATE",
+        {"key": "product-guide:" + product["product_key"], "version": _version(product["version"])})
+    retired, preserved = [], []
+    for raw in rows:
+        row = {str(key).lower(): value for key, value in raw.items()}
+        package = json.loads(str(row["content_json"]))
+        digest = builtin_knowledge._digest(package)
+        if (row["content_digest"] != digest or row["signature"] != "LOCAL-SHA256:" + digest
+                or row["signature_status"] != "VERIFIED_BUILTIN"):
+            raise ValueError("Historical product knowledge verification failed")
+        content = package.get("content") or {}
+        previous = content.get("product") or {}
+        if (package.get("dialect") != database or content.get("database") != database
+                or package.get("edition") != product["edition"].lower()
+                or package.get("audience") != "PUBLIC" or package.get("scope_type") != "PUBLIC"
+                or previous.get("product_key") != product["product_key"]
+                or previous.get("edition") != product["edition"]):
+            raise ValueError("Historical product knowledge identity mismatch")
+        if _version(previous.get("version")) != int(row["version"]):
+            raise ValueError("Historical product knowledge version mismatch")
+        for section in content["sections"]:
+            key = _entity_key(previous, database, section["key"])
+            existing = tx.query_one(
+                "SELECT TITLE,CONTENT,SUMMARY,CATEGORY,VISIBILITY,STATUS FROM ENTITIES "
+                "WHERE ENTITY_ID=:id AND ENTITY_TYPE='KNOWLEDGE' FOR UPDATE", {"id": key})
+            if not existing:
+                continue
+            item = {str(name).lower(): value for name, value in existing.items()}
+            if item["status"] != "ACTIVE":
+                continue
+            if (item["title"] != section["title"] or str(item["content"]) != section["content"]
+                    or item["summary"] != section["title"] or item["category"] != "PRODUCT"
+                    or item["visibility"] != "PUBLIC"):
+                preserved.append(key)
+                continue
+            tx.execute("UPDATE ENTITIES SET STATUS='ARCHIVED',UPDATED_AT=CURRENT_TIMESTAMP "
+                       "WHERE ENTITY_ID=:id AND ENTITY_TYPE='KNOWLEDGE'", {"id": key})
+            identity_api._audit_tx(tx, actor, "PRODUCT_KNOWLEDGE_SUPERSEDED", "ENTITY", key, "ALLOW", digest)
+            retired.append(key)
+    return retired, preserved
 
 
 def sections(product: dict, database: str) -> tuple[dict, ...]:
@@ -52,10 +119,11 @@ def publish(actor: str, database: str, root: Path | None = None) -> dict:
     def work(tx):
         record = builtin_knowledge.publish(actor, "product-guide:" + product["product_key"],
             {"product": product, "database": database, "sections": current}, audience="PUBLIC", scope_type="PUBLIC",
-            version=sum(int(part) * factor for part, factor in zip(product["version"].split("."), (1000000, 1000, 1))),
+            version=_version(product["version"]),
             reason="Publish the installed product's current bilingual facts", dialect=database,
             edition=product["edition"].lower(), _tx=tx)
-        retired, preserved = [], []
+        retired, preserved_product = _supersede_product_entities(tx, actor, product, database)
+        preserved = []
         # Retire only exact, untouched historical public seeds. User edits,
         # private knowledge and unrelated titles remain unchanged.
         for legacy in catalog:
@@ -74,10 +142,7 @@ def publish(actor: str, database: str, root: Path | None = None) -> dict:
                 retired.append(str(item["entity_id"]))
         ids = []
         for section in current:
-            identifier = hashlib.sha256((product["product_key"] + ":" + product["version"] + ":" + database + ":" + section["key"]).encode()).hexdigest()
-            # PG's existing entity key is BIGINT. Keep deterministic identifiers
-            # in the exact JavaScript integer range and serialize them as strings.
-            key = str((1 << 52) + int(identifier[:13], 16)) if database == "pg" else "CXK_" + identifier[:36]
+            key = _entity_key(product, database, section["key"])
             existing = tx.query_one("SELECT TITLE,CONTENT FROM ENTITIES WHERE ENTITY_ID=:id AND ENTITY_TYPE='KNOWLEDGE' FOR UPDATE", {"id": key})
             if existing:
                 existing = {str(k).lower(): v for k, v in existing.items()}
@@ -93,5 +158,6 @@ def publish(actor: str, database: str, root: Path | None = None) -> dict:
                 identity_api._audit_tx(tx, actor, "PRODUCT_KNOWLEDGE_PUBLISH", "ENTITY", key, "ALLOW", record["digest"])
             ids.append(key)
         return {"status": "PUBLISHED", "knowledge_ids": ids, "superseded": retired,
-                "preserved_modified_legacy": preserved, "package_digest": record["digest"]}
+                "preserved_modified_legacy": preserved, "preserved_modified_product": preserved_product,
+                "package_digest": record["digest"]}
     return connection.execute_transaction_callback(work)

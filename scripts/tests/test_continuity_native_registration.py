@@ -36,6 +36,13 @@ def test_pg_registration_preserves_continuity_native_denials(monkeypatch):
         '93_v4_4_15_mcp_tool_requests.sql','94_v4_4_15_handoff_policy.sql',
         '95_v4_4_15_runtime_context.sql','96_v4_4_15_runtime_credentials.sql',
         '97_v4_4_15_native_context_sources.sql')]
+    if tuple(int(part) for part in manifest['version'].split('.')) >= (5,0,1):
+        successors += [facts_path.with_name(name) for name in (
+            '98_v4_5_1_agent_extensions.sql', '99_v4_5_1_integration_bindings.sql',
+            '100_v4_5_1_framework_rootfs_digest.sql',
+            '101_v4_5_2_task_continuity.sql',
+            '102_v5_0_0_network_access.sql', '103_v5_0_1_memory_quality.sql',
+            '104_v5_0_1_context_assets.sql', '105_v5_0_1_answer_quality.sql')]
     with connection.get_connection() as owner:
         with owner.cursor() as cursor:
             # Validate the checksum-bound successor before replacing historical
@@ -46,7 +53,16 @@ def test_pg_registration_preserves_continuity_native_denials(monkeypatch):
                 journal=runner._step_row(cursor,'pg',successor)
                 assert journal and journal['status']=='APPLIED' and journal['checksum']==runner._checksum(successor)
                 assert runner._step_objects_complete(cursor,'pg',successor)
-                facts.update(json.loads(successor.with_suffix('.schema.json').read_text()))
+                if successor.name == '100_v4_5_1_framework_rootfs_digest.sql':
+                    # Migration 100 widens this immutable evidence field; it
+                    # has no separate schema manifest. Verify its journal and
+                    # live postcondition above before replacing the width
+                    # declared by the exact historical migration-98 manifest.
+                    column=facts['CX_FRAMEWORK_EXECUTIONS']['columns']['ROOTFS_DIGEST']
+                    assert column['type']=='VARCHAR(64)'
+                    column['type']='VARCHAR(128)'
+                else:
+                    facts.update(json.loads(successor.with_suffix('.schema.json').read_text()))
     assert 'CX_WORK_HANDOFF_POLICIES' in facts
     actor='AGENT_CX415ACL_'+secrets.token_hex(12).upper()
     connection.set_agent_context(None)

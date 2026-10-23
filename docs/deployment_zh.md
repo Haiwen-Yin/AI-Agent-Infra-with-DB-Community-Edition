@@ -1,4 +1,4 @@
-# 部署指南 v5.0.0
+# 部署指南 v5.0.1
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -6,7 +6,7 @@
 
 ## 产品与数据库选择
 
-v5.0.0 提供五个交付包，对应七个数据库验收目标。川序整合社区版在一个包中
+v5 交付结构为五个软件包，对应七个数据库验收目标。川序整合社区版在一个包中
 提供 Oracle、PostgreSQL、YashanDB 三种底座，每个进程明确选择一种；
 OpenTenBase AgentX 仅支持 PostgreSQL。三个川序企业版分别使用对应数据库。
 社区版采用 Apache-2.0，企业版采用 BSL-1.1，专属模块和迁移脚本按版本物理裁剪。
@@ -32,13 +32,74 @@ Schema Owner。不要把数据库主机 root 或 SYS 凭据写入平台运行配
 2. 限制配置文件权限为 `0600`。填写 `database.type`、连接信息、
    `security.secret_key`，以及模型、Embedding 和 Web 监听配置。
    PG 使用 `host/port/dbname`，Oracle 和 YashanDB 使用 `dsn`。
-3. 执行 `bash scripts/install_offline.sh`，安装到包内 `.venv`。
+3. 使用外部私有配置时，先执行
+   `export CX_CONFIG_PATH=/absolute/path/config.json`；否则保留包根 `config.json`。
+   安装器和启动器读取该环境变量，但部署 CLI 不会用它替换 `--config` 的默认值，
+   因此外部配置须显式传入 `--config "$CX_CONFIG_PATH"`。新终端及服务管理器需
+   重新设置同一路径，部署命令不会为后续启动操作保存配置选择。
+4. 执行 `bash scripts/install_offline.sh --database pg`（将 `pg` 替换为
+   实际底座），安装到包内 `.venv`。
    可设置 `PYTHON_BIN` 指定 Python，`CX_VENV_DIR` 指定虚拟环境。
    先安装后配置时，通过 `CX_DATABASE_DIALECT=pg`（或其他受支持标识）选择底座。
    只有选中底座的驱动和客户端参与安装。
-4. 用 `CX_CONFIG_PATH=/绝对路径/config.json` 指定外部配置，或保留包根默认路径。
-   `CX_DATABASE_DIALECT` 与配置中的类型必须一致。缺失、冲突或不支持的选择
-   会在加载数据库驱动前被拒绝。选定底座在进程生命周期内固定。
+
+`CX_DATABASE_DIALECT` 与配置中的类型必须一致。缺失、冲突或不支持的选择会在
+加载数据库驱动前被拒绝。选定底座在进程生命周期内固定。
+
+### 各数据库独立安装路径
+
+整合社区版包含三种可选方式，每个独立安装目录只执行其中一组。初始化数据库前
+先完善 `config.json`。单库包使用自己的 `config.example.json`，选择其他底座会被拒绝。
+
+Oracle：
+
+```bash
+install -m 600 config.oracle.example.json config.json
+bash scripts/install_offline.sh --database oracle
+```
+
+PostgreSQL：
+
+```bash
+install -m 600 config.pg.example.json config.json
+bash scripts/install_offline.sh --database pg
+```
+
+YashanDB：
+
+```bash
+install -m 600 config.yashandb.example.json config.json
+bash scripts/install_offline.sh --database yashandb
+```
+
+`requirements/数据库标识.txt` 分别包含公共依赖和唯一对应驱动。整合包根目录的
+`requirements.txt` 仅包含公共依赖，单独安装该文件不能完成部署。`vendor/`
+包含三种离线备选文件，并不会全部安装。安装器先校验命令行、环境变量和配置中的
+底座是否一致，再修改 Python 环境；虚拟环境含有其他底座驱动时会停止安装。
+
+同时运行不同底座时使用独立安装目录。可通过
+`CX_VENV_DIR=/绝对路径/独立虚拟环境` 选择环境，离线安装、`install_platform.sh`
+初始化和 `start_web_server.sh` 启动均须保持同一设置。更换底座时准备独立环境，
+不要直接改用仍在运行服务的虚拟环境。
+
+Oracle、PG 如需手工 pip 安装，先创建并激活专用的 Python 3.14+ 虚拟环境，
+只选择下面的一条命令：
+
+```bash
+python -m pip install --no-index --find-links vendor -r requirements/oracle.txt
+```
+
+```bash
+python -m pip install --no-index --find-links vendor -r requirements/pg.txt
+```
+
+上述路径用于整合包；单库包使用自身完整的根目录 `requirements.txt`。
+YashanDB 的 `yaspy` 是包内原生扩展而非 pip 发行包，须使用
+`install_offline.sh --database yashandb` 同时安装驱动和客户端，不要直接对
+`requirements/yashandb.txt` 执行 pip。配置完成后可执行
+`.venv/bin/python scripts/verify_deps.py --database pg` 校验所选底座的离线文件，
+按实际情况替换解释器及数据库。该命令检查包内文件，安装器还会验证已安装驱动
+能否导入；数据库就绪状态仍需执行后面的初始化和验证流程。
 
 `server.host` 决定监听范围，`server.port` 决定端口。外部访问时还需网络和防火墙
 允许访问。反向代理场景设置 `CX_PUBLIC_BASE_URL` 为对外地址，配置可信代理
@@ -50,21 +111,47 @@ Schema Owner。不要把数据库主机 root 或 SYS 凭据写入平台运行配
 `0_*_database_prerequisites.sql`。授予 Schema Owner 的部署权限与普通 Agent
 运行权限不同，不能给业务 Agent 填入 Owner 凭据作为后备连接。
 
+v5.0.1 的 Oracle、YashanDB 目标还需由 DBA 在确切的应用 PDB 中，审阅并单独执行
+对应的原生身份前置脚本：
+
+| 底座 | 新增管理员脚本 |
+|---|---|
+| Oracle | `0_oracle_v5_0_1_native_identity_prerequisites.sql` |
+| YashanDB | `0_yashandb_v5_0_1_native_identity_prerequisites.sql` |
+
+单库包位于 `scripts/deploy/`，整合社区包位于 `scripts/deploy/数据库标识/`。
+按脚本填写 `TARGET_PDB` 和 `SCHEMA_OWNER`，在该 PDB 中以 SYS 执行，不能在 CDB 根或
+其他 PDB 中操作。只读视图 `SYS.CX_AGENT_ACCOUNT_STATUS` 仅投影
+`USERNAME, ACCOUNT_STATUS`，只向该 Owner 授予 SELECT，不开放完整源目录，
+也不授予 Agent 管理权限。应用不会自动创建视图或补授权；前置缺失、不可读或
+结构不符时，只读预检 `NATIVE_IDENTITY_STATUS_VIEW` 应阻断。
+核验步骤和能力边界见[原生身份操作](native-identity_zh.md)。
+
 单库包的部署清单位于 `scripts/deploy/baseline_v*.json`；整合包位于
 `scripts/deploy/数据库标识/baseline_v*.json`。每个底座恰有一个本版清单，
-v5.0.0 沿用完整、经过校验的实体结构，终止迁移为
-`102_v5_0_0_network_access.sql`。历史 SQL 的版本号和校验和保持原值。
+v5.0.0 终点为 `102_v5_0_0_network_access.sql`；v5.0.1 在该校验绑定链后新增
+`103_v5_0_1_memory_quality.sql`、`104_v5_0_1_context_assets.sql` 和
+`105_v5_0_1_answer_quality.sql`，各自包含本底座的结构清单。以确切包版本生成的
+baseline 为准，历史 SQL 的版本号和校验和保持原值。
+
+v5.0.1 部署后同时检查时间/便签/复盘、上下文/资产/来源、回答质量的实际对象、
+APPLIED 记录及脚本摘要；不能用终点 105 的账本记录代替缺失的 103、104 结构。
+这些服务不能对旧结构启动。已有数据、业务 Agent 原生 SQL 拒绝以及原 Task/Step/
+连续性依赖仍属于验证范围；空库初始化通过不能证明已有数据库的转换已通过。
 
 将初始管理员密码写入权限为 `0600` 的私有文件，执行：
 
 ```bash
+export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.0 \
-  --config /absolute/path/config.json \
+  --database pg --edition community --version 5.0.1 \
+  --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ```
 
-按实际包替换 `--database` 与 `--edition`。初始化先验证目标为空，按清单执行
+按实际包替换 `--database` 与 `--edition`。交互式初始化也可不传密码文件，由终端
+提示输入；初始密码至少 12 个字符，没有通用默认管理员密码。非交互初始化必须提供
+私有密码文件。初始化先验证目标为空，按清单执行
 基础结构和迁移，建立管理员与平台 Agent、检查就绪状态，再退役临时部署身份。
 初始化不依赖 LLM 或外部 Agent；模型服务用于之后的推理操作。
 
@@ -79,9 +166,10 @@ bash scripts/install_platform.sh initialize \
 前保留配置、密钥和恢复日志，不要把它们放进公开软件包。
 
 ```bash
+export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.0 \
-  --config /absolute/path/config.json
+  --database pg --edition community --version 5.0.1 \
+  --config "$CX_CONFIG_PATH"
 ./start_web_server.sh start
 ./start_web_server.sh status
 ```
@@ -99,12 +187,18 @@ Dashboard 入口是 `/app/`，Portal 入口是 `/portal`。`/api/health` 表示�
 
 人用户注册入口由人注册策略控制，外部 Agent 注册由独立策略控制。
 Portal 使用本地托管 Agent；频道中的 Agent 需要成员关系、激活、运行条件和
-数据访问授权。知识库未命中时可由模型回答，并显示来源标注。
+数据访问授权。知识库未命中且问答策略允许模型补充时，才可由模型回答，并显示
+独立的来源标注。
 
 为模型服务配置地址、模型名称和必要的私有密钥后，执行健康检查和能力探测。
 结构化输出、工具调用或取消能力依赖具体服务，不由模型名称推断。
 MCP、A2A、框架 Agent、遥测和回放能力仍受各自开关、授权和隔离条件约束。
 当前能力评估见[Agent 扩展](agent-extensions_zh.md)。
+
+新增工作流见[记忆与工作便签](memory-working-notes_zh.md)、
+[Agent 资产与来源同步](agent-context-assets_zh.md)、[最终回答验收](answer-quality_zh.md)。
+来源同步和模型复盘均为显式作业，部署或访问页面不会自动启用发布、定时计划或新的
+受控能力默认值。
 
 停止服务使用 `./start_web_server.sh stop`；重启使用 `restart`。保留任务和
 Worker 租约状态以便数据库驱动恢复，不要通过删表或清空任务来消除报错。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 import sys
@@ -15,6 +16,7 @@ from .product_identity import package_root, read_manifest
 _ALIASES = {"pg": "pg", "postgres": "pg", "postgresql": "pg",
             "oracle": "oracle", "yashandb": "yashandb"}
 _MODULES = frozenset({"config", "connection", "agent_api", "graph_adapter"})
+_DRIVERS = {"oracle": "oracledb", "pg": "psycopg2-binary", "yashandb": "yaspy"}
 
 
 def normalize_database(value: object) -> str:
@@ -37,14 +39,15 @@ def supported_databases(root: Path) -> tuple[str, ...]:
     return result
 
 
-def resolve_database(root: Path, *, environment: str = "", config: dict | None = None) -> str:
+def resolve_database(root: Path, *, environment: str = "", config: dict | None = None,
+                     explicit_database: str = "") -> str:
     """Resolve without importing a driver; reject all conflicting selectors."""
     supported = supported_databases(root)
     value = config if config is not None else {}
     if not isinstance(value, dict) or not isinstance(value.get("database", {}), dict):
         raise ValueError("Database configuration must be an object")
     database = value.get("database") or {}
-    explicit = [environment, database.get("type"), database.get("dialect"), value.get("database_type")]
+    explicit = [explicit_database, environment, database.get("type"), database.get("dialect"), value.get("database_type")]
     selected = {normalize_database(item) for item in explicit if item}
     if len(selected) > 1:
         raise ValueError("Conflicting database selectors; update configuration and restart")
@@ -58,10 +61,8 @@ def resolve_database(root: Path, *, environment: str = "", config: dict | None =
     return result
 
 
-@lru_cache(maxsize=1)
-def selected_database() -> str:
-    """Pin selection for this process; changing a backend requires restart."""
-    root = package_root(__file__)
+def configured_database(root: Path, *, explicit_database: str = "") -> str:
+    """Resolve CLI, environment and configuration before any driver is loaded."""
     path = Path(os.environ.get("CX_CONFIG_PATH") or root / "config.json")
     try:
         raw = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
@@ -74,7 +75,42 @@ def selected_database() -> str:
             raw = dict(raw, database={**raw["database"], **decoded})
         except Exception as exc:
             raise ValueError("Database selection configuration cannot be decrypted") from exc
-    return resolve_database(root, environment=os.environ.get("CX_DATABASE_DIALECT", ""), config=raw)
+    return resolve_database(root, environment=os.environ.get("CX_DATABASE_DIALECT", ""),
+                            config=raw, explicit_database=explicit_database)
+
+
+@lru_cache(maxsize=1)
+def selected_database() -> str:
+    """Pin selection for this process; changing a backend requires restart."""
+    return configured_database(package_root(__file__))
+
+
+def requirements_for_database(root: Path, database: str) -> Path:
+    """Require one complete dependency profile containing only its own driver."""
+    database = normalize_database(database)
+    supported = supported_databases(root)
+    if database not in supported:
+        raise ValueError("The selected database is not supported by this product")
+    profile = root / "requirements" / (database + ".txt")
+    if len(supported) == 1 and not profile.is_file():
+        profile = root / "requirements.txt"
+    if not profile.is_file() or not profile.resolve().is_relative_to(root.resolve()):
+        raise ValueError("Selected database requirements are missing or outside the package")
+    names = set()
+    for line in profile.read_text(encoding="utf-8").splitlines():
+        value = line.split("#", 1)[0].strip()
+        if not value:
+            continue
+        match = re.match(r"^([A-Za-z0-9_.-]+)(?:\s|\[|[<=>!~]|$)", value)
+        if not match:
+            raise ValueError("Database requirements must list packages directly")
+        name = re.sub(r"[-_.]+", "-", match.group(1)).lower()
+        if name in _DRIVERS.values() and ";" in value:
+            raise ValueError("Database driver requirements must be unconditional")
+        names.add(name)
+    if names.intersection(_DRIVERS.values()) != {_DRIVERS[database]}:
+        raise ValueError("Database requirements must contain only the selected database driver")
+    return profile.resolve()
 
 
 def activate_adapter(module_name: str) -> None:
@@ -104,13 +140,18 @@ def activate_adapter(module_name: str) -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database", default="", help="oracle, pg or yashandb; must agree with configuration")
+    parser.add_argument("--requirements", action="store_true")
+    parser.add_argument("--dialect", action="store_true")
+    arguments = parser.parse_args()
     try:
-        key = selected_database()
-        if "--requirements" in sys.argv:
-            root = package_root(__file__)
-            selected = root / "requirements" / (key + ".txt")
-            print(selected if selected.is_file() else root / "requirements.txt")
+        root = package_root(__file__)
+        key = configured_database(root, explicit_database=arguments.database)
+        if arguments.requirements:
+            print(requirements_for_database(root, key))
         else:
-            print("postgresql" if key == "pg" and "--dialect" in sys.argv else key)
-    except ValueError as exc:
+            print("postgresql" if key == "pg" and arguments.dialect else key)
+    except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from None

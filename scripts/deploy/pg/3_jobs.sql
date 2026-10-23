@@ -1,5 +1,5 @@
 -- ============================================================================
--- AI Agent Infra v5.0.0 - PostgreSQL 18.3 - Phase 3: Scheduler Jobs
+-- AI Agent Infra v5.0.1 - PostgreSQL 18.3 - Phase 3: Scheduler Jobs
 -- ============================================================================
 -- NOTE: pg_cron must be installed and configured before running this script.
 -- See deployment.md for pg_cron setup instructions.
@@ -382,4 +382,4 @@ $$;
 -- available.  Do not query cron.job here: a prepared PostgreSQL target may
 -- deliberately use an external scheduler and therefore omit the extension.
 
--- AI Agent Infra v5.0.0 - PostgreSQL 18.3 - Scheduler Jobs Complete
+-- AI Agent Infra v5.0.1 - PostgreSQL 18.3 - Scheduler Jobs Complete

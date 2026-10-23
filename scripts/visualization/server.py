@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Web Visualization Server
+"""AI Agent Infra v5.0.1 - Community Edition - Web Visualization Server
 
 Lightweight HTTP server providing session-based auth, page routing,
 and JSON API endpoints for knowledge, memory, agents, tasks, workspaces,
@@ -58,7 +58,7 @@ if edition_features.has_feature('governance'):
 else:
     governance_api = None
 
-VERSION = "5.0.0"
+VERSION = "5.0.1"
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
@@ -4333,8 +4333,8 @@ class VisHandler(BaseHTTPRequestHandler):
             self._send_json({'success': False, 'error': 'Knowledge or Agent access is unavailable', 'code': 'ACCESS_DENIED'}, 403)
         except content_security.ContentDenied as exc:
             self._send_json({'success': False, 'error': 'Content security check rejected the request', 'code': exc.result['code']}, 422)
-        except Exception:
-            logger.warning('Portal grounded answer failed', exc_info=False)
+        except Exception as exc:
+            logger.warning('Portal grounded answer failed: %s', native_runtime._failure_code(exc), exc_info=False)
             self._send_json({'success': False, 'error': 'Knowledge answer service is unavailable', 'code': 'ANSWER_UNAVAILABLE'}, 503)
 
     def _handle_chat_stream(self, response):
@@ -4991,8 +4991,8 @@ class VisHandler(BaseHTTPRequestHandler):
             with open(filepath, 'r', encoding='utf-8') as f:
                 html = f.read()
             timeout = _session_timeout()
-            html = html.replace('5.0.0', VERSION)
-            html = html.replace('2026-10-18', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
+            html = html.replace('5.0.1', VERSION)
+            html = html.replace('2026-10-23', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
             html = html.replace('{{DB_DISPLAY}}', _product_database_display())
             html = html.replace('{{EDITION_TIER}}', _product_tier())
             html = html.replace(
@@ -5300,7 +5300,6 @@ def _call_llm_stream(messages, model=None):
             "messages": messages,
             "stream": True,
             "max_tokens": 8192,
-            "reasoning_effort": "none",
         }).encode()
 
         headers = {"Content-Type": "application/json"}
@@ -5314,8 +5313,8 @@ def _call_llm_stream(messages, model=None):
             method="POST",
         )
 
-        resp = urllib.request.urlopen(req, timeout=120)
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        from lib.llm_transport import request_timeout_seconds
+        with urllib.request.urlopen(req, timeout=request_timeout_seconds(llm)) as resp:
             for raw_line in resp:
                 line = raw_line.strip()
                 if not line or not line.startswith(b"data:"):
@@ -5333,7 +5332,7 @@ def _call_llm_stream(messages, model=None):
                     continue
 
     except Exception as e:
-        logger.error("LLM stream error: %s", e)
+        logger.error("LLM stream error: %s", type(e).__name__)
         return None
 
 
@@ -5355,7 +5354,6 @@ def _call_llm(messages, model=None):
             "messages": messages,
             "stream": False,
             "max_tokens": 8192,
-            "reasoning_effort": "none",
         }).encode()
 
         headers = {"Content-Type": "application/json"}
@@ -5369,16 +5367,15 @@ def _call_llm(messages, model=None):
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        from lib.llm_transport import request_timeout_seconds
+        with urllib.request.urlopen(req, timeout=request_timeout_seconds(llm)) as resp:
             result = json.loads(resp.read().decode())
             msg = result.get("choices", [{}])[0].get("message", {})
             content = msg.get("content") or ""
-            if not content:
-                content = msg.get("reasoning_content") or ""
             return content if content else None
 
     except Exception as e:
-        logger.error("LLM call error: %s", e)
+        logger.error("LLM call error: %s", type(e).__name__)
         return None
 
 

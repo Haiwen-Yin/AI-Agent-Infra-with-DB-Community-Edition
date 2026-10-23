@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Unified Configuration Manager
+"""AI Agent Infra v5.0.1 - Community Edition - Unified Configuration Manager
 
 Reads from encrypted config.json with environment variable fallback.
 Supports encrypted database credentials, LDAP configuration, and enterprise features.
@@ -14,10 +14,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .product_identity import package_root
+from .llm_transport import validate_request_timeout_seconds
 
 logger = logging.getLogger(__name__)
 
-VERSION = "5.0.0"
+VERSION = "5.0.1"
 
 _PROJECT_ROOT = package_root(__file__)
 
@@ -104,6 +105,10 @@ class LLMConfig:
     model: str = ""
     max_context: int = 500000
     stream_enabled: bool = True
+    request_timeout_seconds: float = 180
+
+    def __post_init__(self):
+        object.__setattr__(self, "request_timeout_seconds", validate_request_timeout_seconds(self.request_timeout_seconds))
 
 
 @dataclass(frozen=True)
@@ -319,6 +324,7 @@ def load_config() -> Config:
         model=llm_resolved.get("model") or os.environ.get("LLM_MODEL", LLMConfig.model),
         max_context=int(llm_raw.get("max_context", LLMConfig.max_context)),
         stream_enabled=bool(llm_raw.get("stream_enabled", LLMConfig.stream_enabled)),
+        request_timeout_seconds=llm_resolved.get("request_timeout_seconds", LLMConfig.request_timeout_seconds),
     )
 
     mr_raw = raw.get("model_routing", {})

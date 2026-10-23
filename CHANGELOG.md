@@ -1,5 +1,20 @@
 # Changelog
 
+## v5.0.1 - 2026-10-23
+
+- Improve governed Agent continuity, answer-quality handling, memory context,
+  low-privilege execution, and database-backed recovery workflows across the
+  unified Community, AgentX, and Enterprise products.
+- Keep model-provider uncertainty explicit: slow or interrupted provider calls
+  remain unobserved until independently reconciled and are never retried
+  automatically.
+- Refresh the bilingual documentation, product identity, responsive UI, and
+  release materials for the five-product delivery matrix.
+- Replace per-Agent health queries with bounded aggregates in both compatibility
+  and paginated monitoring inventories, retaining visibility and count semantics.
+- Keep continuity inventory action labels on one line while long source
+  identifiers wrap within the available row width.
+
 ## v5.0.0 - 2026-10-18
 
 - Add administrator-managed IPv4/IPv6 allowlists and denylists with individual

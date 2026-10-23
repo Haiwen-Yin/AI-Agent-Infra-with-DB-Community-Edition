@@ -1,4 +1,4 @@
-# Work continuity operations v5.0.0
+# Work continuity operations v5.0.1
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -20,15 +20,17 @@ resource access. For signed upgrade and Skill package preparation, see
 
 ## Installation and authority
 
-The current implementation uses migrations 86 through 88 for 45 relational continuity
-tables. Deploy the release-bound migration chain, including
+Migrations 86 through 88 introduced 45 relational continuity tables; later
+migrations extend that initial structure. Deploy the release-bound migration chain, including
 `86_v4_4_15_continuity_entities.schema.json` and
 `87_v4_4_15_continuity_bindings.schema.json` and
 `88_v4_4_15_execution_links.schema.json` verification manifests. The
 deployment verifier checks columns, defaults, constraints, immutable-history
 triggers and native grants. An APPLIED ledger entry alone is insufficient.
 
-The current v5.0.0 deployment terminal is migration 102 on all supported databases.
+Use the complete baseline manifest generated for this package and the selected
+database, including its successor migrations. Feature-introduction migration
+numbers below are historical references, not deployment stopping points.
 Migration 101 links A2A and DB4A2A to the existing Task Plan/Step identities,
 fenced attempts, cancellation and unknown-outcome reconciliation. Native source
 snapshots introduced by migration 97 retain their own exact-source contract.
@@ -239,6 +241,25 @@ Mutations require a reason and an idempotency key, and versioned updates
 require the expected version. Reusing a key with changed content is a conflict.
 
 ## Current delivery boundary
+
+The shared Work continuity view also groups **Agent assets**, typed **Working
+notes**, and **Retrospective and answer evaluation** into separate panels.
+Notes attach to the selected Work and preserve its exact version, evidence and
+expiry. Dashboard platform managers configure sources and answer cases/rubrics;
+Agent asset operations require their own `agents.operate` and source grants.
+Portal retains only currently authorized operations and is not a platform
+management route. Hidden/disabled controls do not replace server authorization.
+See [memory and notes](memory-working-notes.md),
+[assets and source synchronization](agent-context-assets.md) and
+[final-answer evaluation](answer-quality.md) for prerequisites, API bodies,
+failure states and review/publication boundaries.
+
+Query-aware assemblies store metadata selection, model/input budgets and exact
+source representations. Complete, partial and omitted content are distinguished
+from prepared, confirmed and unobserved delivery. Required constraints and
+unfinished work cannot silently disappear to fit a window. Source revocation,
+note expiry or changed current authority blocks subsequent use, including an
+old Handoff reference; assembly success alone never proves model delivery.
 
 Dashboard's Workspaces page has a Work continuity view, and the Portal toolbar
 links to `/portal/continuity`. Both reuse the same forms and server authority

@@ -11,6 +11,7 @@ from . import connection, identity_api, continuity_work as work, continuity_hand
 from .continuity_contracts import AssemblyRequest, request_digest
 from .continuity_sources import resolve
 from .continuity_state import ContinuityError, ContinuityConflict, require_not_expired, require_idempotent_request
+from . import context_selection
 
 
 def schema_statements(dialect):
@@ -72,14 +73,17 @@ def _handoff_item(tx,actor,domain,handoff_id,revision=None):
     return _item('HANDOFF',handoff_id,record['revision_no'],record['content_digest'],resolved['text'],domain)
 
 
-def assemble(actor,value,*,transaction=None):
+def assemble(actor,value,*,transaction=None,_asset_scope=False):
     request=value if isinstance(value,AssemblyRequest) else AssemblyRequest.model_validate(value)
+    planned=bool(request.query_text or request.context_window or request.mandatory_sources or request.allow_partial or request.model_name
+                 or request.system_text or request.tool_text or request.output_reserve or request.byte_budget != 1048576)
+    operation='ASSET_CONTEXT_ASSEMBLE' if _asset_scope else 'CONTEXT_ASSEMBLE'
     def perform(tx):
         work._authorize(tx,actor,request.security_domain_id,write=False)
         existing=tx.query_one("SELECT ASSEMBLY_ID,REQUEST_DIGEST FROM CX_CONTEXT_ASSEMBLIES WHERE PRINCIPAL_ID=:actor AND IDEMPOTENCY_KEY=:key",
                               {'actor':actor,'key':request.idempotency_key})
         if existing:
-            require_idempotent_request(existing['request_digest'],request_digest(actor,'CONTEXT_ASSEMBLE',request))
+            require_idempotent_request(existing['request_digest'],request_digest(actor,operation,request))
             # Replay cannot extend TTL or bypass current source authorization.
             return dict(_read(tx,actor,existing['assembly_id']),replayed=True)
         available=[]
@@ -87,35 +91,64 @@ def assemble(actor,value,*,transaction=None):
             available.append({**_work_item(tx,actor,request.security_domain_id,request.work_contract_id), 'mandatory': True})
         if request.handoff_id:
             available.append({**_handoff_item(tx,actor,request.security_domain_id,request.handoff_id), 'mandatory': True})
-        for source in request.sources:
+        plan=context_selection.budget(request) if planned else None
+        candidates=context_selection.select_sources(tx,actor,request) if planned else [dict(source=source,mandatory=False,rank_score=1) for source in request.sources]
+        excluded=[]
+        for candidate in candidates:
+            source=candidate['source']
+            if planned and not candidate['mandatory'] and candidate['rank_score']==0:
+                excluded.append(dict(family=source.family.value,entity_id=source.entity_id,revision_id=source.revision_id,
+                                     content_digest=source.content_digest,representation='OMITTED',selection_reason='NO_RELEVANCE',rank_score=0))
+                continue
             resolved=resolve(tx,actor,request.security_domain_id,source,purpose=request.purpose)
             available.append(dict(_item(source.family.value,source.entity_id,source.revision_id,source.content_digest,
-                                   resolved['text'],request.security_domain_id),publication_id=resolved.get('publication_id'), mandatory=False))
+                                   resolved['text'],request.security_domain_id),publication_id=resolved.get('publication_id'),
+                                   mandatory=candidate['mandatory'],rank_score=candidate['rank_score']))
         selected=[]
         seen=set()
         used=0
+        used_bytes=0
+        count=plan['count'] if planned else lambda text:len(text.encode('utf-8'))
+        limit=plan['source_budget'] if planned else request.token_budget
         for item in sorted(available, key=lambda value: (not value.get('mandatory', False), available.index(value))):
             key=(item['family'],item['entity_id'],item['revision_id'])
-            cost=item['rendered_tokens']+(2 if selected else 0)
+            cost=count(item['text'])+(count('\n\n') if selected else 0)
+            byte_cost=len(item['text'].encode('utf-8'))+(2 if selected else 0)
             if key in seen:
                 continue
-            if item.get('mandatory') and (len(selected) >= request.entry_limit or used + cost > request.token_budget):
+            if item.get('mandatory') and (len(selected) >= request.entry_limit or used + cost > limit or used_bytes + byte_cost > request.byte_budget):
                 raise ContinuityConflict('MANDATORY_CONTEXT_EXCEEDS_BUDGET','A mandatory Work or Handoff source does not fit the requested context budget')
-            if len(selected)>=request.entry_limit or used+cost>request.token_budget:
+            if len(selected)>=request.entry_limit or used+cost>limit or used_bytes+byte_cost>request.byte_budget:
+                excerpt=None
+                if planned and request.allow_partial and len(selected)<request.entry_limit:
+                    excerpt=context_selection.partial(item['text'],count,limit-used-(count('\n\n') if selected else 0),
+                                                       request.byte_budget-used_bytes-(2 if selected else 0))
+                if excerpt:
+                    item=dict(item,text=excerpt,rendered_digest=_digest(excerpt),rendered_tokens=count(excerpt),representation='PARTIAL')
+                    cost=count(excerpt)+(count('\n\n') if selected else 0)
+                    byte_cost=len(excerpt.encode('utf-8'))+(2 if selected else 0)
+                else:
+                    if planned:
+                        excluded.append(dict(item,representation='OMITTED',selection_reason='BUDGET_OR_ENTRY_LIMIT'))
+                    continue
+            if not planned and used+cost>request.token_budget:
                 continue
+            item=dict(item,rendered_tokens=count(item['text']))
             selected.append(item)
             seen.add(key)
             used+=cost
+            used_bytes+=byte_cost
         body='\n\n'.join(item['text'] for item in selected)
         assembly_id=work._id('CA')
         policy=tx.query_one("SELECT PERMISSION_VERSION FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:actor",{'actor':actor})
         tx.execute("INSERT INTO CX_CONTEXT_ASSEMBLIES(ASSEMBLY_ID,REQUEST_ID,PRINCIPAL_ID,SECURITY_DOMAIN_ID,POLICY_VERSION,RETRIEVAL_POLICY,"
                    "TOKEN_BUDGET,ENTRY_LIMIT,CONTENT_DIGEST,STATUS,PURPOSE,EXPIRES_AT,IDEMPOTENCY_KEY,REQUEST_DIGEST) "
-                   "VALUES(:assembly,:request_id,:actor,:domain,:policy,'EXPLICIT_ORDER_UTF8_UPPER_BOUND',:budget,:entries,:digest,'PREPARED',:purpose,:expires,:key,:request_digest)",
+                   "VALUES(:assembly,:request_id,:actor,:domain,:policy,:retrieval_policy,:budget,:entries,:digest,'PREPARED',:purpose,:expires,:key,:request_digest)",
                    {'assembly':assembly_id,'request_id':request.request_id,'actor':actor,'domain':request.security_domain_id,
                     'policy':int(policy['permission_version']),'budget':request.token_budget,'entries':request.entry_limit,'digest':_digest(body),
                     'purpose':request.purpose,'expires':(datetime.now(timezone.utc)+timedelta(seconds=request.ttl_seconds)).replace(tzinfo=None),
-                    'key':request.idempotency_key,'request_digest':request_digest(actor,'CONTEXT_ASSEMBLE',request)})
+                    'key':request.idempotency_key,'request_digest':request_digest(actor,operation,request),
+                    'retrieval_policy':('ASSET_' if _asset_scope else '')+('QUERY_METADATA_BUDGET_V1' if planned else 'EXPLICIT_ORDER_UTF8_UPPER_BOUND')})
         for number,item in enumerate(selected,1):
             tx.execute("INSERT INTO CX_CONTEXT_ASSEMBLY_ITEMS(ASSEMBLY_ID,ITEM_NO,FAMILY,ENTITY_ID,REVISION_ID,CONTENT_DIGEST,RENDERED_DIGEST,"
                        "RENDERED_TOKENS,AUTHORIZED_SCOPE,SELECTION_REASON,RANK_SCORE,REDACTION_STATE) "
@@ -127,8 +160,26 @@ def assemble(actor,value,*,transaction=None):
                 tx.execute("INSERT INTO CX_CONTEXT_ITEM_GRANTS(ASSEMBLY_ID,ITEM_NO,PUBLICATION_ID) VALUES(:assembly,:item_no,:publication)",
                            {'assembly':assembly_id,'item_no':number,'publication':item['publication_id']})
         identity_api._audit_tx(tx,actor,'CONTEXT_PREPARED','CONTEXT_ASSEMBLY',assembly_id,'ALLOW',request.purpose)
+        if planned:
+            tx.execute("INSERT INTO CX_CONTEXT_BUDGETS(ASSEMBLY_ID,COUNT_METHOD,MODEL_NAME,CONTEXT_WINDOW,OUTPUT_RESERVE,SYSTEM_TOKENS,TOOL_TOKENS,SOURCE_BUDGET,BYTE_BUDGET,QUERY_DIGEST) "
+                       "VALUES(:assembly,:method,:model,:window,:output_tokens,:system_tokens,:tool_tokens,:source_budget,:byte_budget,:query_digest)",
+                       {'assembly':assembly_id,'method':plan['count_method'],'model':request.model_name or None,'window':plan['context_window'],
+                        'output_tokens':plan['output_reserve'],'system_tokens':plan['system_tokens'],'tool_tokens':plan['tool_tokens'],
+                        'source_budget':plan['source_budget'],'byte_budget':plan['byte_budget'],'query_digest':_digest(request.query_text)})
+            for number,item in enumerate([*selected,*excluded],1):
+                representation=item.get('representation','COMPLETE')
+                omitted=representation=='OMITTED'
+                tx.execute("INSERT INTO CX_CONTEXT_REPRESENTATIONS(ASSEMBLY_ID,SOURCE_NO,ITEM_NO,FAMILY,ENTITY_ID,REVISION_ID,CONTENT_DIGEST,RENDERED_DIGEST,REPRESENTATION,SELECTION_REASON,RANK_SCORE,TOKEN_COUNT,BYTE_COUNT,DELIVERY_STATUS) "
+                           "VALUES(:assembly,:source_no,:item_no,:family,:entity,:revision,:digest,:rendered,:representation,:reason,:rank_score,:tokens,:bytes_used,:delivery)",
+                           {'assembly':assembly_id,'source_no':number,'item_no':None if omitted else number,'family':item['family'],
+                            'entity':item['entity_id'],'revision':item['revision_id'],'digest':item['content_digest'],
+                            'rendered':None if omitted else item['rendered_digest'],'representation':representation,
+                            'reason':item.get('selection_reason','MANDATORY_SOURCE' if item.get('mandatory') else 'QUERY_RELEVANCE'),
+                            'rank_score':item.get('rank_score',1),'tokens':0 if omitted else item['rendered_tokens'],
+                            'bytes_used':0 if omitted else len(item['text'].encode('utf-8')),'delivery':'OMITTED' if omitted else 'PREPARED'})
         return {'assembly_id':assembly_id,'status':'PREPARED','content_digest':_digest(body),'item_count':len(selected),
-                'rendered_tokens':used,'token_count_method':'UTF8_UPPER_BOUND','replayed':False}
+                'rendered_tokens':used,'token_count_method':plan['count_method'] if planned else 'UTF8_UPPER_BOUND',
+                'omitted_count':len(excluded),'replayed':False}
     return perform(transaction) if transaction is not None else connection.execute_transaction_callback(perform)
 
 
@@ -141,6 +192,20 @@ def _read(tx,actor,assembly_id):
     work._authorize(tx,actor,record['security_domain_id'],write=False)
     require_not_expired(handoff._utc(record['expires_at']),datetime.now(timezone.utc))
     items=tx.query("SELECT * FROM CX_CONTEXT_ASSEMBLY_ITEMS WHERE ASSEMBLY_ID=:assembly ORDER BY ITEM_NO",{'assembly':assembly_id})
+    if record['retrieval_policy'].startswith('ASSET_'):
+        from .agent_assets import revalidate_assembly
+        revalidate_assembly(tx,actor,assembly_id)
+    planned=record['retrieval_policy'].endswith('QUERY_METADATA_BUDGET_V1')
+    budget=tx.query_one("SELECT * FROM CX_CONTEXT_BUDGETS WHERE ASSEMBLY_ID=:assembly",{'assembly':assembly_id}) if planned else None
+    if planned and not budget:
+        raise ContinuityError('INTEGRITY_ERROR','Stored context budget is missing')
+    representations=tx.query("SELECT * FROM CX_CONTEXT_REPRESENTATIONS WHERE ASSEMBLY_ID=:assembly ORDER BY SOURCE_NO",{'assembly':assembly_id}) if planned else []
+    by_item={int(item['item_no']):item for item in representations if item['item_no'] is not None}
+    if planned and set(by_item)!={int(item['item_no']) for item in items}:
+        raise ContinuityError('INTEGRITY_ERROR','Stored context representations are inconsistent')
+    count,method=context_selection.counter(budget.get('model_name') or '') if planned else (lambda text:len(text.encode('utf-8')),'UTF8_UPPER_BOUND')
+    if planned and method!=budget['count_method']:
+        raise ContinuityError('TOKENIZER_UNAVAILABLE','The original context tokenizer is unavailable')
     texts=[]
     for item in items:
         if item['authorized_scope']!=record['security_domain_id']:
@@ -154,21 +219,42 @@ def _read(tx,actor,assembly_id):
             resolved=resolve(tx,actor,record['security_domain_id'],source,purpose=record['purpose'],
                              publication_id=grant['publication_id'] if grant else None)
         text=resolved['text']
-        if resolved['content_digest']!=item['content_digest'] or _digest(text)!=item['rendered_digest'] or len(text.encode('utf-8'))!=int(item['rendered_tokens']):
+        if planned and by_item[int(item['item_no'])]['representation']=='PARTIAL':
+            try:
+                text=text.encode('utf-8')[:int(by_item[int(item['item_no'])]['byte_count'])].decode('utf-8')
+            except UnicodeDecodeError as exc:
+                raise ContinuityError('INTEGRITY_ERROR','Invalid partial context boundary') from exc
+        if resolved['content_digest']!=item['content_digest'] or _digest(text)!=item['rendered_digest'] or count(text)!=int(item['rendered_tokens']):
             raise ContinuityError('INTEGRITY_ERROR','Stored assembly item failed integrity validation')
         texts.append(text)
     body='\n\n'.join(texts)
-    if _digest(body)!=record['content_digest'] or len(items)>int(record['entry_limit']) or len(body.encode('utf-8'))>int(record['token_budget']):
+    # Count each chunk and framing separately, matching preparation. Some
+    # tokenizers merge across boundaries, so a later whole-text count is not
+    # an interchangeable accounting contract.
+    tokens=sum(count(text) for text in texts)+max(0,len(texts)-1)*count('\n\n')
+    source_limit=int(budget['source_budget']) if planned else int(record['token_budget'])
+    if _digest(body)!=record['content_digest'] or len(items)>int(record['entry_limit']) or tokens>source_limit or (planned and len(body.encode('utf-8'))>int(budget['byte_budget'])):
         raise ContinuityError('INTEGRITY_ERROR','Stored assembly failed integrity validation')
     return {'assembly_id':assembly_id,'status':record['status'],'content_digest':record['content_digest'],
             'request_id':record['request_id'],'expires_at':record['expires_at'],'purpose':record['purpose'],
             'policy_version':int(record['policy_version']),'retrieval_policy':record['retrieval_policy'],
             'token_budget':int(record['token_budget']),'entry_limit':int(record['entry_limit']),
-            'item_count':len(items),'items':items,'text':body,'token_count_method':'UTF8_UPPER_BOUND'}
+            'item_count':len(items),'items':items,'text':body,'token_count_method':method,
+            'budget':budget,'representations':representations}
 
 
 def read_assembly(actor,assembly_id):
     return connection.execute_transaction_callback(lambda tx:_read(tx,actor,assembly_id))
+
+
+def confirmed_complete_sources(actor,assembly_id):
+    """Only a currently authorized, confirmed full receipt can suppress input."""
+    def perform(tx):
+        record=_read(tx,actor,assembly_id)
+        return [{key:item[key] for key in ('family','entity_id','revision_id','content_digest')}
+                for item in record['representations']
+                if item['representation']=='COMPLETE' and item['delivery_status']=='CONFIRMED']
+    return connection.execute_transaction_callback(perform)
 
 
 def consume(actor,assembly_id,send,*,authorize=None,on_reserved=None):
@@ -201,6 +287,9 @@ def consume(actor,assembly_id,send,*,authorize=None,on_reserved=None):
                        {'assembly':assembly_id,'status':status})
             tx.execute("UPDATE CX_CONTEXT_INPUT_USES SET STATUS=:status,COMPLETED_AT=CURRENT_TIMESTAMP WHERE USE_ID=:use_id AND STATUS='SENDING'",
                        {'use_id':use_id,'status':status})
+            if record['retrieval_policy'].endswith('QUERY_METADATA_BUDGET_V1'):
+                tx.execute("UPDATE CX_CONTEXT_REPRESENTATIONS SET DELIVERY_STATUS=:delivery WHERE ASSEMBLY_ID=:assembly AND DELIVERY_STATUS='PREPARED'",
+                           {'assembly':assembly_id,'delivery':'CONFIRMED' if status=='SENT' else 'UNOBSERVED'})
             identity_api._audit_tx(tx,actor,'CONTEXT_INPUT_'+status,'CONTEXT_ASSEMBLY',assembly_id,'ALLOW','Context delivery observation')
         connection.execute_transaction_callback(commit)
     try:

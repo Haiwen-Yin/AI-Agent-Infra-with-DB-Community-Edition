@@ -18,7 +18,8 @@ from contextvars import ContextVar
 from urllib.parse import urlsplit
 from typing import Any, Dict, List, Optional
 
-from . import connection, deployment_adapters, identity_api, native_agent_api, runtime_isolation, content_security
+from . import connection, deployment_adapters, identity_api, native_agent_api, runtime_isolation, content_security, answer_planning
+from .llm_transport import request_timeout_seconds
 
 logger = logging.getLogger(__name__)
 _model_observer = ContextVar("native_model_observer", default=None)
@@ -114,7 +115,7 @@ def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, manage
                          ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=request_timeout_seconds()) as response:
             raw = response.read(4 * 1024 * 1024 + 1)
             if len(raw) > 4 * 1024 * 1024:
                 raise RuntimeError("LLM provider response is too large")
@@ -129,8 +130,16 @@ def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, manage
     if not content:
         raise RuntimeError("LLM provider returned no content")
     content_security.enforce(content, "OUTPUT")
+    observed_usage = result.get("usage")
+    usage = None
+    if isinstance(observed_usage, dict):
+        usage = {name: value for name, value in observed_usage.items()
+                 if name in {"prompt_tokens", "completion_tokens", "total_tokens"}
+                 and type(value) is int and value >= 0}
+        usage = usage or None
     return {"content": content,
-            "model": result.get("model") or model}
+            "model": result.get("model") or model,
+            "usage": usage, "usage_observation": "PROVIDER_REPORTED" if usage else "UNAVAILABLE"}
 
 
 def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delta: Any) -> Dict[str, Any]:
@@ -158,7 +167,7 @@ def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delt
     pending = ""
     completed = False
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=request_timeout_seconds()) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
@@ -602,6 +611,40 @@ def _write_channel_response(agent_id: str, execution_id: str, input_payload: Dic
                                              thread_id=str(dispatch.get("thread_id") or ""))
 
 
+def _safe_answer_metadata(value: Any) -> Dict[str, Any]:
+    """Expose only bounded retrieval-policy observations, never source facts."""
+    if not isinstance(value, dict):
+        return {}
+    strategies = {"KEYWORD", "FULLTEXT", "VECTOR", "HYBRID", "SUBJECT_CLARIFICATION"}
+    channels = {"KEYWORD", "FULLTEXT", "VECTOR"}
+    statuses = {"MATCHED", "PARTIAL_MATCH", "NO_MATCH", "AMBIGUOUS", "UNAVAILABLE"}
+    subjects = {"COMPANY", "DATABASE", "QUERY_TERMS", "MIXED"}
+    def selected_list(key: str, permitted: set[str]) -> list[str]:
+        raw = value.get(key)
+        return [item for item in raw[:4] if isinstance(item, str) and item in permitted] if isinstance(raw, list) else []
+    requested = value.get("requested_strategy")
+    status = value.get("evidence_status")
+    subject = value.get("subject_type")
+    degradations = []
+    for item in value.get("degradations", [])[:4] if isinstance(value.get("degradations"), list) else []:
+        if isinstance(item, dict) and str(item.get("channel")) in channels:
+            degradations.append({"channel": str(item["channel"]), "reason": "CHANNEL_UNAVAILABLE"})
+    return {
+        "policy_revision": str(value.get("policy_revision") or "")[:64],
+        "requested_strategy": requested if isinstance(requested, str) and requested in strategies else "UNKNOWN",
+        "actual_strategies": selected_list("actual_strategies", strategies),
+        "available_channels": selected_list("available_channels", channels),
+        "degradations": degradations,
+        "evidence_status": status if isinstance(status, str) and status in statuses else "UNAVAILABLE",
+        "subject_type": subject if isinstance(subject, str) and subject in subjects else "QUERY_TERMS",
+        "missing_parts_count": max(0, min(100, value.get("missing_parts_count", 0)))
+            if type(value.get("missing_parts_count", 0)) is int else 0,
+        "contradiction_count": max(0, min(100, value.get("contradiction_count", 0)))
+            if type(value.get("contradiction_count", 0)) is int else 0,
+        "rank_meaning": "RECIPROCAL_RANK_NOT_PROBABILITY",
+    }
+
+
 def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
     worker_id = worker_id or local_worker_id()
     node_id = node_id or native_agent_api._text(socket.gethostname(), 128)
@@ -737,7 +780,8 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
                     output = provider_call(
                         _stream_llm, profile, messages if isinstance(messages, list) else [],
                         lambda content: identity_api.update_channel_agent_response(
-                            str(agent.get("agent_id") or ""), channel_id, content, execution_id=execution_id,
+                            str(agent.get("agent_id") or ""), channel_id,
+                            answer_planning.render_reply(content, input_payload), execution_id=execution_id,
                         ),
                     )
                 except RuntimeError as exc:
@@ -749,6 +793,7 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
                     if str(exc) != "LLM provider returned no content":
                         raise
                     output = provider_call(_call_llm, profile, messages if isinstance(messages, list) else [])
+            output = {**output, 'content': answer_planning.render_reply(str(output.get('content') or ''), input_payload)}
             if not connection.execute_query_one(
                     "SELECT EXECUTION_ID FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:id AND STATUS='CLAIMED' "
                     "AND WORKER_ID=:worker AND NODE_ID=:node AND FENCING_TOKEN=:token AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP",
@@ -764,6 +809,8 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
             output = provider_call(_call_llm, profile, messages if isinstance(messages, list) else [])
         if provider_completed:
             _set_profile_health(str(agent.get("llm_profile_id") or ""), "HEALTHY", int(profile.get("version") or 1))
+        if dispatch and dispatch.get("kind") == "BUSINESS_MENTION":
+            output["answer_metadata"] = _safe_answer_metadata(input_payload.get("answer_metadata"))
         if not dispatch:
             _write_channel_response(str(agent.get("agent_id") or ""), execution_id, input_payload, output=output)
         completion_hook = None

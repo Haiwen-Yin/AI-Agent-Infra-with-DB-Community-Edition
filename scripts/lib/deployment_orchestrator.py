@@ -242,8 +242,44 @@ def _check(code: str, state: str, message: str, remediation: str = "", detail: O
     return {"code": code, "state": state, "message": message, "remediation": remediation, "detail": _safe(detail or {})}
 
 
+def _native_identity_status_preflight(cursor: Any, database: str, *, root: Path,
+                                      target_version: str) -> Optional[Dict[str, Any]]:
+    """Only the explicit v5.0.1+ package requires the DBA-owned status view."""
+    if database not in {"oracle", "yashandb"} or not target_version:
+        return None
+    version = release_version(database, root, target_version)
+    try:
+        version_parts = tuple(int(item) for item in version.split('.'))
+    except ValueError as exc:
+        raise DeploymentError('package version must be an exact semantic version') from exc
+    if len(version_parts) != 3:
+        raise DeploymentError('package version must be an exact semantic version')
+    if version_parts < (5, 0, 1):
+        return None
+    script = _package_deploy_dir(database, root) / f'0_{database}_v5_0_1_native_identity_prerequisites.sql'
+    remediation = (f'Have SYS run {script.relative_to(root).as_posix()} in the exact application PDB, '
+                   'after reviewing TARGET_PDB and SCHEMA_OWNER. Do not grant whole dictionary views or DBA roles.')
+    code = 'NATIVE_IDENTITY_STATUS_VIEW'
+    try:
+        cursor.execute("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER='SYS' "
+                       "AND TABLE_NAME='CX_AGENT_ACCOUNT_STATUS' ORDER BY COLUMN_ID")
+        columns = [str(row[0]).upper() for row in cursor.fetchall()]
+        cursor.execute("SELECT READ_ONLY FROM ALL_VIEWS WHERE OWNER='SYS' AND VIEW_NAME='CX_AGENT_ACCOUNT_STATUS'")
+        row = cursor.fetchone()
+        readonly = bool(row and str(row[0]).upper() in {'Y', 'YES', 'TRUE'})
+        cursor.execute('SELECT USERNAME,ACCOUNT_STATUS FROM SYS.CX_AGENT_ACCOUNT_STATUS WHERE 1=0')
+        cursor.fetchall()
+        valid = columns == ['USERNAME', 'ACCOUNT_STATUS'] and readonly
+        return _check(code, 'PASS' if valid else 'BLOCKED',
+                      'Dedicated-PDB native Agent account-status projection', remediation,
+                      {'owner': 'SYS', 'columns': columns, 'read_only': readonly, 'version': version})
+    except Exception:
+        return _check(code, 'BLOCKED', 'The exact read-only native account-status projection is unavailable',
+                      remediation, {'owner': 'SYS', 'version': version})
+
+
 def preflight(database: str, config: Dict[str, Any], *, require_empty: bool = False,
-              edition: str = "") -> Dict[str, Any]:
+              edition: str = "", root: Path = PACKAGE_ROOT, target_version: str = "") -> Dict[str, Any]:
     """Return normalized prepared-database checks without changing the target."""
     checks: List[Dict[str, Any]] = []
     try:
@@ -373,6 +409,9 @@ def preflight(database: str, config: Dict[str, Any], *, require_empty: bool = Fa
                                          "Verify the deployment role owns or can create objects in the target schema."))
                 count = int(_scalar(cursor, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'") or 0)
             else:
+                status_view = _native_identity_status_preflight(cursor, database, root=root, target_version=target_version)
+                if status_view is not None:
+                    checks.append(status_view)
                 version = ""
                 try:
                     version = str(_scalar(cursor, "SELECT VERSION FROM V$INSTANCE") or "")
@@ -660,7 +699,7 @@ def _migration_apply(target_version: str, database: str, edition: str, config_pa
     deploy = _package_deploy_dir(database, root)
     apply = {"oracle": runner._apply_oracle, "pg": runner._apply_pg, "yashandb": runner._apply_yashandb}[database]
     results = []
-    scripts = runner._order_successor_recovery(database, config, [deploy / name for name in names])
+    scripts = runner._order_successor_recovery(database, config, [deploy / name for name in names], version=target_version)
     for script in scripts:
         name = script.name
         result = apply(config, script)
@@ -838,6 +877,28 @@ def postflight(database: str, edition: str, config: Dict[str, Any], terminal_mig
                 "Migration ledger has no failed steps",
                 "Resolve failed migration steps before handoff.", {"count": failed},
             ))
+
+            if terminal_migration == "105_v5_0_1_answer_quality.sql":
+                import migration_runner
+                deploy_dir = _package_deploy_dir(database, root)
+                for name, code, message in (
+                    ("103_v5_0_1_memory_quality.sql", "MEMORY_QUALITY_STORAGE",
+                     "Temporal memory, working notes and retrospective storage verified"),
+                    ("104_v5_0_1_context_assets.sql", "CONTEXT_ASSET_STORAGE",
+                     "Context accounting, Agent assets and source synchronization storage verified"),
+                    ("105_v5_0_1_answer_quality.sql", "ANSWER_QUALITY_STORAGE",
+                     "Final-answer evaluation storage verified"),
+                ):
+                    complete = migration_runner._step_objects_complete(
+                        cursor, database, deploy_dir / name,
+                        version=release_version(database, root),
+                    )
+                    checks.append(_check(
+                        code, "PASS" if complete else "BLOCKED", message,
+                        "Complete or repair the packaged migration and its native schema before handoff.",
+                        {"step": name},
+                    ))
+                terminal_migration = "102_v5_0_0_network_access.sql"
 
             if terminal_migration == "102_v5_0_0_network_access.sql":
                 import migration_runner
@@ -1204,7 +1265,8 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
     if mode in {"STATUS", "VERIFY"}:
         durable = _deployment_database_status(database, config, run_id)
         verified = postflight(database, edition, config, terminal_migration, root) if mode == "VERIFY" else None
-        prerequisites = preflight(database, config, require_empty=False, edition=edition)
+        prerequisites = preflight(database, config, require_empty=False, edition=edition,
+                                  root=root, target_version=target_version)
         status = "STATUS"
         if mode == "VERIFY":
             passed = prerequisites.get("passed") is True and verified.get("passed") is True
@@ -1246,6 +1308,7 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
         database, config,
         require_empty=mode == "INITIALIZE" and not resuming,
         edition=edition,
+        root=root, target_version=target_version,
     )
     if not first["passed"]:
         state["status"] = "FAILED_MANUAL_ACTION_REQUIRED"

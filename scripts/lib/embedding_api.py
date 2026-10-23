@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.0 - Community Edition - Embedding API
+"""AI Agent Infra v5.0.1 - Community Edition - Embedding API
 
 Generate, store, and search vector embeddings for entities.
 Uses external Embedding API (OpenAI-compatible) + Oracle TO_VECTOR() for storage.
@@ -10,6 +10,8 @@ Single-SQL CTE fusion search available via search_unified_sql().
 import json
 import hashlib
 import logging
+import math
+import re
 import urllib.request
 from typing import Any, Dict, List, Optional
 
@@ -658,6 +660,102 @@ def search_fulltext(
     except Exception as e:
         logger.error(f"Full-text search failed: {e}")
         return []
+
+
+class AuthorizedSearchUnavailable(RuntimeError):
+    """One authorized retrieval channel could not produce an observed result."""
+
+
+def _authorized_search_denied(exc: Exception) -> bool:
+    """Recognize native authentication/privilege failures without logging data."""
+    code = getattr(exc, "pgcode", None) or getattr(exc, "sqlstate", None)
+    if str(code or "") in {"42501", "28000", "28P01"}:
+        return True
+    native = exc.args[0] if exc.args else None
+    return getattr(native, "code", None) in {1017, 1031, 28000, 28001}
+
+
+def search_authorized_knowledge(query: str, *, channel: str, actor: str, agent: str,
+                                limit: int = 40, entity_ids=None) -> List[Dict]:
+    """Return ID-only candidates under both current knowledge policies.
+
+    This separate entry point intentionally has no unrestricted fallback and
+    does not convert backend/provider failures into an empty successful search.
+    Bodies and exact revisions are loaded and checked by knowledge_grounding.
+    """
+    from . import knowledge_api, knowledge_grounding
+    knowledge_grounding.require_reader(actor, agent)
+    if channel not in {"fulltext", "vector"} or not isinstance(query, str) or not query.strip() or len(query) > 2000:
+        raise ValueError("Authorized retrieval request is invalid")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("Authorized retrieval limit is invalid")
+    if entity_ids is not None and (not isinstance(entity_ids, list) or len(entity_ids) > 50
+                                  or any(not isinstance(key, str) or not key for key in entity_ids)):
+        raise ValueError("Authorized retrieval source filter is invalid")
+    if entity_ids == []:
+        return []
+    params = {"actor": actor, "agent": agent, "candidate_limit": limit}
+    predicates = ["e.ENTITY_TYPE='KNOWLEDGE'", "e.STATUS='ACTIVE'",
+                  "(e.EXPIRES_AT IS NULL OR e.EXPIRES_AT>CURRENT_TIMESTAMP)",
+                  knowledge_api.knowledge_access_predicate("e", ":actor"),
+                  knowledge_api.knowledge_access_predicate("e", ":agent")]
+    if entity_ids is not None:
+        predicates.append("e.ENTITY_ID IN (" + ",".join(f":source_id{i}" for i in range(len(entity_ids))) + ")")
+        params.update({f"source_id{i}": key for i, key in enumerate(entity_ids)})
+    pg = str(connection.DATABASE_DIALECT).lower() in {"pg", "postgresql"}
+    suffix = " LIMIT :candidate_limit" if pg else " FETCH FIRST :candidate_limit ROWS ONLY"
+    tables = "ENTITIES e"
+    try:
+        if channel == "vector":
+            context, vector = _query_embedding(query, agent_id=agent)
+            params.update({"vec": vector, **_scope_params(context)})
+            tables += " JOIN ENTITY_EMBEDDINGS em ON em.ENTITY_ID=e.ENTITY_ID AND em.ENTITY_TYPE=e.ENTITY_TYPE"
+            predicates.extend(["em.EMBEDDING_SPACE_ID=:emb_space", "em.EMBEDDING_CONTRACT_ID=:emb_contract",
+                               "em.VALIDATION_STATUS='VERIFIED'"])
+            metric = str(context["contract"].get("distance_metric") or "COSINE").upper()
+            if metric not in {"COSINE", "EUCLIDEAN", "DOT_PRODUCT"}:
+                raise ValueError("Embedding distance metric is unsupported")
+            if pg:
+                operator = {"COSINE": "<=>", "EUCLIDEAN": "<->", "DOT_PRODUCT": "<#>"}[metric]
+                score = "em.EMBEDDING " + operator + " CAST(:vec AS vector)"
+            else:
+                native_metric = "DOT" if metric == "DOT_PRODUCT" else metric
+                score = "VECTOR_DISTANCE(em.EMBEDDING, TO_VECTOR(:vec), " + native_metric + ")"
+            ordering = "ASC"
+        else:
+            # Plain tokens only: user text is never a native query language.
+            tokens = re.findall(r"[\w\u4e00-\u9fff]+", query, flags=re.UNICODE)[:32]
+            if not tokens:
+                return []
+            if pg:
+                params["fulltext_query"] = " ".join(tokens)
+                expression = "to_tsvector('simple', COALESCE(e.TITLE,'') || ' ' || COALESCE(e.CONTENT,''))"
+                match = "plainto_tsquery('simple', :fulltext_query)"
+                score = "ts_rank(" + expression + ", " + match + ")"
+                predicates.append(expression + " @@ " + match)
+            else:
+                params["fulltext_query"] = " OR ".join("{" + token + "}" for token in tokens)
+                score = "SCORE(1)"
+                predicates.append("CONTAINS(e.TITLE, :fulltext_query, 1)>0")
+            ordering = "DESC"
+        rows = execute_query("SELECT e.ENTITY_ID," + score + " AS CHANNEL_SCORE FROM " + tables
+                             + " WHERE " + " AND ".join(predicates)
+                             + " ORDER BY CHANNEL_SCORE " + ordering + ",e.ENTITY_ID" + suffix, params)
+    except PermissionError:
+        raise
+    except Exception as exc:
+        if _authorized_search_denied(exc):
+            raise PermissionError("Authorized retrieval is denied") from exc
+        # Provider endpoints, database errors and credential text stay private.
+        raise AuthorizedSearchUnavailable(channel + " channel unavailable") from exc
+    results = []
+    for raw in rows:
+        row = {str(key).lower(): value for key, value in dict(raw).items()}
+        score_value = row.get("channel_score")
+        if score_value is not None and not math.isfinite(float(score_value)):
+            continue
+        results.append({"entity_id": str(row["entity_id"]), "channel_score": float(score_value) if score_value is not None else None})
+    return results
 
 
 def search_unified(

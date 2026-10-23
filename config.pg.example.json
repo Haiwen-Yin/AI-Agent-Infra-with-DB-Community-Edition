@@ -26,7 +26,8 @@
   "llm": {
     "api_url": "<LLM_API_URL>",
     "model": "<LLM_MODEL_NAME>",
-    "api_key": "<LLM_API_KEY_OR_EMPTY>"
+    "api_key": "<LLM_API_KEY_OR_EMPTY>",
+    "request_timeout_seconds": 180
   },
   "security": {
     "admin_username": "admin",
