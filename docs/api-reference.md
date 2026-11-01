@@ -1,4 +1,4 @@
-# API reference v5.0.1
+# API reference v5.0.2
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -249,3 +249,101 @@ establish current workflow acceptance.
 `GET /api/platform/ip-access`, `POST /api/platform/ip-access/preview` and
 `PUT /api/platform/ip-access` require `platform.manage`; writes require CSRF.
 See [policy bodies, source evaluation and recovery](source-ip-access.md).
+
+## Model runtime and processing contracts
+
+The v5.0.2 runtime requires migrations106–109 in addition to the predecessor
+chain. PostgreSQL also requires migration110 for compatible native organization
+approval entity constraints. Verify the complete103–110 tail on PostgreSQL and
+103–109 on Oracle/YashanDB. Historical runtime packages do not mount these new capacity
+and processing routes. Route actions remain prerequisites; every operation
+also checks its original resource, credential and current policy.
+
+| Method and path | Purpose |
+|---|---|
+| `GET/POST /api/model-endpoint-capacity/groups` | Management-authorized bounded resource directory or explicit registration. |
+| `GET /api/model-endpoint-capacity/groups/{group_id}` | Current policy, participants, aliases and occupancy. |
+| `GET /api/model-endpoint-capacity/groups/{group_id}/admissions?after_sequence=...&limit=20` | Management-authorized request metadata, with at most 50 rows. |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/revisions` | Expected-version capacity/deadline revision with reason and idempotency. |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/origins` | Register an exact requesting principal. |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/origins/{origin_id}/state` | Expected-version participant state change. |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/aliases` | Bind an endpoint alias and saved Profile revision. |
+| `GET /api/model-endpoint-capacity/admissions/{admission_id}` | Read the caller's exact authorized request. |
+| `GET /api/model-endpoint-capacity/admin/admissions/{admission_id}` | Management-authorized request inspection. |
+| `POST /api/model-endpoint-capacity/admissions/{admission_id}/cancel` | Record queue cancellation or local cancellation after dispatch. |
+| `POST /api/model-endpoint-capacity/admissions/{admission_id}/reconcile` | Record explicit operator confirmation for the exact unknown request. |
+| `POST /api/model-gateway/coordinator-bindings` | Administrator enrollment of exact central capacity, participant, Gateway credential and both Profile revisions. |
+| `POST /api/model-gateway/coordinator-routes` | Administrator registration of the fixed local Profile-to-coordinator route. |
+| `GET /api/model-gateway/origin-requests/{receipt_id}` | Original principal reads its local remote-dispatch receipt, immutable observation and separate resolution. |
+| `POST /api/model-gateway/origin-requests/{receipt_id}/reconcile` | Read exact registered central transport evidence, then recheck original local business authority and retain a separate resolution. No model send or retry. |
+| `GET /api/agent-extensions/executions/{execution_id}/progress` | Read authorized original execution, processing and model observations. |
+| `GET /api/agent-extensions/processing/{continuity_id}?after=...&limit=100` | Read at most 100 processing block observations without repair or generation. |
+| `POST /api/agent-extensions/processing/retries` | Active Human admission of an exact bounded recovery. |
+| `POST /api/agent-extensions/processing/blocks/{block_id}/reconcile` | Read original evidence or record an explicit Human resolution. |
+| `POST /api/agent-extensions/processing/recoveries/{recovery_id}/dispatch` | Explicit dispatch through the original trusted adapter, with an empty object body. |
+
+Capacity administration requires `model_gateway.manage`; request read and
+cancellation require `model_gateway.forward` plus ownership. Processing reads
+require `workspaces.read`; recovery decisions require `workspaces.write`, an
+active Human and current exact business authority. Session mutations require
+CSRF. An admission ID, correlation ID, recovery receipt or idempotency key is
+never a bearer credential. Gateway replay retains the original Profile, Agent
+and credential boundary and rechecks current authority before response access.
+
+Coordinator enrollment also requires `platform.manage`. Origin receipt reads
+require `workspaces.read`; explicit reconciliation requires `agents.operate`
+and its original business adapter's current authority. Fixed coordinator peer
+reservation, completion, observation and cancellation routes authenticate the
+enrolled original `cxgw_` machine credential, not a foreign browser session.
+Transport termination and Provider response completeness remain distinct;
+reconciliation does not rewrite an old unknown observation or approve content.
+
+Queue cancellation proves no send only for an unused admission. Closing an
+already dispatched local connection does not prove remote termination.
+Unknown requests continue occupying capacity until exact completion evidence
+or an explicitly recorded operator decision. Recovery acceptance, dispatch,
+Task completion and independent content approval remain separate states.
+
+Usage fields distinguish missing from measured zero. Cache and reasoning
+details are subsets of input/output totals. Timings identify client observations;
+no Provider prefill/decode measurement is inferred. Metadata omits prompts,
+answers, credentials and hidden reasoning text. See
+[capacity](model-endpoint-capacity.md), [processing](processing-recovery.md),
+[structured and tool workflows](model-workflows.md) and
+[versioned MCP](mcp-versioned-interoperability.md).
+
+## Observed-answer Human reviews
+
+Migration 109 adds `/api/observed-answer-reviews` in v5.0.2 installations. These
+Dashboard routes import typed observations of already completed answers and
+record independent Human decisions. They make no generation request and do not
+convert imported observations into native answer-quality runs. Original v5.0.1
+observations can be registered after upgrading to v5.0.2; the v5.0.1 package is
+not modified.
+
+| Method and path | Purpose and request |
+|---|---|
+| `POST /api/observed-answer-reviews/sets` | Register `{packet, reason}`. The typed packet binds version/phase/target/track/generation, package/policy/report digests, and each original output, actor, Domain, Agent/Profile revision, query and observation. |
+| `GET /api/observed-answer-reviews/sets/{set_id}` | Read the original packet and recorded reviews under current authority. |
+| `POST /api/observed-answer-reviews/sets/{set_id}/outputs/{key}/reviews` | Submit `{output_digest, factual_correct, citations_supported, reason}` for that exact output. Both decisions require JSON booleans; the review reason must contain 3–1000 characters and be substantive. |
+| `GET /api/observed-answer-reviews/sets/{set_id}/export` | Export the original immutable set/output/review and required audit facts under current authority. The export does not declare release readiness. |
+
+All four routes require current `platform.manage`, an active Human principal and
+the original authenticated Dashboard Session. POST requests also require the
+session's `X-CSRF-Token`; Gateway credentials cannot replace that Session.
+Each operation rechecks Domain membership, visibility of the active original
+Agent, its exact healthy Profile revision, current Knowledge reader/citation
+intersection and disclosed exact context sources. A stale revision or lost
+authority prevents disclosure or review.
+
+The reviewer must differ from both the registering actor and the original
+responsible actor. Use the selected output's `output_digest` from its authorized
+export: it binds the complete canonical typed Observation row, rather than just
+the answer text. Registration and review preserve the real Session facts and
+commit immutable records with required audit in one transaction. A client flag
+or imported verdict cannot substitute for a Human review.
+
+Release verification separately proves the original capture, exact package and
+matrix coverage. A private native observer can retain historical review facts
+after fixture cleanup; that does not authorize a later HTTP read. Import,
+recorded Human review and final release acceptance remain separate facts.

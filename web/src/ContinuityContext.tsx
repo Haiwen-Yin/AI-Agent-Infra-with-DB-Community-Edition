@@ -3,10 +3,10 @@ import ContinuityRuntime from "./ContinuityRuntime";
 
 type Row = Record<string, any>;
 type Source = { family: string; entity_id: string; revision_id: string; content_digest: string };
-type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; domains: Row[]; workId?: string; handoffId?: string; canWrite: boolean };
+type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; domains: Row[]; workId?: string; handoffId?: string; canWrite: boolean; modelRuntimeEnabled?: boolean };
 const blank = (): Source => ({ family: "HANDOFF", entity_id: "", revision_id: "", content_digest: "" });
 
-export default function ContinuityContext({ request, text, domain, domains, workId, handoffId, canWrite }: Props) {
+export default function ContinuityContext({ request, text, domain, domains, workId, handoffId, canWrite, modelRuntimeEnabled = false }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [publicationSource, setPublicationSource] = useState<Source>(blank());
   const [assemblies, setAssemblies] = useState<Row[]>([]);
@@ -79,6 +79,6 @@ export default function ContinuityContext({ request, text, domain, domains, work
       <div className="page-toolbar"><button className="small-button" type="button" disabled={busy} onClick={() => void run(() => list("publication"))}>{text("管理本域发布", "Manage publications from this domain")}</button><select aria-label={text("选择发布记录", "Select publication")} value={publication?.publication_id || ""} disabled={busy} onChange={e => setPublication(publications.find(item => item.publication_id === e.target.value) || null)}><option value="">{text("选择发布记录", "Select publication")}</option>{publications.map(item => <option key={item.publication_id} value={item.publication_id}>{String(item.publication_id).slice(-12)} · {status(item.status)}</option>)}</select>{publicationCursor && <button type="button" className="small-button" disabled={busy} onClick={() => void run(() => list("publication", publicationCursor))}>{text("加载更多发布", "Load more publications")}</button>}</div>
       {publication && <form onSubmit={e => { e.preventDefault(); const data = new FormData(e.currentTarget); void run(async () => { const id = publication.publication_id; await post(`/api/context-publications/${encodeURIComponent(id)}/revoke`, { expected_version: publication.version, reason: String(data.get("reason")) }); await list("publication"); setNotice(text("发布已撤回：", "Publication revoked: ") + id); }); }}><fieldset className="operation-explainer-form" disabled={busy || !canWrite || publication.status !== "PUBLISHED"}><legend>{text("撤回所选发布", "Revoke selected publication")}</legend><p>{familyName(publication.family)} · {publication.entity_id} · {publication.source_revision_id} · {publication.content_digest}</p><p>{text("目标域", "Target domain")}: {publication.target_security_domain_id} · {publication.purpose}</p>{reason}<button className="primary-button">{text("撤回发布", "Revoke publication")}</button></fieldset></form>}
     </section>
-    <ContinuityRuntime request={request} text={text} domain={domain} workId={workId} sources={sources} canWrite={canWrite} />
+    <ContinuityRuntime request={request} text={text} domain={domain} workId={workId} sources={sources} canWrite={canWrite} modelRuntimeEnabled={modelRuntimeEnabled} />
   </>;
 }

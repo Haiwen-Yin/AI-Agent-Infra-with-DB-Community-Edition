@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Loop Engineering API
+"""AI Agent Infra v5.0.2 - Community Edition - Loop Engineering API
 
 Loop Engineering: design goal-driven autonomous feedback loops for AI agents.
 Each Loop definition is stored as an ENTITY (ENTITY_TYPE='LOOP_DEFINITION')
@@ -188,7 +188,32 @@ def list_loops(status: Optional[str] = None, agent_id: Optional[str] = None,
 
 def start_run(loop_id: str, agent_id: str, trigger_type: str = "MANUAL",
               trigger_source: Optional[str] = None,
-              parent_run_id: Optional[str] = None) -> str:
+              parent_run_id: Optional[str] = None, *,
+              processing_domain_id: Optional[str] = None,
+              canonical_task_id: Optional[str] = None,
+              processing_parent_run_id: Optional[str] = None) -> str:
+    from . import processing_graph
+    processing_enabled = processing_graph.enabled()
+    if processing_enabled:
+        if parent_run_id:
+            from . import graph_compat
+            parent = graph_compat.get_binding("LOOP_RUN", parent_run_id) or {}
+            original = parent.get("graph_run_id")
+            if not original or (processing_parent_run_id and original != processing_parent_run_id):
+                raise PermissionError("The original parent Loop processing binding is required")
+            processing_parent_run_id = str(original)
+        if processing_parent_run_id:
+            from . import connection
+            def parent_authority(tx):
+                root, _budget = processing_graph.control_gate(tx, processing_parent_run_id)
+                processing_graph.execution_links.authorize(tx, agent_id, root["security_domain_id"], "GRAPH", processing_parent_run_id)
+                if ((processing_domain_id and processing_domain_id != root["security_domain_id"])
+                        or (canonical_task_id and str(canonical_task_id) != str(root["canonical_task_id"]))):
+                    raise PermissionError("A child Loop must retain its original Task and Security Domain")
+                return root
+            original = connection.execute_transaction_callback(parent_authority)
+            processing_domain_id, canonical_task_id = original["security_domain_id"], original["canonical_task_id"]
+        processing_domain_id = processing_graph.resolve_domain(agent_id, processing_domain_id)
     run_id = execute_insert_returning_id("""
         INSERT INTO LOOP_RUNS (RUN_ID, LOOP_ID, AGENT_ID, TRIGGER_TYPE, TRIGGER_SOURCE,
                                STATUS, ITERATION_COUNT, TOTAL_TOKENS, STARTED_AT,
@@ -199,17 +224,51 @@ def start_run(loop_id: str, agent_id: str, trigger_type: str = "MANUAL",
     """, {"loop_id": loop_id, "agent_id": agent_id,
           "trigger_type": trigger_type, "trigger_source": trigger_source,
           "parent_run_id": parent_run_id})
-    _fire_hooks(loop_id, "ON_START", {"run_id": run_id, "agent_id": agent_id})
     try:
         from . import graph_compat
         graph_compat.start_loop_run(
             {"run_id": run_id, "agent_id": agent_id},
             get_loop(loop_id) or {"loop_id": loop_id, "owned_by_agent": agent_id},
             agent_id or "system",
+            processing_domain_id=processing_domain_id, canonical_task_id=canonical_task_id,
+            processing_parent_run_id=processing_parent_run_id,
         )
-    except ImportError:
-        pass
+    except Exception as exc:
+        if isinstance(exc, ImportError) and not processing_enabled:
+            _fire_hooks(loop_id, "ON_START", {"run_id": run_id, "agent_id": agent_id})
+            return run_id
+        # Retain the attempted native row without advertising a runnable Loop
+        # or firing ON_START when Graph admission failed after preflight.
+        execute("UPDATE LOOP_RUNS SET STATUS='FAILED',ERROR_MESSAGE=:error,COMPLETED_AT=CURRENT_TIMESTAMP "
+                "WHERE RUN_ID=:id AND STATUS='RUNNING'",
+                {"id": run_id, "error": "Graph processing admission failed"})
+        raise
+    _fire_hooks(loop_id, "ON_START", {"run_id": run_id, "agent_id": agent_id})
     return run_id
+
+
+def start_run_for_actor(loop_id: str, actor_id: str, *, processing_domain_id: Optional[str] = None,
+                        requested_agent_id: Optional[str] = None, trigger_type: str = "MANUAL",
+                        trigger_source: Optional[str] = None) -> str:
+    """Authenticated entry point: a payload cannot choose the execution actor."""
+    from . import connection, identity_api, processing_graph
+    loop = get_loop(loop_id)
+    owner = str((loop or {}).get("owned_by_agent") or "")
+    if not owner or (requested_agent_id and requested_agent_id != owner):
+        raise PermissionError("The Loop's original registered Agent is required")
+    def authorize(tx):
+        domain = processing_graph.resolve_domain(owner, processing_domain_id, transaction=tx)
+        processing_graph.resolve_domain(actor_id, domain, transaction=tx)
+        if identity_api.effective_access(actor_id, "loops.write", resource={"security_domain_id": domain}).get("decision") != "ALLOW":
+            raise PermissionError("Loop execution access denied")
+        if actor_id != owner and not tx.query_one(
+                "SELECT RELATIONSHIP_ID FROM CX_AGENT_RELATIONSHIPS WHERE AGENT_ID=:owner AND PRINCIPAL_ID=:actor "
+                "AND RELATIONSHIP_ROLE='PRIMARY_OWNER' AND STATUS='ACTIVE' AND ENDED_AT IS NULL",
+                {"owner": owner, "actor": actor_id}):
+            raise PermissionError("The Loop's original Agent responsibility is required")
+        return domain
+    domain = connection.execute_transaction_callback(authorize)
+    return start_run(loop_id, owner, trigger_type, trigger_source, processing_domain_id=domain)
 
 
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
@@ -250,6 +309,10 @@ def pause_run(run_id: str) -> bool:
 
 
 def resume_run(run_id: str) -> bool:
+    from . import processing_legacy
+    if processing_legacy.enabled():
+        from . import connection as _connection
+        return _connection.execute_transaction_callback(lambda tx: processing_legacy.resume_loop(tx, run_id))
     run = get_run(run_id)
     changed = execute("UPDATE LOOP_RUNS SET STATUS = 'RUNNING' "
                       "WHERE RUN_ID = :id AND STATUS = 'PAUSED'", {"id": run_id}) > 0
@@ -402,6 +465,30 @@ def aggregate_child_runs(parent_run_id: str) -> Dict[str, Any]:
 def bind_loop_to_step(loop_id: str, step_id: str,
                       binding_type: str = 'COMPLETION',
                       auto_start: str = 'N') -> str:
+    start = None
+    if auto_start == 'Y':
+        from . import connection, graph_compat, processing_graph
+        loop = get_loop(loop_id)
+        agent_id = str((loop or {}).get("owned_by_agent") or "")
+        if not agent_id:
+            raise PermissionError("The Loop's original registered Agent is required")
+        start = {"agent_id": agent_id}
+        if processing_graph.enabled():
+            def original_task(tx):
+                step = tx.query_one("SELECT PLAN_ID FROM TASK_STEPS WHERE STEP_ID=:step", {"step": step_id})
+                if not step:
+                    raise PermissionError("The original Task Step is unavailable")
+                binding = graph_compat.get_binding("TASK_PLAN", str(step["plan_id"])) or {}
+                parent = binding.get("graph_run_id")
+                if not parent:
+                    raise PermissionError("The original Task processing binding is required")
+                root, _budget = processing_graph.control_gate(tx, parent)
+                processing_graph.execution_links.authorize(tx, agent_id, root["security_domain_id"], "TASK", str(step["plan_id"]))
+                processing_graph.execution_links.authorize(tx, agent_id, root["security_domain_id"], "GRAPH", parent)
+                processing_graph.resolve_domain(agent_id, root["security_domain_id"], transaction=tx)
+                return {"processing_domain_id": root["security_domain_id"], "canonical_task_id": root["canonical_task_id"],
+                        "processing_parent_run_id": str(parent)}
+            start.update(connection.execute_transaction_callback(original_task))
     binding_id = execute_insert_returning_id("""
         INSERT INTO TASK_LOOP_BINDING (BINDING_ID, LOOP_ID, STEP_ID, BINDING_TYPE,
                                        AUTO_START, CREATED_AT)
@@ -413,9 +500,8 @@ def bind_loop_to_step(loop_id: str, step_id: str,
     execute("UPDATE TASK_STEPS SET LOOP_ID = :loop_id, STEP_COMPLETION_TYPE = 'LOOP' "
             "WHERE STEP_ID = :step_id",
             {"loop_id": loop_id, "step_id": step_id})
-    if auto_start == 'Y':
-        loop = get_loop(loop_id)
-        start_run(loop_id, loop.get("owned_by_agent") if loop else None)
+    if start is not None:
+        start_run(loop_id, **start)
     return binding_id
 
 
@@ -488,6 +574,18 @@ def record_iteration(
     run = get_run(run_id)
     if not run:
         raise ValueError(f"Run {run_id} not found")
+    from . import processing_legacy
+    if processing_legacy.enabled():
+        from . import connection as _connection
+        iter_id = _connection.execute_transaction_callback(lambda tx: processing_legacy.record_iteration(
+            tx, run_id, plan_data=plan_data, actions=actions, observations=observations,
+            evaluation_result=evaluation_result, evaluation_passed=evaluation_passed,
+            adjustment=adjustment, token_usage=token_usage))
+        current = get_run(run_id)
+        if current and current.get("status") in {"RUNNING", "COMPLETED"}:
+            _sync_iteration_graph(run_id, iter_id, run, plan_data, actions, observations,
+                                  evaluation_result, evaluation_passed, token_usage)
+        return iter_id
     iter_id = execute_insert_returning_id("""
         INSERT INTO LOOP_ITERATIONS (ITERATION_ID, RUN_ID, ITERATION_ORDER,
                                      PLAN_DATA, ACTIONS, OBSERVATIONS,
@@ -521,6 +619,13 @@ def record_iteration(
         execute("UPDATE LOOP_RUNS SET STATUS = 'COMPLETED', COMPLETED_AT = CURRENT_TIMESTAMP, "
                 f"FINAL_RESULT = 'Goal achieved at iteration ' || {iteration_text} "
                 "WHERE RUN_ID = :id", {"id": run_id})
+    _sync_iteration_graph(run_id, iter_id, run, plan_data, actions, observations,
+                          evaluation_result, evaluation_passed, token_usage)
+    return iter_id
+
+
+def _sync_iteration_graph(run_id, iter_id, run, plan_data, actions, observations,
+                          evaluation_result, evaluation_passed, token_usage):
     try:
         from . import graph_compat
         graph_compat.sync_loop_iteration(
@@ -539,7 +644,6 @@ def record_iteration(
         )
     except ImportError:
         pass
-    return iter_id
 
 
 def get_iteration(iteration_id: str) -> Optional[Dict[str, Any]]:
@@ -761,6 +865,20 @@ def _eval_llm_judge(cfg: Dict, iter_data: Dict) -> Dict[str, Any]:
                 "error": "LLM_JUDGE not enabled in config"}
 
     api_url = judge_cfg.get("api_url", "")
+    from . import processing_legacy
+    if processing_legacy.enabled():
+        from . import connection as _connection, model_endpoint_capacity
+        def locate_capacity(tx):
+            endpoints = [str(api_url).rstrip("/")]
+            if endpoints[0].endswith("/chat/completions"):
+                endpoints.append(endpoints[0][:-len("/chat/completions")])
+            return any(model_endpoint_capacity.selected_group(tx, "", endpoint) for endpoint in endpoints)
+        controlled = _connection.execute_transaction_callback(locate_capacity)
+        if controlled:
+            # The historical evaluator has no exact model admission/attempt.
+            return {"passed": False, "eval_type": "LLM_JUDGE", "blocked": True,
+                    "error_code": "PROCESSING_MODEL_ADAPTER_REQUIRED",
+                    "error": "Capacity-controlled LLM evaluation requires a governed execution adapter"}
     model = judge_cfg.get("model", "gpt-4o")
     timeout = judge_cfg.get("timeout", 60)
     min_score = judge_cfg.get("min_score", 7)
@@ -894,6 +1012,15 @@ def execute_loop_iteration(run_id: str, agent_id: str,
         run_id=run_id, plan_data=plan_data, actions=actions,
         observations=observations, token_usage=token_usage,
     )
+
+    from . import processing_legacy
+    if processing_legacy.enabled():
+        from . import connection as _connection
+        current = get_run(run_id)
+        if not current or current.get("status") != "RUNNING":
+            return {"iteration_id": iter_id, "evaluation": None, "stop_status": "STOP",
+                    "run_status": (current or {}).get("status", "REVIEW_REQUIRED")}
+        _connection.execute_transaction_callback(lambda tx: processing_legacy.gate(tx, "LOOP", run_id))
 
     eval_result = evaluate_iteration(run_id, iter_id)
     passed = eval_result.get("passed", False)

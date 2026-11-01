@@ -224,16 +224,23 @@ def reserve_quota(request_id: str, actor: str, credential_id: str, agent_id: str
     return {"reservations": reservations, "warnings": warnings}
 
 
-def settle_quota(request_id: str, total_tokens: Optional[int], cost: Any, currency: str, *, incomplete: bool = False) -> None:
+def settle_quota(request_id: str, total_tokens: Optional[int], cost: Any, currency: str, *, incomplete: bool = False, transaction=None) -> None:
     def apply(tx):
         rows = _rows(tx.query(
             "SELECT r.RESERVATION_ID,r.RESERVED_VALUE,p.METRIC,p.CURRENCY,p.INCOMPLETE_POLICY FROM CX_MODEL_QUOTA_RESERVATIONS r JOIN CX_MODEL_QUOTA_POLICIES p ON p.POLICY_ID=r.POLICY_ID WHERE r.REQUEST_ID=:request AND r.STATUS='RESERVED' FOR UPDATE",
             {"request": request_id},
         ))
         for item in rows:
-            if incomplete and item.get("incomplete_policy") == "RELEASE":
+            observation_incomplete = incomplete
+            if transaction is not None:
+                # Atomic v5.0.2 settlement uses an actual known total even if
+                # optional/input detail is unavailable. Missing monetary data
+                # follows the explicit incomplete policy, never an inferred 0.
+                observation_incomplete = (total_tokens is None if item.get("metric") == "TOKEN"
+                                          else cost is None or str(item.get("currency") or "") != str(currency or ""))
+            if observation_incomplete and item.get("incomplete_policy") == "RELEASE":
                 status, value = "RELEASED", None
-            elif incomplete:
+            elif observation_incomplete:
                 status, value = "SETTLED_INCOMPLETE", item.get("reserved_value")
             elif item.get("metric") == "TOKEN":
                 status, value = "SETTLED", str(_decimal(total_tokens or 0))
@@ -242,7 +249,10 @@ def settle_quota(request_id: str, total_tokens: Optional[int], cost: Any, curren
             else:
                 status, value = "RELEASED", None
             tx.execute("UPDATE CX_MODEL_QUOTA_RESERVATIONS SET STATUS=:status,SETTLED_VALUE=:value,UPDATED_AT=CURRENT_TIMESTAMP WHERE RESERVATION_ID=:id", {"status": status, "value": value, "id": item["reservation_id"]})
-    connection.execute_transaction_callback(apply)
+    if transaction is not None:
+        apply(transaction)
+    else:
+        connection.execute_transaction_callback(apply)
 
 
 def release_quota(request_id: str, status: str = "RELEASED") -> int:
@@ -306,9 +316,10 @@ def finalize_replayable_success(request_id: str, response: Dict[str, Any], ttl_s
     connection.execute_transaction_callback(apply)
 
 
-def replay_snapshot(request_id: str) -> Dict[str, Any]:
+def replay_snapshot(request_id: str, *, transaction=None) -> Dict[str, Any]:
     from .connection_crypto import decrypt_section
-    row = _row(connection.execute_query_one(
+    query = transaction.query_one if transaction is not None else connection.execute_query_one
+    row = _row(query(
         "SELECT RESPONSE_CIPHER,RESPONSE_DIGEST,EXPIRES_AT FROM CX_MODEL_REPLAY_SNAPSHOTS WHERE REQUEST_ID=:request AND EXPIRES_AT>CURRENT_TIMESTAMP", {"request": request_id},
     ))
     if not row:

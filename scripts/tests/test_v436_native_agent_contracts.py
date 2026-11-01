@@ -132,6 +132,9 @@ def test_reference_deployment_adapters_share_lifecycle_without_granting_authorit
 
 
 def test_runtime_claim_keeps_select_and_update_bind_sets_separate(monkeypatch):
+    from lib import native_runtime
+    # This fixture models the historical uncoordinated queue schema only.
+    monkeypatch.setattr(native_runtime, "_model_runtime_enabled", lambda: False)
     calls = []
 
     class _Connection:

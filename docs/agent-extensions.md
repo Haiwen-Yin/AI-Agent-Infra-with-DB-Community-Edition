@@ -1,4 +1,4 @@
-# Agent extensions — Chuanxu v5.0.1
+# Agent extensions — Chuanxu v5.0.2
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -82,7 +82,7 @@ recheck current domain authority. Protocol and SDK versions are separate facts.
 
 | Integration | Supported workflow |
 |---|---|
-| MCP | Streamable HTTP 2025-06-18 / 2025-11-25; bounded paginated discovery, independent approval of an exact read-only Tool/schema, authenticated calls, cancellation and uncertain-send reconciliation. |
+| MCP | Streamable HTTP 2025-06-18 / 2025-11-25; bounded paginated discovery, independent approval of an exact read-only Tool/schema, authenticated calls, cancellation and uncertain-send reconciliation. The separate 2026-07-28 adapter supports bounded `server/discover`, `tools/list` and read-only `tools/call`; see [versioned MCP](mcp-versioned-interoperability.md). |
 | A2A | Bounded HTTP JSON 1.0.1 tasks bound to an authorized Graph Version and compiled Plan; submit, inspect, page, resume and cancel with durable task/run mapping. |
 | OTLP | Registered OTLP/HTTP JSON 1.9.0 collector; committed trace metadata only, durable delivery attempts, bounded retries and collector receipts. Prompts and output bodies are excluded. |
 | Framework | LangGraph 1.2.12 only, using the packaged hash-pinned wheel closure and verified immutable Linux rootfs. Outcomes require independently observed isolated-worker evidence. |
@@ -97,7 +97,7 @@ unknown-send reconciliation; see [continuity operations](continuity-operations.m
 Start `scripts/agent_integration_worker.py` under the operator's service manager
 to deliver registered telemetry and reconcile uncertain calls. Prepare a new
 framework rootfs with `scripts/prepare_framework_rootfs.py --rootfs
-/var/lib/chuanxu/framework-v5.0.1`, then configure its verified Linux
+/var/lib/chuanxu/framework-v5.0.2`, then configure its verified Linux
 sandbox target. The framework receives bounded messages; platform entities remain
 the source of execution and authorization facts. Generic framework execution,
 live effect replay, live migration and global autonomy remain disabled.

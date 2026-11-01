@@ -110,15 +110,30 @@ def test_replay_snapshot_is_digest_bound_and_marked(monkeypatch):
 
 
 def test_idempotent_success_replays_without_dispatch(monkeypatch):
-    monkeypatch.setattr(model_usage_api.connection, "execute_query_one", lambda *_args, **_kwargs: {"request_id": "R1", "input_digest": "same", "status": "SUCCEEDED"})
-    monkeypatch.setattr(model_usage_api.model_governance_api, "replay_snapshot", lambda request: {"request_id": request, "replayed": True})
-    assert model_usage_api._idempotent_replay("HP1", "key", "same")["replayed"] is True
+    class Transaction:
+        def query_one(self, sql, params):
+            if "CX_MODEL_REQUESTS" in sql:
+                return {"request_id": "R1", "input_digest": "same", "status": "SUCCEEDED",
+                        "profile_id": "P1", "agent_id": "", "credential_id": "GW1"}
+            if "CX_MODEL_GATEWAY_CREDENTIALS" in sql:
+                return {"credential_id": "GW1", "created_by": "HP1", "scopes_json": '["model.forward","profile:P1"]'}
+            assert "CX_LLM_PROVIDER_PROFILES" in sql or "CX_PRINCIPALS" in sql
+            return {"status": "ACTIVE"}
+    monkeypatch.setattr(model_usage_api.connection, "execute_transaction_callback", lambda callback: callback(Transaction()))
+    monkeypatch.setattr(model_usage_api.model_governance_api, "replay_snapshot", lambda request, **kwargs: {"request_id": request, "replayed": True})
+    context = {"actor": "HP1", "credential_id": "GW1"}
+    assert model_usage_api._idempotent_replay("HP1", "key", "same", "P1", "", context, "cxgw_synthetic")["replayed"] is True
     with pytest.raises(model_usage_api.ModelUsageConflict):
-        model_usage_api._idempotent_replay("HP1", "key", "different")
+        model_usage_api._idempotent_replay("HP1", "key", "different", "P1", "", context, "cxgw_synthetic")
 
 
 def test_usage_insert_binds_every_declared_placeholder(monkeypatch):
     import re
+    import importlib
+    edition_features = importlib.import_module(model_usage_api.__package__ + ".edition_features")
+    # Preserve the historical insert contract; v5.0.2's real transaction and
+    # request/usage/details/quota invariants have dedicated ledger fixtures.
+    monkeypatch.setattr(edition_features, "MODEL_RUNTIME_CONTEXT_ENABLED", False)
 
     writes = []
     monkeypatch.setattr(model_usage_api, "_price", lambda *_args: {"cost": "0.100000", "currency": "CNY", "pricing_version": "v1"})

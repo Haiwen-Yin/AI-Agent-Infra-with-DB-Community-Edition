@@ -50,15 +50,20 @@ def test_retrieval_error_is_not_no_match(flow):
 
 
 def test_general_answer_sends_only_question_without_enterprise_sources(flow):
-    policy, _, _, model = flow
+    policy, _, source, model = flow
     policy['allow_model_supplement'] = 'Y'
     result = call(supplement=True)
     assert result['answer_source'] == 'MODEL_SUPPLEMENT'
     assert result['citations'] == []
     messages = model.call_args.args[1]
-    assert len(messages) == 2
+    assert [message['role'] for message in messages] == ['system', 'user']
     assert messages[1] == {'role': 'user', 'content': '政策是什么'}
-    assert 'general model knowledge' in messages[0]['content']
+    instruction = messages[0]['content'].casefold()
+    assert 'general knowledge' in instruction
+    assert 'do not invent citations' in instruction
+    assert '政策是什么' not in messages[0]['content']
+    source.assert_not_called()
+    model.assert_called_once()
 
 
 def test_knowledge_only_blocks_even_when_supplement_requested(flow):

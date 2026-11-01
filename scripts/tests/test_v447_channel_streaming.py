@@ -26,6 +26,9 @@ def test_stream_delta_contract_sends_chunks_without_dropping_the_final_chunk():
 
 def test_stream_flushes_final_piece_when_throttle_interval_is_not_reached(monkeypatch):
     from lib import native_runtime
+    from lib import model_dispatch, model_coordinator_origin
+    monkeypatch.setattr(model_dispatch,'_lookup',lambda _:None)
+    monkeypatch.setattr(model_coordinator_origin, "selected_route", lambda profile: None)
 
     class Response:
         def __enter__(self):
@@ -36,7 +39,8 @@ def test_stream_flushes_final_piece_when_throttle_interval_is_not_reached(monkey
 
         def __iter__(self):
             for piece in ("hel", "lo"):
-                yield ("data: {\"choices\":[{\"delta\":{\"content\":\"" + piece + "\"}}]}\n\n").encode()
+                yield ("data: {\"model\":\"demo\",\"choices\":[{\"delta\":{\"content\":\"" + piece + "\"}}]}\n\n").encode()
+            yield b'data: {"model":"demo","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
             yield b"data: [DONE]\n\n"
 
     monkeypatch.setattr(native_runtime.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())

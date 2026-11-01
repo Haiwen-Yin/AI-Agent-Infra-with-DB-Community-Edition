@@ -6,12 +6,26 @@ Only consume() passes a freshly authorized payload to a trusted model adapter.
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 
 from . import connection, identity_api, continuity_work as work, continuity_handoff as handoff
 from .continuity_contracts import AssemblyRequest, request_digest
-from .continuity_sources import resolve
+from .continuity_sources import resolve,resolve_many
 from .continuity_state import ContinuityError, ContinuityConflict, require_not_expired, require_idempotent_request
 from . import context_selection
+
+_logger = logging.getLogger(__name__)
+
+
+def _write_batch(tx, statement, rows):
+    """Use the adapter batch facade, retaining explicit legacy-reader support."""
+    if not rows:
+        return 0
+    batch = getattr(tx, 'execute_many', None)
+    if callable(batch):
+        return batch(statement, rows)
+    _logger.info('batch_dml method=serial_fallback reason=legacy_transaction rows=%d', len(rows))
+    return sum(tx.execute(statement, params) for params in rows)
 
 
 def schema_statements(dialect):
@@ -93,14 +107,17 @@ def assemble(actor,value,*,transaction=None,_asset_scope=False):
             available.append({**_handoff_item(tx,actor,request.security_domain_id,request.handoff_id), 'mandatory': True})
         plan=context_selection.budget(request) if planned else None
         candidates=context_selection.select_sources(tx,actor,request) if planned else [dict(source=source,mandatory=False,rank_score=1) for source in request.sources]
-        excluded=[]
+        excluded=[];load_candidates=[]
         for candidate in candidates:
             source=candidate['source']
             if planned and not candidate['mandatory'] and candidate['rank_score']==0:
                 excluded.append(dict(family=source.family.value,entity_id=source.entity_id,revision_id=source.revision_id,
                                      content_digest=source.content_digest,representation='OMITTED',selection_reason='NO_RELEVANCE',rank_score=0))
                 continue
-            resolved=resolve(tx,actor,request.security_domain_id,source,purpose=request.purpose)
+            load_candidates.append(candidate)
+        resolved_sources=resolve_many(tx,actor,request.security_domain_id,[item['source'] for item in load_candidates],purpose=request.purpose)
+        for candidate,resolved in zip(load_candidates,resolved_sources):
+            source=candidate['source']
             available.append(dict(_item(source.family.value,source.entity_id,source.revision_id,source.content_digest,
                                    resolved['text'],request.security_domain_id),publication_id=resolved.get('publication_id'),
                                    mandatory=candidate['mandatory'],rank_score=candidate['rank_score']))
@@ -149,16 +166,16 @@ def assemble(actor,value,*,transaction=None,_asset_scope=False):
                     'purpose':request.purpose,'expires':(datetime.now(timezone.utc)+timedelta(seconds=request.ttl_seconds)).replace(tzinfo=None),
                     'key':request.idempotency_key,'request_digest':request_digest(actor,operation,request),
                     'retrieval_policy':('ASSET_' if _asset_scope else '')+('QUERY_METADATA_BUDGET_V1' if planned else 'EXPLICIT_ORDER_UTF8_UPPER_BOUND')})
-        for number,item in enumerate(selected,1):
-            tx.execute("INSERT INTO CX_CONTEXT_ASSEMBLY_ITEMS(ASSEMBLY_ID,ITEM_NO,FAMILY,ENTITY_ID,REVISION_ID,CONTENT_DIGEST,RENDERED_DIGEST,"
+        _write_batch(tx,"INSERT INTO CX_CONTEXT_ASSEMBLY_ITEMS(ASSEMBLY_ID,ITEM_NO,FAMILY,ENTITY_ID,REVISION_ID,CONTENT_DIGEST,RENDERED_DIGEST,"
                        "RENDERED_TOKENS,AUTHORIZED_SCOPE,SELECTION_REASON,RANK_SCORE,REDACTION_STATE) "
                        "VALUES(:assembly,:v_item_no,:family,:entity,:revision,:digest,:rendered,:tokens,:scope,'EXPLICIT_REQUEST',:v_rank_score,'NONE')",
-                       {'assembly':assembly_id,'v_item_no':number,'family':item['family'],'entity':item['entity_id'],'revision':item['revision_id'],
+                       [{'assembly':assembly_id,'v_item_no':number,'family':item['family'],'entity':item['entity_id'],'revision':item['revision_id'],
                         'digest':item['content_digest'],'rendered':item['rendered_digest'],'tokens':item['rendered_tokens'],
-                        'scope':item['authorized_scope'],'v_rank_score':len(selected)-number+1})
-            if item.get('publication_id'):
-                tx.execute("INSERT INTO CX_CONTEXT_ITEM_GRANTS(ASSEMBLY_ID,ITEM_NO,PUBLICATION_ID) VALUES(:assembly,:item_no,:publication)",
-                           {'assembly':assembly_id,'item_no':number,'publication':item['publication_id']})
+                        'scope':item['authorized_scope'],'v_rank_score':len(selected)-number+1}
+                        for number,item in enumerate(selected,1)])
+        _write_batch(tx,"INSERT INTO CX_CONTEXT_ITEM_GRANTS(ASSEMBLY_ID,ITEM_NO,PUBLICATION_ID) VALUES(:assembly,:item_no,:publication)",
+                     [{'assembly':assembly_id,'item_no':number,'publication':item['publication_id']}
+                      for number,item in enumerate(selected,1) if item.get('publication_id')])
         identity_api._audit_tx(tx,actor,'CONTEXT_PREPARED','CONTEXT_ASSEMBLY',assembly_id,'ALLOW',request.purpose)
         if planned:
             tx.execute("INSERT INTO CX_CONTEXT_BUDGETS(ASSEMBLY_ID,COUNT_METHOD,MODEL_NAME,CONTEXT_WINDOW,OUTPUT_RESERVE,SYSTEM_TOKENS,TOOL_TOKENS,SOURCE_BUDGET,BYTE_BUDGET,QUERY_DIGEST) "
@@ -166,17 +183,19 @@ def assemble(actor,value,*,transaction=None,_asset_scope=False):
                        {'assembly':assembly_id,'method':plan['count_method'],'model':request.model_name or None,'window':plan['context_window'],
                         'output_tokens':plan['output_reserve'],'system_tokens':plan['system_tokens'],'tool_tokens':plan['tool_tokens'],
                         'source_budget':plan['source_budget'],'byte_budget':plan['byte_budget'],'query_digest':_digest(request.query_text)})
+            representation_rows=[]
             for number,item in enumerate([*selected,*excluded],1):
                 representation=item.get('representation','COMPLETE')
                 omitted=representation=='OMITTED'
-                tx.execute("INSERT INTO CX_CONTEXT_REPRESENTATIONS(ASSEMBLY_ID,SOURCE_NO,ITEM_NO,FAMILY,ENTITY_ID,REVISION_ID,CONTENT_DIGEST,RENDERED_DIGEST,REPRESENTATION,SELECTION_REASON,RANK_SCORE,TOKEN_COUNT,BYTE_COUNT,DELIVERY_STATUS) "
-                           "VALUES(:assembly,:source_no,:item_no,:family,:entity,:revision,:digest,:rendered,:representation,:reason,:rank_score,:tokens,:bytes_used,:delivery)",
-                           {'assembly':assembly_id,'source_no':number,'item_no':None if omitted else number,'family':item['family'],
+                representation_rows.append({'assembly':assembly_id,'source_no':number,'item_no':None if omitted else number,'family':item['family'],
                             'entity':item['entity_id'],'revision':item['revision_id'],'digest':item['content_digest'],
                             'rendered':None if omitted else item['rendered_digest'],'representation':representation,
                             'reason':item.get('selection_reason','MANDATORY_SOURCE' if item.get('mandatory') else 'QUERY_RELEVANCE'),
                             'rank_score':item.get('rank_score',1),'tokens':0 if omitted else item['rendered_tokens'],
                             'bytes_used':0 if omitted else len(item['text'].encode('utf-8')),'delivery':'OMITTED' if omitted else 'PREPARED'})
+            _write_batch(tx,"INSERT INTO CX_CONTEXT_REPRESENTATIONS(ASSEMBLY_ID,SOURCE_NO,ITEM_NO,FAMILY,ENTITY_ID,REVISION_ID,CONTENT_DIGEST,RENDERED_DIGEST,REPRESENTATION,SELECTION_REASON,RANK_SCORE,TOKEN_COUNT,BYTE_COUNT,DELIVERY_STATUS) "
+                         "VALUES(:assembly,:source_no,:item_no,:family,:entity,:revision,:digest,:rendered,:representation,:reason,:rank_score,:tokens,:bytes_used,:delivery)",
+                         representation_rows)
         return {'assembly_id':assembly_id,'status':'PREPARED','content_digest':_digest(body),'item_count':len(selected),
                 'rendered_tokens':used,'token_count_method':plan['count_method'] if planned else 'UTF8_UPPER_BOUND',
                 'omitted_count':len(excluded),'replayed':False}
@@ -206,18 +225,24 @@ def _read(tx,actor,assembly_id):
     count,method=context_selection.counter(budget.get('model_name') or '') if planned else (lambda text:len(text.encode('utf-8')),'UTF8_UPPER_BOUND')
     if planned and method!=budget['count_method']:
         raise ContinuityError('TOKENIZER_UNAVAILABLE','The original context tokenizer is unavailable')
+    # These identifiers bind each item to its original publication. They are
+    # metadata only: resolve still rechecks current authority for every source.
+    grants={int(row['item_no']):row['publication_id'] for row in tx.query(
+        "SELECT ITEM_NO,PUBLICATION_ID FROM CX_CONTEXT_ITEM_GRANTS WHERE ASSEMBLY_ID=:assembly",
+        {'assembly':assembly_id})} if any(item['family']!='WORK' for item in items) else {}
+    if any(item['authorized_scope']!=record['security_domain_id'] for item in items):
+        raise ContinuityError('INTEGRITY_ERROR','Stored assembly scope is inconsistent')
+    source_items=[item for item in items if item['family']!='WORK']
+    loaded=iter(resolve_many(tx,actor,record['security_domain_id'],
+        [{name:item[name] for name in ('family','entity_id','revision_id','content_digest')} for item in source_items],
+        purpose=record['purpose'],publication_ids=[grants.get(int(item['item_no'])) for item in source_items],
+        require_publication_binding=True))
     texts=[]
     for item in items:
-        if item['authorized_scope']!=record['security_domain_id']:
-            raise ContinuityError('INTEGRITY_ERROR','Stored assembly scope is inconsistent')
         if item['family']=='WORK':
             resolved=_work_item(tx,actor,record['security_domain_id'],item['entity_id'],int(item['revision_id']))
         else:
-            source={name:item[name] for name in ['family','entity_id','revision_id','content_digest']}
-            grant=tx.query_one("SELECT PUBLICATION_ID FROM CX_CONTEXT_ITEM_GRANTS WHERE ASSEMBLY_ID=:assembly AND ITEM_NO=:item_no",
-                               {'assembly':assembly_id,'item_no':item['item_no']})
-            resolved=resolve(tx,actor,record['security_domain_id'],source,purpose=record['purpose'],
-                             publication_id=grant['publication_id'] if grant else None)
+            resolved=next(loaded)
         text=resolved['text']
         if planned and by_item[int(item['item_no'])]['representation']=='PARTIAL':
             try:

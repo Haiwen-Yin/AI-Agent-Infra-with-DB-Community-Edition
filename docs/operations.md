@@ -1,4 +1,4 @@
-# Chuanxu v5.0.1 Operations and Technical Documentation
+# Chuanxu v5.0.2 Operations and Technical Documentation
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -46,13 +46,10 @@ not create clusters, change firewalls or replace DBA authorization.
 | PostgreSQL 18 | The authorized environment currently uses 18.6. Check role management, AGE, vector and job-extension prerequisites in `0_pg_database_prerequisites.sql`. The Owner and each Agent have separate LOGIN roles; ordinary Agents cannot bypass forced RLS. |
 | YashanDB 23.5.4+ | Verify the correct PDB DSN, separate user, object grants, character set, tablespaces and packaged prerequisites. Match the native client and yaspy to the server. Oracle-only syntax and error handling are not portable. |
 
-Extract into a trusted directory and verify the supplied SHA-256. When signature
-verification is required, use an independently obtained public key and the
-[release verification guide](release-signing.md). Install Python 3.14+ and run
-from the package root:
+Extract into a trusted directory and verify the supplied SHA-256. When signature verification is required, use an independently obtained public key and the [release verification guide](release-signing.md). Install Python 3.14+ and run from the package root. This example selects PostgreSQL; replace `pg` with `oracle` or `yashandb` only when that backend is supported by the selected package. Keep the same backend when the wizard prompts:
 
 ```bash
-bash scripts/install_offline.sh
+bash scripts/install_offline.sh --database pg
 bash scripts/config_wizard.sh
 ```
 
@@ -67,7 +64,7 @@ Community. For other supported targets, select `oracle` / `yashandb` and
 `community` / `enterprise` as appropriate:
 
 ```bash
-bash scripts/install_platform.sh initialize --version 5.0.1 \
+bash scripts/install_platform.sh initialize --version 5.0.2 \
   --database pg --edition community --config config.json
 bash start_web_server.sh start
 ```
@@ -95,7 +92,7 @@ readiness, and the management page for database governance. These are separate
 checks; none alone establishes release acceptance. Reverify the deployment with:
 
 ```bash
-bash scripts/install_platform.sh verify --version 5.0.1 \
+bash scripts/install_platform.sh verify --version 5.0.2 \
   --database pg --edition community --config config.json
 ```
 

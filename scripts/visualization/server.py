@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Web Visualization Server
+"""AI Agent Infra v5.0.2 - Community Edition - Web Visualization Server
 
 Lightweight HTTP server providing session-based auth, page routing,
 and JSON API endpoints for knowledge, memory, agents, tasks, workspaces,
@@ -58,7 +58,7 @@ if edition_features.has_feature('governance'):
 else:
     governance_api = None
 
-VERSION = "5.0.1"
+VERSION = "5.0.2"
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
@@ -509,6 +509,12 @@ def _get_session(request_handler):
             finally:
                 connection.set_agent_context(previous_agent_id)
         sessions[session_id] = sess
+    # Preserve the server-authenticated credential identity after a restart as
+    # well as on cached reads. Controlled model dispatch rechecks this exact
+    # Session; a Principal ID alone is not a replacement credential.
+    for credential_key in ('session_digest', 'auth_method', 'permission_version', 'mfa_level'):
+        if credential_key in persisted:
+            sess[credential_key] = persisted[credential_key]
     if session_scope == 'PORTAL' and sess.get('principal_id'):
         # A copied Portal cookie may be valid while another page owns the
         # operation lease. Keep the session visible for read-only inspection,
@@ -4805,10 +4811,11 @@ class VisHandler(BaseHTTPRequestHandler):
 
     def _handle_loop_run_start(self):
         data = json.loads(self._read_body())
-        run_id = loop_api.start_run(data['loop_id'],
-                                    data.get('agent_id', 'system'),
-                                    data.get('trigger_type', 'MANUAL'),
-                                    data.get('trigger_source'))
+        run_id = loop_api.start_run_for_actor(
+            data['loop_id'], self._authenticated_principal()['actor_id'],
+            requested_agent_id=data.get('agent_id'),
+            processing_domain_id=data.get('processing_domain_id'),
+            trigger_type=data.get('trigger_type', 'MANUAL'), trigger_source=data.get('trigger_source'))
         self._send_json({'success': True, 'run_id': run_id})
 
     def _handle_loop_run_control(self, action):
@@ -4991,8 +4998,8 @@ class VisHandler(BaseHTTPRequestHandler):
             with open(filepath, 'r', encoding='utf-8') as f:
                 html = f.read()
             timeout = _session_timeout()
-            html = html.replace('5.0.1', VERSION)
-            html = html.replace('2026-10-23', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
+            html = html.replace('5.0.2', VERSION)
+            html = html.replace('2026-11-01', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
             html = html.replace('{{DB_DISPLAY}}', _product_database_display())
             html = html.replace('{{EDITION_TIER}}', _product_tier())
             html = html.replace(
@@ -5286,21 +5293,32 @@ def _call_llm_stream(messages, model=None):
     """
     try:
         from lib.config import get_config
+        from lib import edition_features, connection, content_security, model_endpoint_capacity, model_dispatch
+        from lib.model_results import ChatCompletionStream, ModelResultError, sse_events
+        from lib.native_agent_api import _llm_model_matches
         cfg = get_config()
         llm = cfg.llm
         if not llm.api_url or not llm.model:
             return None
+        content_security.inspect_messages(messages)
 
         api_url = llm.api_url.rstrip('/')
+        provider_url = api_url.removesuffix('/chat/completions')
+        if getattr(edition_features, 'MODEL_RUNTIME_CONTEXT_ENABLED', False):
+            controlled = connection.execute_transaction_callback(
+                lambda tx: model_endpoint_capacity.selected_group(tx, '', provider_url))
+            if controlled:
+                raise PermissionError('A supported authenticated Profile route is required for a controlled endpoint')
         if not api_url.endswith('/chat/completions'):
             api_url += '/chat/completions'
 
-        data = json.dumps({
+        payload = {
             "model": model or llm.model,
             "messages": messages,
             "stream": True,
             "max_tokens": 8192,
-        }).encode()
+        }
+        data = json.dumps(payload).encode()
 
         headers = {"Content-Type": "application/json"}
         if llm.api_key:
@@ -5314,22 +5332,29 @@ def _call_llm_stream(messages, model=None):
         )
 
         from lib.llm_transport import request_timeout_seconds
-        with urllib.request.urlopen(req, timeout=request_timeout_seconds(llm)) as resp:
-            for raw_line in resp:
-                line = raw_line.strip()
-                if not line or not line.startswith(b"data:"):
-                    continue
-                data_str = line[5:].lstrip().decode("utf-8", errors="replace")
-                if data_str.strip() == "[DONE]":
-                    return
-                try:
-                    chunk_data = json.loads(data_str)
-                    delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                    token = delta.get("content") or ""
+        profile = {'profile_id': '', 'version': 0, 'provider_url': provider_url, 'model_id': model or llm.model}
+        with model_dispatch.dispatch(profile, payload) as ticket:
+            with ticket.open(req, timeout=ticket.timeout_seconds(request_timeout_seconds(llm), stream=True),
+                             default_open=urllib.request.urlopen) as resp:
+                parser = ChatCompletionStream(model or llm.model, model_matches=_llm_model_matches,
+                                              max_content_bytes=4 * 1024 * 1024)
+                for event in sse_events(ticket.stream_response(resp), max_bytes=8 * 1024 * 1024):
+                    token = parser.feed(event)
                     if token:
-                        yield token
-                except (json.JSONDecodeError, IndexError, KeyError):
-                    continue
+                        ticket.first_token()
+                    if parser.done:
+                        break
+                try:
+                    parsed = parser.finish()
+                except ModelResultError as exc:
+                    if exc.code != 'EMPTY_COMPLETION':
+                        raise
+                    ticket.response_complete(exc.code)
+                    return None
+                ticket.observe_result(parsed)
+                ticket.response_complete()
+                content_security.enforce(parsed['content'], 'OUTPUT')
+                yield parsed['content']
 
     except Exception as e:
         logger.error("LLM stream error: %s", type(e).__name__)
@@ -5340,21 +5365,32 @@ def _call_llm(messages, model=None):
     """Call LLM API in non-streaming mode. Returns full response text or None."""
     try:
         from lib.config import get_config
+        from lib import edition_features, connection, content_security, model_endpoint_capacity, model_dispatch
+        from lib.model_results import ModelResultError, decode_json, parse_completion
+        from lib.native_agent_api import _llm_model_matches
         cfg = get_config()
         llm = cfg.llm
         if not llm.api_url or not llm.model:
             return None
+        content_security.inspect_messages(messages)
 
         api_url = llm.api_url.rstrip('/')
+        provider_url = api_url.removesuffix('/chat/completions')
+        if getattr(edition_features, 'MODEL_RUNTIME_CONTEXT_ENABLED', False):
+            controlled = connection.execute_transaction_callback(
+                lambda tx: model_endpoint_capacity.selected_group(tx, '', provider_url))
+            if controlled:
+                raise PermissionError('A supported authenticated Profile route is required for a controlled endpoint')
         if not api_url.endswith('/chat/completions'):
             api_url += '/chat/completions'
 
-        data = json.dumps({
+        payload = {
             "model": model or llm.model,
             "messages": messages,
             "stream": False,
             "max_tokens": 8192,
-        }).encode()
+        }
+        data = json.dumps(payload).encode()
 
         headers = {"Content-Type": "application/json"}
         if llm.api_key:
@@ -5368,11 +5404,22 @@ def _call_llm(messages, model=None):
         )
 
         from lib.llm_transport import request_timeout_seconds
-        with urllib.request.urlopen(req, timeout=request_timeout_seconds(llm)) as resp:
-            result = json.loads(resp.read().decode())
-            msg = result.get("choices", [{}])[0].get("message", {})
-            content = msg.get("content") or ""
-            return content if content else None
+        profile = {'profile_id': '', 'version': 0, 'provider_url': provider_url, 'model_id': model or llm.model}
+        with model_dispatch.dispatch(profile, payload) as ticket:
+            with ticket.open(req, timeout=ticket.timeout_seconds(request_timeout_seconds(llm)),
+                             default_open=urllib.request.urlopen) as resp:
+                try:
+                    result = parse_completion(decode_json(ticket.read_response(resp, 4 * 1024 * 1024)), model or llm.model,
+                                              model_matches=_llm_model_matches)
+                except ModelResultError as exc:
+                    if exc.code == 'EMPTY_COMPLETION':
+                        ticket.response_complete(exc.code)
+                        return None
+                    raise
+                ticket.observe_result(result)
+                ticket.response_complete()
+                content_security.enforce(result['content'], 'OUTPUT')
+                return result['content']
 
     except Exception as e:
         logger.error("LLM call error: %s", type(e).__name__)

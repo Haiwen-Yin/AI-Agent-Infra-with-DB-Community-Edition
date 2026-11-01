@@ -9,6 +9,10 @@ from lib import business_channel_runtime as business, identity_api, native_agent
 
 @pytest.fixture
 def store(monkeypatch):
+    from lib import edition_features
+    # Historical Channel policy schema precedes migration 106. The selected
+    # resource and original-credential contract has its own complete fixture.
+    monkeypatch.setattr(edition_features, 'MODEL_RUNTIME_CONTEXT_ENABLED', False, raising=False)
     db = sqlite3.connect(':memory:')
     db.row_factory = sqlite3.Row
     db.executescript('''

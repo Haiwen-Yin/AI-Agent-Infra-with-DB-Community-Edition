@@ -395,7 +395,8 @@ def test_portal_chat_stream_is_not_buffered_by_compatibility_layers():
     assert "return await _legacy_stream_dispatch(" in web_app
     assert "class _LegacyStreamWriter:" in web_app
     assert "StreamingResponse(" in web_app
-    assert "for raw_line in resp:" in server
+    assert "sse_events(ticket.stream_response(resp)," in server
+    assert "parser.finish()" in server and "content_security.enforce" in server
     assert "resp.read(4096)" not in server
 
 

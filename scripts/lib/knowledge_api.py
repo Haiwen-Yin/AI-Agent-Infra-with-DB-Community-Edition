@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Knowledge API
+"""AI Agent Infra v5.0.2 - Community Edition - Knowledge API
 
 Knowledge CRUD, graph edges, spaced-review, and tagging.
 Operates on ENTITIES (ENTITY_TYPE='KNOWLEDGE') + KNOWLEDGE_META + ENTITY_EDGES.
@@ -93,8 +93,9 @@ def get_agent_knowledge_context(agent_id: str) -> Dict[str, Any]:
     }
 
 
-def get_knowledge_context(entity_id: str) -> Optional[Dict[str, Any]]:
-    row = execute_query_one(
+def get_knowledge_context(entity_id: str, *, transaction=None) -> Optional[Dict[str, Any]]:
+    query = transaction.query_one if transaction is not None else execute_query_one
+    row = query(
         "SELECT CONTEXT_ID, ENTITY_ID, AGENT_ID, PRINCIPAL_ID, ORGANIZATION_ID, "
         "ORGANIZATION_CHAIN_JSON, RESPONSIBLE_GROUPS_JSON, EXECUTION_GROUPS_JSON, "
         "SHARING_SCOPE, GRAPH_SNAPSHOT_DIGEST FROM CX_KNOWLEDGE_CONTEXTS WHERE ENTITY_ID=:entity_id",
@@ -298,7 +299,7 @@ def create_knowledge(
     return entity_id
 
 
-def get_knowledge(entity_id: str, principal_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_knowledge(entity_id: str, principal_id: Optional[str] = None, *, transaction=None) -> Optional[Dict[str, Any]]:
     sql = """
         SELECT e.ENTITY_ID, e.ENTITY_TYPE, e.TITLE, e.CONTENT, e.SUMMARY, e.CATEGORY,
                e.IMPORTANCE, e.STATUS, e.OWNED_BY_AGENT, e.SOURCE_AGENT, e.VISIBILITY,
@@ -315,11 +316,12 @@ def get_knowledge(entity_id: str, principal_id: Optional[str] = None) -> Optiona
         WHERE e.ENTITY_ID = :id AND e.ENTITY_TYPE = 'KNOWLEDGE'
           AND (:principal_id IS NULL OR """ + knowledge_access_predicate("e", ":principal_id") + """)
     """
-    row = execute_query_one(sql, {"id": entity_id, "principal_id": principal_id})
+    query = transaction.query_one if transaction is not None else execute_query_one
+    row = query(sql, {"id": entity_id, "principal_id": principal_id})
     if row is None:
         return None
     result = _row_to_dict(row)
-    result["knowledge_context"] = get_knowledge_context(entity_id)
+    result["knowledge_context"] = get_knowledge_context(entity_id, **({"transaction": transaction} if transaction is not None else {}))
     return result
 
 

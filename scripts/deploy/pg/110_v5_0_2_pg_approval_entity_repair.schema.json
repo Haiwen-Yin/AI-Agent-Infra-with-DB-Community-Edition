@@ -1,0 +1,22 @@
+{
+  "schema": "chuanxu-v502-pg-approval-entity-repair/v1",
+  "database": "pg",
+  "table": "APPROVAL_REQUESTS",
+  "removed_constraint": {
+    "name": "CK_AR_ENTITY",
+    "column": "ENTITY_TYPE",
+    "allowed_values": ["STEP", "LOOP", "TOOL"]
+  },
+  "required_constraints": {
+    "CK_APPROVAL_ENTITY": {
+      "column": "ENTITY_TYPE",
+      "allowed_values": ["STEP", "LOOP", "TOOL", "ORGANIZATION_CHANGE"]
+    },
+    "CK_AR_STATUS": {
+      "column": "APPROVAL_STATUS",
+      "allowed_values": ["PENDING", "APPROVED", "REJECTED"]
+    }
+  },
+  "grant_policy": "UNCHANGED",
+  "preserve_other_constraints": true
+}

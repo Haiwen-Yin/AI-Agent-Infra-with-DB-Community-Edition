@@ -298,10 +298,22 @@ def bind_context(tx: Any, *, continuity_id: str, assembly_id: str | None, source
 
 
 def claim_attempt(tx: Any, *, continuity_id: str, worker_id: str, business_key: str,
-                  request_digest: str, lease_seconds: int = 60) -> dict[str, Any]:
+                  request_digest: str, lease_seconds: int = 60,
+                  lease_expires_at: datetime | None = None) -> dict[str, Any]:
     """Claim one fenced attempt; expired leases are replaced atomically."""
+    from . import processing_recovery
+    processing_enabled = processing_recovery.schema_enabled()
     now = _now()
     expiry = now + timedelta(seconds=max(1, min(int(lease_seconds), 3600)))
+    if lease_expires_at is not None:
+        # Trusted schedulers may share an already established absolute lease.
+        # Freeze it at INSERT: migration 101 protects attempt deadlines from
+        # every later UPDATE, including an UPDATE to the same value.
+        if not isinstance(lease_expires_at, datetime):
+            raise ContinuityError("INVALID_LEASE", "An absolute datetime lease is required")
+        expiry = _utc_naive(lease_expires_at)
+        if expiry <= now or expiry > now + timedelta(seconds=3600):
+            raise ContinuityError("INVALID_LEASE", "The absolute lease must expire within one hour")
     link = _row(tx.query_one("SELECT STATUS,ACTOR_ID,REQUEST_DIGEST FROM CX_TASK_CONTINUITY_LINKS WHERE CONTINUITY_ID=:id FOR UPDATE", {"id": continuity_id}))
     if not link or link.get("status") in {"SUCCEEDED", "FAILED", "CANCELLED"}:
         raise ContinuityError("TERMINAL_TASK", "A terminal or missing task cannot be claimed")
@@ -319,6 +331,9 @@ def claim_attempt(tx: Any, *, continuity_id: str, worker_id: str, business_key: 
             "WHERE CONTINUITY_ID=:id AND BUSINESS_KEY=:business AND REQUEST_DIGEST=:digest AND STATUS='SENDING' "
             "ORDER BY ATTEMPT_NO DESC", {"id": continuity_id, "business": str(business_key)[:256], "digest": request_digest}))
         if str(lease.get("lease_owner")) == str(worker_id) and active:
+            if processing_enabled:
+                processing_recovery.prepare_attempt(tx, continuity_id, business_key)
+                processing_recovery.claim_gate(tx, continuity_id)
             return {"attempt_id": active["attempt_id"], "continuity_id": continuity_id,
                     "attempt_no": int(active["attempt_no"]), "fencing_token": int(active["fencing_token"]),
                     "lease_expires_at": active.get("lease_expires_at"), "replayed": True}
@@ -332,6 +347,9 @@ def claim_attempt(tx: Any, *, continuity_id: str, worker_id: str, business_key: 
             "AND STATUS='SENDING' AND LEASE_EXPIRES_AT<=:utc_now ORDER BY ATTEMPT_NO DESC",
             {"id": continuity_id, "utc_now": now}))
         if stale:
+            if processing_enabled:
+                processing_recovery.on_attempt_finished(tx, continuity_id=continuity_id, attempt_id=stale["attempt_id"],
+                                                        status="UNOBSERVED", error_code="LEASE_EXPIRED")
             tx.execute("UPDATE CX_TASK_CONTINUITY_ATTEMPTS SET STATUS='UNOBSERVED',COMPLETED_AT=CURRENT_TIMESTAMP,ERROR_CODE='LEASE_EXPIRED',ERROR_MESSAGE='External outcome was not observed before lease expiry' WHERE ATTEMPT_ID=:attempt AND STATUS='SENDING'",
                        {"attempt": stale["attempt_id"]})
             tx.execute("UPDATE CX_TASK_CONTINUITY_LEASES SET STATUS='EXPIRED',UPDATED_AT=CURRENT_TIMESTAMP WHERE CONTINUITY_ID=:id AND FENCING_TOKEN=:token",
@@ -343,6 +361,12 @@ def claim_attempt(tx: Any, *, continuity_id: str, worker_id: str, business_key: 
             return {"continuity_id": continuity_id, "status": "UNOBSERVED",
                     "reconciliation_required": True,
                     "reason": "The previous send is unobserved; reconcile it before retrying"}
+    if processing_enabled:
+        # Preserve expired-send observations above before refusing a new claim.
+        # This gates the existing scheduler; historical contracts query no new
+        # tables, and queued recovery never acquires a Worker lease.
+        processing_recovery.prepare_attempt(tx, continuity_id, business_key)
+        processing_recovery.claim_gate(tx, continuity_id)
     token = int(lease.get("fencing_token") or 0) + 1 if lease else 1
     if lease:
         tx.execute("UPDATE CX_TASK_CONTINUITY_LEASES SET LEASE_OWNER=:owner,FENCING_TOKEN=:token,LEASE_EXPIRES_AT=:until,STATUS='ACTIVE',UPDATED_AT=CURRENT_TIMESTAMP WHERE CONTINUITY_ID=:id",
@@ -376,7 +400,12 @@ def finish_attempt(tx: Any, *, attempt_id: str, worker_id: str, fencing_token: i
     if row.get("request_digest") != request_digest:
         raise ContinuityConflict("REQUEST_MISMATCH", "The result does not match the admitted task request")
     expires = _utc_naive(row.get("lease_expires_at"))
+    from . import processing_recovery
+    processing_enabled = processing_recovery.schema_enabled()
     if expires and expires <= _now():
+        if processing_enabled:
+            processing_recovery.on_attempt_finished(tx, continuity_id=str(row["continuity_id"]), attempt_id=attempt_id,
+                                                    status="UNOBSERVED", error_code="LEASE_EXPIRED")
         # Preserve the unknown-send fact before rejecting the stale worker.
         tx.execute("UPDATE CX_TASK_CONTINUITY_ATTEMPTS SET STATUS='UNOBSERVED',COMPLETED_AT=CURRENT_TIMESTAMP,ERROR_CODE='LEASE_EXPIRED',ERROR_MESSAGE='Stale worker completed after lease expiry' WHERE ATTEMPT_ID=:attempt AND STATUS='SENDING' AND FENCING_TOKEN=:token",
                    {"attempt": attempt_id, "token": fencing_token})
@@ -385,6 +414,9 @@ def finish_attempt(tx: Any, *, attempt_id: str, worker_id: str, fencing_token: i
                    {"id": row["continuity_id"], "token": fencing_token})
         return {"attempt_id": attempt_id, "continuity_id": row["continuity_id"], "status": "UNOBSERVED",
                 "fencing_token": fencing_token, "accepted": False}
+    if processing_enabled:
+        processing_recovery.on_attempt_finished(tx, continuity_id=str(row["continuity_id"]), attempt_id=attempt_id,
+                                                status=target, error_code=error_code)
     tx.execute("UPDATE CX_TASK_CONTINUITY_ATTEMPTS SET STATUS=:status,COMPLETED_AT=CURRENT_TIMESTAMP,ERROR_CODE=:code,ERROR_MESSAGE=:message WHERE ATTEMPT_ID=:attempt AND STATUS='SENDING' AND FENCING_TOKEN=:token",
                {"status": target, "attempt": attempt_id, "token": fencing_token, "code": error_code, "message": error_message})
     mapped = {"SUCCEEDED": "SUCCEEDED", "FAILED": "FAILED", "CANCELLED": "CANCELLED", "UNOBSERVED": "UNOBSERVED"}[target]
@@ -427,4 +459,7 @@ def read_link(tx: Any, *, actor: str, continuity_id: str) -> dict[str, Any] | No
         return None
     row["attempts"] = [_row(item) for item in tx.query("SELECT * FROM CX_TASK_CONTINUITY_ATTEMPTS WHERE CONTINUITY_ID=:id ORDER BY ATTEMPT_NO", {"id": continuity_id})]
     row["context"] = _row(tx.query_one("SELECT * FROM CX_TASK_CONTINUITY_CONTEXT WHERE CONTINUITY_ID=:id", {"id": continuity_id})) or None
+    from . import processing_recovery
+    if processing_recovery.schema_enabled():
+        row["processing"] = processing_recovery.read_diagnostics(tx, actor=actor, continuity_id=continuity_id)
     return row

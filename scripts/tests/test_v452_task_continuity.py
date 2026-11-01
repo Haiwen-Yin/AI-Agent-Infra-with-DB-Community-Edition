@@ -16,7 +16,10 @@ from lib.continuity_state import ContinuityConflict, ContinuityError
 
 @pytest.fixture
 def database(monkeypatch):
-    from lib import connection
+    from lib import connection, edition_features
+    # This fixture deliberately installs the historical migration-101 schema.
+    # v5.0.2 processing-schema and fail-closed coverage lives in its own suite.
+    monkeypatch.setattr(edition_features, "MODEL_RUNTIME_CONTEXT_ENABLED", False, raising=False)
     monkeypatch.setattr(connection, "DATABASE_DIALECT", "oracle")
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row

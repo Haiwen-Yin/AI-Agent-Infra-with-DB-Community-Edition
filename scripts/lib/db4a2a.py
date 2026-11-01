@@ -372,6 +372,10 @@ def persist_dispatch(actor: str, receiver_agent_id: str, envelope: Mapping[str, 
             security_domain_id=domain, authorization_version=1, branch_id=normalized["source_branch"] or None,
             summary_policy="EXACT",
         )
+        from . import processing_recovery
+        if processing_recovery.schema_enabled():
+            from .processing_db4a2a import bind_dispatch
+            bind_dispatch(tx, actor, link["continuity_id"], dispatch_id)
         identity_api._audit_tx(tx, actor, "DB4A2A_DISPATCH", "DB4A2A_DISPATCH", dispatch_id,
                                "ALLOW", "reference-oriented Agent task dispatch")
 
@@ -436,6 +440,11 @@ def create_dispatch_branch(actor: str, dispatch_id: str, branch_name: str, purpo
         name = str(branch_name or "").strip()
         if not name or len(name) > 256:
             raise DB4A2AError("invalid branch name")
+        from . import processing_recovery
+        processing = None
+        if processing_recovery.schema_enabled():
+            from .processing_db4a2a import begin_branch
+            processing = begin_branch(tx, actor, dispatch_id, name, str(purpose or "")[:500])
         branch_id = branch_api.fork_branch_tx(
             tx, workspace_id=context["workspace_id"], fork_context_id=item["context_ref"],
             branch_name=name, agent_id=item["receiver_agent_id"],
@@ -457,6 +466,9 @@ def create_dispatch_branch(actor: str, dispatch_id: str, branch_name: str, purpo
             # compatible and must not treat a dispatch projection row as one.
             if continuity_id:
                 task_continuity._transition(tx, str(continuity_id), actor, "RUNNING", "DB4A2A child branch admitted", _digest_dispatch(item))
+        if processing is not None:
+            from .processing_db4a2a import finish_branch
+            finish_branch(tx, processing)
         identity_api._audit_tx(tx, actor, "DB4A2A_BRANCH", "DB4A2A_DISPATCH", dispatch_id,
                                "ALLOW", "verified reference branch")
         return {"dispatch_id": dispatch_id, "branch_id": branch_id,

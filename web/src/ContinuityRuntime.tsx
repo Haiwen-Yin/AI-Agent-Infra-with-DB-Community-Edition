@@ -1,11 +1,14 @@
 import React, { useRef, useState } from "react";
+import RuntimeObservations from "./RuntimeObservations";
+import ProcessingRecovery from "./ProcessingRecovery";
 type Row = Record<string, any>;
-type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; workId?: string; sources: Row[]; canWrite: boolean };
+type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; workId?: string; sources: Row[]; canWrite: boolean; modelRuntimeEnabled?: boolean };
 
-export default function ContinuityRuntime({ request, text, domain, workId, sources, canWrite }: Props) {
+export default function ContinuityRuntime({ request, text, domain, workId, sources, canWrite, modelRuntimeEnabled = false }: Props) {
   const [agents, setAgents] = useState<Row[]>([]);
   const [cursor, setCursor] = useState("");
   const [execution, setExecution] = useState<Row | null>(null);
+  const [progress, setProgress] = useState<Row | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const lock = useRef(false);
@@ -35,7 +38,7 @@ export default function ContinuityRuntime({ request, text, domain, workId, sourc
         const payload = pending.current.get(signature) || { ...body, idempotency_key: id, context: { ...body.context, request_id: id, idempotency_key: id } };
         pending.current.set(signature, payload);
         const receipt = await request("/api/context/runtime-executions", { method: "POST", body: JSON.stringify(payload) });
-        setExecution(receipt); pending.current.delete(signature);
+        setExecution(receipt); setProgress(null); pending.current.delete(signature);
       });
     }}><fieldset className="operation-explainer-form" disabled={busy || !canWrite}><legend>{text("提交执行请求", "Submit execution request")}</legend>
       <label className="workbench-field"><span>{text("执行 Agent", "Execution Agent")}</span><select name="agent" required><option value="">{text("选择已加载的 Agent", "Select a loaded Agent")}</option>{agents.map(agent => <option key={agent.agent_id} value={agent.agent_id}>{agent.display_name || agent.agent_id}</option>)}</select></label>
@@ -51,6 +54,14 @@ export default function ContinuityRuntime({ request, text, domain, workId, sourc
         const id = execution.execution_id; setExecution({ execution_id: id, status: execution.status });
         setExecution(await request(`/api/context/runtime-executions/${encodeURIComponent(id)}`));
       })}>{text("刷新执行结果", "Refresh execution result")}</button>
+      <button type="button" className="small-button" disabled={busy} onClick={() => void run(async () => {
+        setProgress(null);
+        setProgress(await request(`/api/agent-extensions/executions/${encodeURIComponent(execution.execution_id)}/progress`));
+      })}>{text("读取运行观测", "Read runtime observations")}</button>
+      {modelRuntimeEnabled && progress && <>
+        <RuntimeObservations items={progress.model_observations || []} text={text} />
+        {(progress.processing || []).map((item: Row) => <ProcessingRecovery key={item.continuity_id} request={request} text={text} canRecover={canWrite} initial={item} />)}
+      </>}
       {execution.input_receipt && <p>{text("输入回执", "Input receipt")}: {state(execution.input_receipt.status)} · {execution.input_receipt.item_count} {text("条来源", "sources")}</p>}
       {execution.output?.content && <p className="continuity-body">{execution.output.content}</p>}
     </section>}

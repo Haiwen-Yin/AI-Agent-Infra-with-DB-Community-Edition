@@ -1,4 +1,4 @@
-# Migration guide v5.0.1
+# Migration guide v5.0.2
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -67,7 +67,7 @@ Use the installed package's Python environment and work from its root:
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
@@ -133,10 +133,10 @@ checksum, skip a failed fragment or assume an interrupted statement committed.
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -150,7 +150,7 @@ verified, stop and use the database's documented recovery procedure.
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json
 ```
 

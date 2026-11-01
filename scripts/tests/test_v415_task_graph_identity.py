@@ -71,6 +71,9 @@ def test_plan_terminal_transition_finishes_graph_and_keeps_supported_timestamp(m
 
 
 def test_step_completion_uses_parent_agent_and_preserves_output(monkeypatch):
+    from lib import processing_legacy
+    # This historical global-SQL contract predates processing transactions.
+    monkeypatch.setattr(processing_legacy, "enabled", lambda: False)
     monkeypatch.setattr(task_plan_api, "execute", lambda *_: 1)
     queries = []
     def query(sql, params):

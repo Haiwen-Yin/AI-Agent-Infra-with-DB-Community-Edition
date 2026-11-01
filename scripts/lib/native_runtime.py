@@ -20,6 +20,10 @@ from typing import Any, Dict, List, Optional
 
 from . import connection, deployment_adapters, identity_api, native_agent_api, runtime_isolation, content_security, answer_planning
 from .llm_transport import request_timeout_seconds
+from . import model_dispatch, model_credentials
+from .continuity_state import ContinuityError
+from .model_results import (ChatCompletionStream, ModelResultError, decode_json,
+                            parse_completion, sse_events)
 
 logger = logging.getLogger(__name__)
 _model_observer = ContextVar("native_model_observer", default=None)
@@ -68,6 +72,8 @@ def _provider_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def _failure_code(exc: Exception) -> str:
     """Persist only bounded local error categories, never remote bodies."""
+    if isinstance(exc, model_dispatch.ModelNotDispatched): return exc.code
+    if isinstance(exc, ModelResultError): return 'LLM_' + exc.code
     if isinstance(exc,PermissionError): return 'AUTHORITY_DENIED'
     if isinstance(exc,runtime_isolation.IsolationError): return 'RUNTIME_ISOLATION_UNAVAILABLE'
     known={
@@ -91,9 +97,21 @@ def _failure_code(exc: Exception) -> str:
     return code
 
 
-def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, managed_input: bool = False) -> Dict[str, Any]:
+def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, managed_input: bool = False,
+              output_kind: str = "text", request_fields: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Call an OpenAI-compatible endpoint without logging prompt or secrets."""
     content_security.inspect_messages(messages, allow_managed_images=managed_input)
+    if output_kind not in {"text", "structured", "tool"}:
+        raise ValueError("Unsupported model output contract")
+    fields = dict(request_fields or {})
+    if set(fields) - {"response_format", "tools", "tool_choice", "max_tokens", "temperature"}:
+        raise ValueError("Unsupported model request fields")
+    from .agent_extension_contracts import bounded_json
+    bounded_json(fields, maximum=262144)
+    if "max_tokens" in fields and (type(fields["max_tokens"]) is not int or not 1 <= fields["max_tokens"] <= 32768):
+        raise ValueError("Invalid model output budget")
+    if "temperature" in fields and (type(fields["temperature"]) not in {int, float} or not 0 <= fields["temperature"] <= 2):
+        raise ValueError("Invalid model temperature")
     messages = _provider_messages(messages)
     provider_url = str(profile.get("provider_url") or "").strip().rstrip("/")
     parsed = urlsplit(provider_url)
@@ -111,35 +129,33 @@ def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, manage
         if secret:
             headers["Authorization"] = "Bearer " + secret
     from .provider_capability_probes import apply_parameters
-    payload = json.dumps(apply_parameters(profile, {"model": model, "messages": messages, "stream": False}),
-                         ensure_ascii=False).encode("utf-8")
+    request_payload = apply_parameters(profile, {"model": model, "messages": messages, "stream": False, **fields})
+    payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=request_timeout_seconds()) as response:
-            raw = response.read(4 * 1024 * 1024 + 1)
-            if len(raw) > 4 * 1024 * 1024:
-                raise RuntimeError("LLM provider response is too large")
-            result = json.loads(raw.decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-        raise RuntimeError("LLM provider request failed") from exc
-    choices = result.get("choices") or []
-    if not native_agent_api._llm_model_matches(model, result.get("model")):
-        raise RuntimeError("LLM provider returned a different model")
-    message = (choices[0] or {}).get("message") if choices else {}
-    content = str((message or {}).get("content") or "")
-    if not content:
-        raise RuntimeError("LLM provider returned no content")
-    content_security.enforce(content, "OUTPUT")
-    observed_usage = result.get("usage")
-    usage = None
-    if isinstance(observed_usage, dict):
-        usage = {name: value for name, value in observed_usage.items()
-                 if name in {"prompt_tokens", "completion_tokens", "total_tokens"}
-                 and type(value) is int and value >= 0}
-        usage = usage or None
-    return {"content": content,
-            "model": result.get("model") or model,
-            "usage": usage, "usage_observation": "PROVIDER_REPORTED" if usage else "UNAVAILABLE"}
+    with model_dispatch.dispatch(profile, request_payload) as ticket:
+        try:
+            with ticket.open(request, timeout=ticket.timeout_seconds(request_timeout_seconds())) as response:
+                raw = ticket.read_response(response, 4 * 1024 * 1024)
+                result = decode_json(raw, max_bytes=4 * 1024 * 1024)
+        except ModelResultError:
+            raise
+        except (model_dispatch.ModelNotDispatched, ContinuityError):
+            raise
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            raise RuntimeError("LLM provider request failed") from exc
+        parsed = parse_completion(result, model, output_kind=output_kind, model_matches=native_agent_api._llm_model_matches)
+        ticket.observe_result(parsed)
+        ticket.response_complete()
+        content = parsed["content"]
+        try:
+            content_security.enforce(content, "OUTPUT")
+            if parsed.get("tool_calls"):
+                content_security.enforce(json.dumps(parsed["tool_calls"], ensure_ascii=False), "OUTPUT")
+        except content_security.ContentDenied as exc:
+            exc.model_observation = {key: parsed[key] for key in ("model", "usage", "usage_observation", "usage_field_provenance", "request_complete")}
+            raise
+        return {key: parsed[key] for key in ("content", "model", "finish_reason", "request_complete", "structured", "tool_calls",
+                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id}
 
 
 def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delta: Any) -> Dict[str, Any]:
@@ -161,55 +177,56 @@ def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delt
         if secret:
             headers["Authorization"] = "Bearer " + secret
     from .provider_capability_probes import apply_parameters
-    payload = json.dumps(apply_parameters(profile, {"model": model, "messages": messages, "stream": True}), ensure_ascii=False).encode("utf-8")
+    request_payload = apply_parameters(profile, {"model": model, "messages": messages, "stream": True,
+                                                "stream_options": {"include_usage": True}})
+    payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(provider_url + "/chat/completions", data=payload, headers=headers, method="POST")
     content = ""
     pending = ""
     completed = False
-    try:
-        with urllib.request.urlopen(request, timeout=request_timeout_seconds()) as response:
-            for raw_line in response:
-                line = raw_line.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                item = line[5:].strip()
-                if item == "[DONE]":
-                    completed = True
-                    break
+    parser = ChatCompletionStream(model, model_matches=native_agent_api._llm_model_matches)
+    with model_dispatch.dispatch(profile, request_payload) as ticket:
+        try:
+            with ticket.open(request, timeout=ticket.timeout_seconds(request_timeout_seconds(), stream=True)) as response:
+                for event in sse_events(ticket.stream_response(response)):
+                    ticket.check_deadline()
+                    piece = parser.feed(event)
+                    if parser.done:
+                        break
+                    if not piece:
+                        continue
+                    ticket.first_token()
+                    if not content and _model_observer.get():
+                        _model_observer.get()(time.monotonic())
+                    content += piece
+                    pending += piece
+                parsed = parser.finish()
+                ticket.observe_result(parsed)
+                completed = parsed["request_complete"]
+                if not completed:
+                    raise RuntimeError("LLM provider stream ended before completion")
+                ticket.response_complete()
+                # Inspect complete output before releasing any bytes; secrets
+                # can be split across arbitrary provider chunks.
                 try:
-                    payload_item = json.loads(item)
-                    observed_model = payload_item.get("model")
-                    if observed_model and not native_agent_api._llm_model_matches(model, observed_model):
-                        raise RuntimeError("LLM provider returned a different model")
-                    choices = payload_item.get("choices") or []
-                    delta = (choices[0] or {}).get("delta") if choices else {}
-                    if choices and (choices[0] or {}).get("finish_reason") == "stop":
-                        completed = True
-                    piece = str((delta or {}).get("content") or "")
-                except (TypeError, ValueError):
-                    continue
-                if not piece:
-                    continue
-                if not content and _model_observer.get():
-                    _model_observer.get()(time.monotonic())
-                content += piece
-                pending += piece
-                if len(content.encode("utf-8")) > 100000:
-                    raise RuntimeError("LLM provider response is too large")
-            # Inspect the complete bounded output before releasing any bytes;
-            # credentials can be split across arbitrary provider chunks.
-            if not completed:
-                raise RuntimeError("LLM provider stream ended before completion")
-            content_security.enforce(content, "OUTPUT")
-            if pending:
-                on_delta(pending)
-    except content_security.ContentDenied:
-        raise
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-        raise RuntimeError("LLM provider streaming request failed") from exc
-    if not content:
-        raise RuntimeError("LLM provider returned no content")
-    return {"content": content, "model": model}
+                    content_security.enforce(content, "OUTPUT")
+                except content_security.ContentDenied as exc:
+                    exc.model_observation = {key: parsed[key] for key in ("model", "usage", "usage_observation", "usage_field_provenance", "request_complete")}
+                    raise
+                if pending:
+                    on_delta(pending)
+        except content_security.ContentDenied:
+            raise
+        except ModelResultError:
+            raise
+        except (model_dispatch.ModelNotDispatched, ContinuityError):
+            raise
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            raise RuntimeError("LLM provider streaming request failed") from exc
+        if not content:
+            raise RuntimeError("LLM provider returned no content")
+        return {key: parsed[key] for key in ("content", "model", "finish_reason", "request_complete",
+                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id}
 
 
 def _set_profile_health(profile_id: str, state: str, expected_version: Optional[int] = None) -> None:
@@ -218,6 +235,217 @@ def _set_profile_health(profile_id: str, state: str, expected_version: Optional[
         "WHERE PROFILE_ID=:id AND STATUS='ACTIVE'" + (" AND VERSION=:version" if expected_version is not None else ""),
         {"state": state[:32], "id": profile_id, **({"version": expected_version} if expected_version is not None else {})},
     )
+
+
+def _model_runtime_enabled():
+    from . import edition_features
+    return getattr(edition_features, 'MODEL_RUNTIME_CONTEXT_ENABLED', False) is True
+
+
+def _runtime_execution_digest(execution, payload):
+    return native_agent_api._digest({
+        'execution_id': str(execution.get('execution_id') or ''),
+        'agent_id': str(execution.get('agent_id') or ''), 'target_id': str(execution.get('target_id') or ''),
+        'isolation_level': str(execution.get('isolation_level') or ''),
+        'context_digest': str(execution.get('context_digest') or ''),
+        'input_digest': native_agent_api._digest(payload)})
+
+
+def _runtime_channel_source(tx, payload):
+    dispatch = _channel_dispatch(payload)
+    if not dispatch:
+        return None
+    source = _row(tx.query_one(
+        'SELECT PRINCIPAL_ID,BODY_TEXT,THREAD_TYPE,THREAD_ID,REFERENCE_JSON,REDACTED_AT,MESSAGE_TYPE '
+        'FROM CX_CHANNEL_MESSAGES WHERE MESSAGE_ID=:message_id AND CHANNEL_ID=:channel_id',
+        {'message_id': dispatch.get('message_id'), 'channel_id': dispatch.get('channel_id')}))
+    if (not source or source.get('redacted_at') is not None or source.get('message_type') != 'TEXT'
+            or source.get('principal_id') != dispatch.get('requester_principal_id')
+            or str(source.get('thread_id') or '') != str(dispatch.get('thread_id') or '')
+            or source.get('thread_type') != dispatch.get('thread_type')):
+        raise PermissionError('The original Channel message is no longer current')
+    # Oracle represents an empty thread locator as NULL. Retain one digest
+    # across backend round trips without changing the source's actual meaning.
+    source['thread_id'] = str(source.get('thread_id') or '')
+    if dispatch.get('kind') == 'BUSINESS_MENTION':
+        mode_column = '"MODE"' if str(connection.DATABASE_DIALECT).lower() == 'oracle' else 'MODE'
+        configured = _row(tx.query_one('SELECT POLICY_ID,' + mode_column + ',ALLOW_MODEL_SUPPLEMENT,'
+            "DISCLOSURE_PROFILES_JSON,VERSION FROM CX_PORTAL_KNOWLEDGE_POLICY WHERE POLICY_ID='DEFAULT'", {}))
+        if not configured:
+            raise PermissionError('The original Channel knowledge policy is unavailable')
+        # Native NUMBER revisions may be Decimal on YashanDB. Keep the same
+        # canonical integer across backends before hashing the source policy;
+        # fractional or invalid revisions must never collapse to an integer.
+        from decimal import Decimal
+        revision = configured.get('version')
+        try:
+            normalized_revision = int(revision)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise PermissionError('The original Channel knowledge policy revision is invalid') from exc
+        if type(revision) not in (int, Decimal) or normalized_revision < 1 or revision != normalized_revision:
+            raise PermissionError('The original Channel knowledge policy revision is invalid')
+        configured['version'] = normalized_revision
+        source['knowledge_policy'] = configured
+    return native_agent_api._digest(source)
+
+
+def bind_model_credential(tx, actor, execution_id, payload, *, required_scope):
+    """Bind a new business execution to its actual original HTTP credential.
+
+    Called only by trusted enqueue adapters in their insertion transaction.
+    Public messages and payload fields can never supply a credential receipt.
+    """
+    if not _model_runtime_enabled():
+        return None
+    execution = _row(tx.query_one('SELECT * FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution',
+                                  {'execution': execution_id}))
+    if not execution or _parse(execution.get('input_json'), {}) != payload:
+        raise PermissionError('The original runtime input is unavailable')
+    original_source = _runtime_channel_source(tx, payload)
+    dispatch = _channel_dispatch(payload)
+    if dispatch and dispatch.get('requester_principal_id') != actor:
+        raise PermissionError('The original Channel requester differs from the authenticated identity')
+    original = _row(tx.query_one('SELECT * FROM CX_RUNTIME_MODEL_CREDENTIALS WHERE EXECUTION_ID=:execution',
+                                 {'execution': execution_id}))
+    if original:
+        if (original.get('actor_id') != actor or original.get('input_digest') != native_agent_api._digest(payload)
+                or original.get('execution_digest') != _runtime_execution_digest(execution, payload)
+                or original.get('source_digest') != original_source):
+            raise PermissionError('The original runtime credential binding cannot be replaced')
+        from . import processing_native
+        processing_native.bind_execution(tx, actor, execution, payload)
+        return model_credentials.binding_from_record(original)
+    binding = model_credentials.capture(actor, required_scope=required_scope, tx=tx)
+    if binding is None:
+        # Unregistered historical resources retain their prior behavior. A
+        # selected resource later refuses a Worker with no original receipt.
+        from . import processing_native
+        processing_native.bind_execution(tx, actor, execution, payload)
+        return None
+    selected_profile = _row(tx.query_one('SELECT n.LLM_PROFILE_ID,p.VERSION FROM CX_NATIVE_AGENTS n '
+        'LEFT JOIN CX_LLM_PROVIDER_PROFILES p ON p.PROFILE_ID=n.LLM_PROFILE_ID WHERE n.AGENT_ID=:agent',
+        {'agent': execution['agent_id']})) or {}
+    values = model_credentials.binding_record(binding) | dict(execution=execution_id,
+        input_digest=native_agent_api._digest(payload), execution_digest=_runtime_execution_digest(execution, payload),
+        source_digest=original_source, profile_id=selected_profile.get('llm_profile_id'),
+        profile_version=selected_profile.get('version'))
+    tx.execute('INSERT INTO CX_RUNTIME_MODEL_CREDENTIALS(EXECUTION_ID,ACTOR_ID,CREDENTIAL_KIND,CREDENTIAL_DIGEST,'
+        'REQUIRED_SCOPE,INSTANCE_ID,FENCING_TOKEN,AUTH_METHOD,PERMISSION_VERSION,MFA_LEVEL,NODE_ID,SESSION_CREATED_AT,'
+        'INPUT_DIGEST,EXECUTION_DIGEST,SOURCE_DIGEST,PROFILE_ID,PROFILE_VERSION) VALUES(:execution,:actor_id,:credential_kind,:credential_digest,'
+        ':required_scope,:instance_id,:fencing_token,:auth_method,:permission_version,:mfa_level,:node_id,:session_created_at,'
+        ':input_digest,:execution_digest,:source_digest,:profile_id,:profile_version)', values)
+    from . import processing_native
+    processing_native.bind_execution(tx, actor, execution, payload)
+    return binding
+
+
+def _runtime_model_receipt(execution_id, *, tx=None):
+    if not _model_runtime_enabled():
+        return None, None
+    query = tx.query_one if tx is not None else connection.execute_query_one
+    receipt = _row(query('SELECT * FROM CX_RUNTIME_MODEL_CREDENTIALS WHERE EXECUTION_ID=:execution',
+                         {'execution': execution_id}))
+    return (receipt, model_credentials.binding_from_record(receipt)) if receipt else (None, None)
+
+
+def _runtime_model_authority(tx, execution, profile, receipt, binding, target_snapshot, *,
+                             context_binding=None, framework_binding=None, audience=()):
+    """Current original-resource authority immediately before send/publication."""
+    execution_id = str(execution['execution_id'])
+    live = _row(tx.query_one('SELECT * FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution '
+        "AND STATUS='CLAIMED' AND WORKER_ID=:worker AND NODE_ID=:node AND FENCING_TOKEN=:fence "
+        'AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP FOR UPDATE',
+        {'execution': execution_id, 'worker': execution['worker_id'], 'node': execution['node_id'],
+         'fence': execution['fencing_token']}))
+    if not live:
+        raise PermissionError('The original Runtime Worker lease was revoked, expired or fenced')
+    payload = _parse(live.get('input_json'), {})
+    current_receipt, current_binding = _runtime_model_receipt(execution_id, tx=tx)
+    if (not current_receipt or current_binding != binding
+            or current_receipt.get('input_digest') != receipt['input_digest']
+            or current_receipt.get('execution_digest') != receipt['execution_digest']
+            or current_receipt.get('source_digest') != receipt.get('source_digest')
+            or native_agent_api._digest(payload) != receipt['input_digest']
+            or _runtime_execution_digest(live, payload) != receipt['execution_digest']
+            or _runtime_channel_source(tx, payload) != receipt.get('source_digest')):
+        raise PermissionError('The original Runtime execution, input or source binding changed')
+    model_credentials.recheck(tx, binding)
+    agent = _row(tx.query_one('SELECT AGENT_ID,STATUS,LLM_PROFILE_ID,DEPLOYMENT_TARGET_ID FROM CX_NATIVE_AGENTS '
+                              'WHERE AGENT_ID=:agent', {'agent': live['agent_id']})) or {}
+    if (agent.get('status') != 'ACTIVE' or agent.get('deployment_target_id') != live.get('target_id')
+            or agent.get('llm_profile_id') != profile.get('profile_id')
+            or profile.get('profile_id') != receipt.get('profile_id')
+            or int(profile.get('version') or 0) != int(receipt.get('profile_version') or 0)
+            or current_receipt.get('profile_id') != receipt.get('profile_id')
+            or current_receipt.get('profile_version') != receipt.get('profile_version')):
+        raise PermissionError('The original Runtime Agent or Profile binding changed')
+    from .portal_grounding import _recheck_profile
+    _recheck_profile(tx, profile)
+    target = _row(tx.query_one('SELECT TARGET_ID,TARGET_TYPE,STATUS,CONFIG_JSON FROM CX_DEPLOYMENT_TARGETS '
+                               'WHERE TARGET_ID=:target', {'target': live.get('target_id')}))
+    if (not target or target.get('status') != 'ACTIVE'
+            or native_agent_api._digest(target) != native_agent_api._digest(target_snapshot)):
+        raise PermissionError('The original Runtime isolation target changed')
+    if context_binding:
+        from . import continuity_runtime
+        current = _row(tx.query_one('SELECT * FROM CX_RUNTIME_CONTEXT_BINDINGS WHERE EXECUTION_ID=:execution',
+                                    {'execution': execution_id})) or {}
+        keys = ('assembly_id', 'requested_by', 'agent_id', 'security_domain_id', 'input_digest', 'request_digest')
+        if any(current.get(key) != context_binding.get(key) for key in keys) or current.get('requested_by') != binding.actor:
+            raise PermissionError('The original context Runtime binding changed')
+        continuity_runtime._claim(tx, execution, current)
+    elif framework_binding:
+        from . import framework_execution
+        current = framework_execution.binding(execution_id, tx=tx) or {}
+        keys = ('actor_id', 'security_domain_id', 'framework_key', 'framework_version', 'adapter_digest', 'rootfs_digest',
+                'input_digest', 'profile_id', 'profile_version', 'permission_version', 'target_id')
+        if any(current.get(key) != framework_binding.get(key) for key in keys) or current.get('actor_id') != binding.actor:
+            raise PermissionError('The original framework Runtime binding changed')
+        framework_execution.validate(tx, live, current)
+    elif _channel_dispatch(payload):
+        dispatch = _channel_dispatch(payload)
+        if dispatch.get('requester_principal_id') != binding.actor:
+            raise PermissionError('The original Channel requester changed')
+        if dispatch.get('kind') == 'BUSINESS_MENTION':
+            from . import business_channel_runtime
+            if payload.get('knowledge_citations') and tuple(sorted(business_channel_runtime._audience(dispatch))) != audience:
+                raise PermissionError('The original Channel disclosure audience changed')
+            business_channel_runtime.validate_response(live['agent_id'], dispatch['channel_id'], execution_id)
+        else:
+            from . import admin_management
+            if identity_api.effective_access(binding.actor, 'platform.manage').get('decision') != 'ALLOW':
+                raise PermissionError('The original management Channel permission changed')
+            for principal in (binding.actor, live['agent_id']):
+                identity_api._assert_channel_member(principal, dispatch['channel_id'], 'channels.write')
+                if dispatch.get('thread_id'):
+                    identity_api._assert_thread_member(principal, dispatch['thread_id'], 'channels.write')
+            membership = tx.query_one("SELECT MEMBER_ID FROM CX_ADMIN_AGENT_MEMBERS WHERE GROUP_ID=:group_id "
+                "AND AGENT_ID=:agent AND STATUS='ACTIVE' AND VOTING_ENABLED='Y'",
+                {'group_id': admin_management.ADMIN_GROUP_ID, 'agent': live['agent_id']})
+            if not membership:
+                raise PermissionError('The original management Agent admission changed')
+            citations = payload.get('management_knowledge_citations') or []
+            if citations:
+                compliance = live['agent_id'] == native_agent_api.COMPLIANCE_ADMIN_AGENT_ID
+                source = _row(tx.query_one('SELECT CONTENT_JSON,CONTENT_DIGEST,SIGNATURE_STATUS FROM CX_PLATFORM_KNOWLEDGE '
+                    "WHERE KNOWLEDGE_KEY=:knowledge_key AND VERSION=:revision AND STATUS='PUBLISHED' AND AUDIENCE=:audience "
+                    'AND SCOPE_TYPE=:scope_type AND (VALID_FROM IS NULL OR VALID_FROM<=CURRENT_TIMESTAMP) '
+                    'AND (VALID_UNTIL IS NULL OR VALID_UNTIL>CURRENT_TIMESTAMP)',
+                    {'knowledge_key': 'compliance-admin-knowledge' if compliance else 'platform-admin-knowledge',
+                     'revision': 1 if compliance else native_agent_api.MANAGEMENT_KNOWLEDGE_VERSION,
+                     'audience': 'COMPLIANCE_ADMIN' if compliance else 'MANAGEMENT_AGENTS',
+                     'scope_type': 'COMPLIANCE_AGENT' if compliance else 'MANAGEMENT_AGENT'})) or {}
+                content = _parse(source.get('content_json'), {})
+                if (source.get('signature_status') != 'VERIFIED_BUILTIN'
+                        or source.get('content_digest') != native_agent_api._digest(content)
+                        or any(item.get('source_digest') != native_agent_api._digest(dict(content,
+                               response_language=payload.get('response_language') or 'en')) for item in citations)):
+                    raise PermissionError('The original management knowledge source changed')
+    else:
+        if (identity_api.effective_access(binding.actor, 'agents.operate').get('decision') != 'ALLOW'
+                or not identity_api._agent_visible_to(binding.actor, live['agent_id'])):
+            raise PermissionError('The original native execution permission changed')
+    return live
 
 
 def enqueue(actor: str, agent_id: str, messages: List[Dict[str, Any]], reason: str) -> Dict[str, Any]:
@@ -237,12 +465,14 @@ def enqueue(actor: str, agent_id: str, messages: List[Dict[str, Any]], reason: s
         raise PermissionError("Agent is outside the delegated scope")
     execution_id = native_agent_api._id("EXE")
     payload = native_agent_api._json({"messages": messages})
-    connection.execute(
-        "INSERT INTO CX_RUNTIME_EXECUTIONS(EXECUTION_ID,AGENT_ID,TARGET_ID,ISOLATION_LEVEL,STATUS,INPUT_JSON,"
-        "CONTEXT_DIGEST) VALUES (:id,:agent,:target,'DOMAIN_ISOLATED','PENDING',:input,:digest)",
-        {"id": execution_id, "agent": agent_id, "target": agent.get("deployment_target_id"),
-         "input": payload, "digest": native_agent_api._digest(payload)},
-    )
+    def reserve(tx):
+        tx.execute(
+            "INSERT INTO CX_RUNTIME_EXECUTIONS(EXECUTION_ID,AGENT_ID,TARGET_ID,ISOLATION_LEVEL,STATUS,INPUT_JSON,"
+            "CONTEXT_DIGEST) VALUES (:id,:agent,:target,'DOMAIN_ISOLATED','PENDING',:input,:digest)",
+            {"id": execution_id, "agent": agent_id, "target": agent.get("deployment_target_id"),
+             "input": payload, "digest": native_agent_api._digest(payload)})
+        bind_model_credential(tx, actor, execution_id, {'messages': messages}, required_scope='agents.operate')
+    connection.execute_transaction_callback(reserve)
     return {"execution_id": execution_id, "agent_id": agent_id, "status": "PENDING"}
 
 
@@ -259,13 +489,17 @@ def _finish(execution_id: str, worker_id: str, node_id: str, fencing_token: int,
          "failure": failure[:2000] or None, "id": execution_id, "worker": worker_id,
          "node": node_id, "token": fencing_token}
     def complete(tx):
+        current = _row(tx.query_one("SELECT * FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution FOR UPDATE", {"execution": execution_id}))
         if completion_hook is not None:
             completion_hook(tx)
         changed = tx.execute(sql, params)
-        if changed and not tx.query_one("SELECT EXECUTION_ID FROM CX_EXECUTION_OBSERVATIONS WHERE EXECUTION_ID=:execution", {"execution": execution_id}):
+        if changed and _model_runtime_enabled():
+            from . import processing_native
+            processing_native.finish(tx, current, status, failure)
+        if observation is not None and changed and not tx.query_one("SELECT EXECUTION_ID FROM CX_EXECUTION_OBSERVATIONS WHERE EXECUTION_ID=:execution", {"execution": execution_id}):
             tx.execute("INSERT INTO CX_EXECUTION_OBSERVATIONS(EXECUTION_ID,FENCING_TOKEN,QUEUE_MS,PROVIDER_LATENCY_MS,FIRST_TOKEN_MS,CANCELLATION_STATE,FINISH_CODE) VALUES(:execution,:fence,:queue_ms,:provider_ms,:first_ms,'NOT_REQUESTED',:code)", {"execution": execution_id, "fence": fencing_token, "queue_ms": observation.get("queue_ms"), "provider_ms": observation.get("provider_ms"), "first_ms": observation.get("first_ms"), "code": failure[:128] or status})
         return changed
-    changed = connection.execute_transaction_callback(complete) if observation is not None else connection.execute(sql, params)
+    changed = connection.execute_transaction_callback(complete) if _model_runtime_enabled() or observation is not None or completion_hook is not None else connection.execute(sql, params)
     if changed != 1 and status == "COMPLETED":
         raise PermissionError("Runtime execution authority was revoked")
 
@@ -660,6 +894,11 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
     profile: Optional[Dict[str, Any]] = None
     provider_failed = False
     provider_completed = False
+    provider_unknown = False
+    provider_number = 0
+    context_binding = None
+    publication_guard = None
+    publication_principals = ()
     from .edition_features import AGENT_EXTENSIONS_ENABLED
     observation = {} if AGENT_EXTENSIONS_ENABLED else None
     if observation is not None:
@@ -672,7 +911,8 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
             # leased execution into an untracked provider send.
             observation["queue_ms"] = None
     def provider_call(function, *args):
-        nonlocal provider_failed, provider_completed
+        nonlocal provider_failed, provider_completed, provider_unknown, provider_number
+        nonlocal publication_guard, publication_principals
         if not connection.execute_query_one(
                 "SELECT EXECUTION_ID FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:id "
                 "AND STATUS='CLAIMED' AND WORKER_ID=:worker AND NODE_ID=:node "
@@ -685,44 +925,135 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
             from . import business_channel_runtime
             business_channel_runtime.validate_response(str(execution['agent_id']),
                 str(business_dispatch['channel_id']), execution_id)
+        receipt, credential = _runtime_model_receipt(execution_id)
+        framework_binding, audience = None, ()
+        if credential is not None:
+            if framework_dispatch:
+                from . import framework_execution
+                framework_binding = framework_execution.binding(execution_id)
+            if business_dispatch.get('kind') == 'BUSINESS_MENTION' and input_payload.get('knowledge_citations'):
+                from . import business_channel_runtime
+                audience = tuple(sorted(business_channel_runtime._audience(business_dispatch)))
+            target_snapshot = _row(connection.execute_query_one(
+                'SELECT TARGET_ID,TARGET_TYPE,STATUS,CONFIG_JSON FROM CX_DEPLOYMENT_TARGETS WHERE TARGET_ID=:target',
+                {'target': execution.get('target_id')}))
+            publication_principals = tuple(sorted({credential.actor, str(execution['agent_id']), *audience}))
+            def authorize_model(tx):
+                from .continuity_work import _lock_actor
+                from .continuity_state import ContinuityError
+                from .knowledge_grounding import GroundingError
+                for principal in publication_principals:
+                    _lock_actor(tx, principal)
+                try:
+                    _runtime_model_authority(tx, execution, args[0], receipt, credential, target_snapshot,
+                        context_binding=context_binding, framework_binding=framework_binding, audience=audience)
+                except (native_agent_api.NativeAgentError, identity_api.IdentityError, ContinuityError, GroundingError) as exc:
+                    raise PermissionError('The original Runtime business authority changed') from exc
+            publication_guard = authorize_model
+            try:
+                connection.execute_transaction_callback(authorize_model)
+            except Exception as exc:
+                exc.model_not_dispatched = True
+                raise
+        else:
+            authorize_model = None
+        provider_number += 1
+        source_kind = 'CHANNEL' if _channel_dispatch(input_payload) else 'NATIVE'
+        source_attempt = 'NMA_' + native_agent_api._digest([execution_id, fencing_token, provider_number])
+        if _model_runtime_enabled():
+            from . import processing_native
+            allowed = connection.execute_transaction_callback(lambda tx: processing_native.begin_call(
+                tx, execution, source_attempt, source_kind, provider_number, args[1]))
+            if not allowed:
+                raise model_dispatch.ModelNotDispatched('PROCESSING_BLOCKED', 'The original native processing budget is exhausted')
         provider_failed = True
         provider_started = time.monotonic()
         observer = _model_observer.set(lambda received: observation.setdefault("first_ms", max(0, round((received - provider_started) * 1000))) if observation is not None else None)
         isolated = execution.get('_isolated_worker')
+        # A leased background Worker must never inherit another request's
+        # dispatch identity. Only its immutable original receipt can install it.
+        dispatch_token = model_dispatch._context.set(None)
         try:
-            if isolated:
-                def authorize():
-                    if business_dispatch.get('kind') == 'BUSINESS_MENTION':
-                        from . import business_channel_runtime
-                        business_channel_runtime.validate_response(str(execution['agent_id']),
-                            str(input_payload['channel_dispatch']['channel_id']), execution_id)
-                    elif framework_dispatch:
-                        from . import framework_execution
-                        binding = framework_execution.binding(execution_id)
-                        if not binding:
-                            raise PermissionError('framework execution binding is unavailable')
-                        connection.execute_transaction_callback(
-                            lambda tx: framework_execution.validate(tx, execution, binding)
-                        )
-                    lease = _row(connection.execute_query_one(
-                        "SELECT EXECUTION_ID FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:id "
-                        "AND STATUS='CLAIMED' AND WORKER_ID=:worker AND NODE_ID=:node "
-                        "AND FENCING_TOKEN=:token AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP",
-                        {'id':execution_id,'worker':worker_id,'node':node_id,'token':fencing_token}))
-                    if not lease:
-                        raise PermissionError('isolated execution lease revoked')
-                result = isolated.model(args[0], args[1], _call_llm, authorize)
-                if len(args) > 2:
-                    args[2](result['content'])
-            else:
-                result = function(*args)
+            def authorize_send(tx, admission):
+                authorize_model(tx)
+                if _model_runtime_enabled():
+                    processing_native.dispatch_gate(tx, execution, source_attempt, admission)
+            with model_credentials.dispatch_context(credential, source_kind, execution_id, source_attempt,
+                    reauthorize=authorize_send, worker_key=worker_id,
+                    allow_wait=False, lock_principals=publication_principals):
+                if isolated:
+                    def authorize():
+                        if authorize_model is not None:
+                            connection.execute_transaction_callback(authorize_model)
+                            return
+                        if business_dispatch.get('kind') == 'BUSINESS_MENTION':
+                            from . import business_channel_runtime
+                            business_channel_runtime.validate_response(str(execution['agent_id']),
+                                str(input_payload['channel_dispatch']['channel_id']), execution_id)
+                        elif framework_dispatch:
+                            from . import framework_execution
+                            binding = framework_execution.binding(execution_id)
+                            if not binding:
+                                raise PermissionError('framework execution binding is unavailable')
+                            connection.execute_transaction_callback(lambda tx: framework_execution.validate(tx, execution, binding))
+                        lease = _row(connection.execute_query_one(
+                            "SELECT EXECUTION_ID FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:id "
+                            "AND STATUS='CLAIMED' AND WORKER_ID=:worker AND NODE_ID=:node "
+                            "AND FENCING_TOKEN=:token AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP",
+                            {'id':execution_id,'worker':worker_id,'node':node_id,'token':fencing_token}))
+                        if not lease:
+                            raise PermissionError('isolated execution lease revoked')
+                    result = isolated.model(args[0], args[1], _call_llm, authorize)
+                    if len(args) > 2:
+                        args[2](result['content'])
+                else:
+                    result = function(*args)
+        except Exception as exc:
+            if isinstance(exc, model_dispatch.CapacityQueued):
+                from . import model_endpoint_capacity
+                queued = exc.admission
+                try:
+                    model_endpoint_capacity.cancel_admission(credential.actor, queued['admission_id'], dict(
+                        expected_version=queued['version'], reason='Native Worker cannot wait with an active business lease',
+                        idempotency_key='native-no-send:' + queued['admission_id']))
+                except Exception:
+                    logger.warning('Native queued admission cleanup failed; original request was not sent')
+            known_no_send = getattr(exc, 'model_not_dispatched', False)
+            record = None
+            if _model_runtime_enabled():
+                record = _row(connection.execute_query_one('SELECT ADMISSION_ID,STATUS FROM CX_MODEL_ADMISSIONS '
+                    'WHERE SOURCE_KIND=:source_kind AND SOURCE_ID=:execution AND SOURCE_ATTEMPT_ID=:attempt',
+                    {'source_kind': source_kind, 'execution': execution_id, 'attempt': source_attempt}))
+                origin = _row(connection.execute_query_one('SELECT ORIGIN_RECEIPT_ID AS ADMISSION_ID,STATUS FROM CX_MODEL_ORIGIN_RECEIPTS '
+                    'WHERE ACTOR_ID=:actor AND SOURCE_KIND=:source_kind AND SOURCE_ID=:execution AND SOURCE_ATTEMPT_ID=:attempt',
+                    {'actor': receipt.get('actor_id'), 'source_kind': source_kind, 'execution': execution_id, 'attempt': source_attempt}))
+                if record and origin:
+                    raise RuntimeError('The original native attempt has conflicting local and remote admissions') from exc
+                record = origin or record
+            if record and record.get('status') in {'QUEUED', 'RESERVED', 'REJECTED', 'CANCELLED', 'EXPIRED', 'KNOWN_NO_SEND'}:
+                known_no_send = True
+                exc.model_not_dispatched = True
+            provider_unknown = bool(record and record.get('status') in {'DISPATCHING', 'UNKNOWN'})
+            provider_failed = (not known_no_send and not getattr(exc, 'model_ledger_failed', False)
+                               and not isinstance(exc, (PermissionError, content_security.ContentDenied))
+                               and not (record and record.get('status') == 'COMPLETED'))
+            raise
         finally:
+            model_dispatch._context.reset(dispatch_token)
             _model_observer.reset(observer)
             if observation is not None:
                 observation["provider_ms"] = max(0, round((time.monotonic() - provider_started) * 1000))
+            if _model_runtime_enabled():
+                connection.execute_transaction_callback(lambda tx: processing_native.observe_call(tx, execution, source_attempt))
         provider_failed = False
         provider_completed = True
         return result
+
+    def publish_channel(agent_id, channel_id, content, *, completed=False):
+        options = dict(execution_id=execution_id, completed=completed)
+        if publication_guard is not None:
+            options.update(before_publish=publication_guard, lock_principals=publication_principals)
+        return identity_api.update_channel_agent_response(agent_id, channel_id, content, **options)
     try:
         # Preserve the durable reply binding even when runtime admission fails,
         # so an authorized Channel sees a bounded failure instead of silence.
@@ -779,9 +1110,9 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
                 try:
                     output = provider_call(
                         _stream_llm, profile, messages if isinstance(messages, list) else [],
-                        lambda content: identity_api.update_channel_agent_response(
+                        lambda content: publish_channel(
                             str(agent.get("agent_id") or ""), channel_id,
-                            answer_planning.render_reply(content, input_payload), execution_id=execution_id,
+                            answer_planning.render_reply(content, input_payload),
                         ),
                     )
                 except RuntimeError as exc:
@@ -790,7 +1121,7 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
                     # bounded prompt and safe Channel response by falling back to
                     # one non-streaming request; transport and timeout failures
                     # remain failures and are never retried here.
-                    if str(exc) != "LLM provider returned no content":
+                    if provider_unknown or str(exc) != "LLM provider returned no content":
                         raise
                     output = provider_call(_call_llm, profile, messages if isinstance(messages, list) else [])
             output = {**output, 'content': answer_planning.render_reply(str(output.get('content') or ''), input_payload)}
@@ -799,9 +1130,9 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
                     "AND WORKER_ID=:worker AND NODE_ID=:node AND FENCING_TOKEN=:token AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP",
                     {'id': execution_id, 'worker': worker_id, 'node': node_id, 'token': fencing_token}):
                 raise PermissionError('Runtime execution lease revoked before response publication')
-            identity_api.update_channel_agent_response(
+            publish_channel(
                 str(agent.get("agent_id") or ""), channel_id, str(output.get("content") or ""),
-                execution_id=execution_id, completed=True,
+                completed=True,
             )
         else:
             if not profile:
@@ -814,9 +1145,15 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
         if not dispatch:
             _write_channel_response(str(agent.get("agent_id") or ""), execution_id, input_payload, output=output)
         completion_hook = None
+        if publication_guard is not None:
+            completion_hook = publication_guard
         if isinstance(input_payload.get('framework_dispatch'), dict):
             from . import framework_execution
-            completion_hook = lambda tx: framework_execution.complete(tx, execution, output)
+            def complete_framework(tx):
+                if publication_guard is not None:
+                    publication_guard(tx)
+                framework_execution.complete(tx, execution, output)
+            completion_hook = complete_framework
         _finish(execution_id, worker_id, node_id, fencing_token, "COMPLETED", output=output, observation=observation, completion_hook=completion_hook)
         return {"status": "COMPLETED", "execution_id": execution_id}
     except Exception as exc:
@@ -832,8 +1169,9 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
             _write_channel_response(str((agent or {}).get("agent_id") or ""), execution_id, input_payload, failure=failure_code)
         except Exception:
             logger.debug("Unable to write Channel response", exc_info=True)
-        _finish(execution_id, worker_id, node_id, fencing_token, "FAILED", failure=failure_code, observation=observation)
-        return {"status": "FAILED", "execution_id": execution_id,"failure_code":failure_code}
+        outcome = 'UNOBSERVED' if provider_unknown else 'FAILED'
+        _finish(execution_id, worker_id, node_id, fencing_token, outcome, failure=failure_code, observation=observation)
+        return {"status": outcome, "execution_id": execution_id,"failure_code":failure_code}
     finally:
         isolated = execution.get('_isolated_worker')
         if isolated:
@@ -842,17 +1180,18 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
 
 def get_execution(actor: str, execution_id: str, *, transaction=None) -> Dict[str, Any]:
     from . import continuity_runtime
-    if continuity_runtime.binding(execution_id):
+    if continuity_runtime.binding(execution_id, transaction=transaction):
         return continuity_runtime.read_execution(actor,execution_id,transaction=transaction)
-    row = _row(connection.execute_query_one(
+    query = transaction.query_one if transaction is not None else connection.execute_query_one
+    row = _row(query(
         "SELECT EXECUTION_ID,AGENT_ID,TARGET_ID,ISOLATION_LEVEL,STATUS,WORKER_ID,NODE_ID,INPUT_JSON,OUTPUT_JSON,"
         "FAILURE_REASON,STARTED_AT,COMPLETED_AT,CREATED_AT,UPDATED_AT FROM CX_RUNTIME_EXECUTIONS "
         "WHERE EXECUTION_ID=:id", {"id": execution_id},
     ))
-    if not row or not identity_api._agent_visible_to(actor, str(row.get("agent_id") or "")):
+    if not row or not identity_api._agent_visible_to(actor, str(row.get("agent_id") or ""), transaction=transaction):
         raise PermissionError("Execution is unavailable")
     from . import business_channel_runtime
-    business_channel_runtime.require_result_reader(actor, str(row.get('agent_id') or ''), execution_id)
+    business_channel_runtime.require_result_reader(actor, str(row.get('agent_id') or ''), execution_id, transaction=transaction)
     from . import framework_execution
     framework_execution.require_reader(actor, row, tx=transaction)
     row.pop("input_json", None)

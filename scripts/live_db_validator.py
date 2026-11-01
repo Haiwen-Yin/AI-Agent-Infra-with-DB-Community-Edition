@@ -245,6 +245,42 @@ V501_MIGRATION_SCRIPTS = V500_MIGRATION_SCRIPTS + (
     "103_v5_0_1_memory_quality.sql", "104_v5_0_1_context_assets.sql",
     "105_v5_0_1_answer_quality.sql",
 )
+V502_RUNTIME_MIGRATION_SCRIPTS = (
+    "106_v5_0_2_model_capacity.sql", "107_v5_0_2_processing_recovery.sql",
+    "108_v5_0_2_governed_model_turns.sql",
+    "109_v5_0_2_observed_answer_reviews.sql",
+)
+V502_MIGRATION_SCRIPTS = V501_MIGRATION_SCRIPTS + V502_RUNTIME_MIGRATION_SCRIPTS
+V502_NATIVE_MIGRATION_SCRIPTS = (
+    "103_v5_0_1_memory_quality.sql", "104_v5_0_1_context_assets.sql",
+    "105_v5_0_1_answer_quality.sql", *V502_RUNTIME_MIGRATION_SCRIPTS,
+)
+V502_PG_APPROVAL_REPAIR_SCRIPT = "110_v5_0_2_pg_approval_entity_repair.sql"
+
+
+def v502_runtime_migration_scripts(database: str) -> tuple[str, ...]:
+    if database not in {"pg", "postgresql", "oracle", "yashandb"}:
+        raise ValueError("Unknown v5.0.2 database backend")
+    return V502_RUNTIME_MIGRATION_SCRIPTS + ((V502_PG_APPROVAL_REPAIR_SCRIPT,) if database in {"pg", "postgresql"} else ())
+
+
+def v502_migration_scripts(database: str) -> tuple[str, ...]:
+    return V501_MIGRATION_SCRIPTS + v502_runtime_migration_scripts(database)
+
+
+def v502_native_migration_scripts(database: str) -> tuple[str, ...]:
+    return V501_MIGRATION_SCRIPTS[-3:] + v502_runtime_migration_scripts(database)
+
+
+V502_PG_APPROVAL_REPAIR_MANIFEST = {
+    "schema": "chuanxu-v502-pg-approval-entity-repair/v1", "database": "pg", "table": "APPROVAL_REQUESTS",
+    "removed_constraint": {"name": "CK_AR_ENTITY", "column": "ENTITY_TYPE", "allowed_values": ["STEP", "LOOP", "TOOL"]},
+    "required_constraints": {
+        "CK_APPROVAL_ENTITY": {"column": "ENTITY_TYPE", "allowed_values": ["STEP", "LOOP", "TOOL", "ORGANIZATION_CHANGE"]},
+        "CK_AR_STATUS": {"column": "APPROVAL_STATUS", "allowed_values": ["PENDING", "APPROVED", "REJECTED"]},
+    },
+    "grant_policy": "UNCHANGED", "preserve_other_constraints": True,
+}
 ENTERPRISE_ONLY_MIGRATION_SCRIPTS = frozenset({
     "29_v4_3_4_agent_compliance.sql",
     "30_v4_3_4_compliance_hardening.sql",
@@ -1696,6 +1732,119 @@ def validate_v501_static_contract(database: str, scripts: Sequence[Path], editio
             "passed": bool(base.get("passed")) and control["passed"]}
 
 
+def validate_v502_schema_manifest(facts: Any) -> list[str]:
+    """Reject incomplete native contracts before any migration can be adopted."""
+    if not isinstance(facts, dict) or not facts:
+        return ["EMPTY_MANIFEST"]
+    failures = []
+    for table, item in facts.items():
+        if not isinstance(item, dict):
+            failures.append(str(table) + ":DEFINITION")
+            continue
+        columns = item.get("columns")
+        immutable = item.get("immutable_columns")
+        if (not isinstance(columns, dict) or not columns
+                or any(not isinstance(value, dict) or set(value) != {"type", "not_null", "default"}
+                       or not isinstance(value["type"], str) or not isinstance(value["not_null"], bool)
+                       or value["default"] is not None and not isinstance(value["default"], str)
+                       for value in columns.values())):
+            failures.append(table + ":COLUMNS")
+        if (not isinstance(immutable, list) or not immutable
+                or not all(isinstance(column, str) for column in immutable)
+                or len(set(immutable)) != len(immutable)
+                or not isinstance(columns, dict) or not set(immutable) <= set(columns)):
+            failures.append(table + ":IMMUTABLE_COLUMNS")
+        if (not item.get("trigger") or not item.get("trigger_body")
+                or item.get("grant_policy") != "NO_NON_OWNER_GRANTS"):
+            failures.append(table + ":NATIVE_BOUNDARY")
+        indexes = item.get("indexes")
+        if (not isinstance(indexes, list) or any(
+                not isinstance(index, dict) or set(index) != {"name", "columns", "unique"}
+                or not isinstance(index["name"], str) or not index["name"]
+                or not isinstance(index["columns"], list) or not index["columns"]
+                or not all(isinstance(column, str) for column in index["columns"])
+                or index["unique"] is not False or not isinstance(columns, dict)
+                or not set(index["columns"]) <= set(columns) for index in indexes or [])):
+            failures.append(table + ":INDEXES")
+        if (not isinstance(item.get("keys"), list) or not isinstance(item.get("checks"), int)
+                or not isinstance(item.get("check_expressions"), list)
+                or item.get("checks") != len(item.get("check_expressions", []))):
+            failures.append(table + ":CONSTRAINTS")
+    return failures
+
+
+def validate_v502_approval_repair_manifest(facts: Any) -> list[str]:
+    """A legacy CHECK repair must not claim new immutable tables or grants."""
+    return ([] if isinstance(facts, dict) and facts == V502_PG_APPROVAL_REPAIR_MANIFEST
+            and facts.get('preserve_other_constraints') is True else ["APPROVAL_REPAIR_MANIFEST"])
+
+
+def _pg_approval_check_values(expression: str, column: str) -> list[str] | None:
+    """Accept only the native enum predicate, preserving every literal exactly."""
+    if not isinstance(expression, str) or len(expression) > 4096:
+        return None
+    parts = re.findall(r"'(?:[^']|'')*'|[^']+", expression)
+    normalized = "".join(part if part.startswith("'") else re.sub(r'[\s()"]', '', re.sub(
+        r'::(?:character varying|text)(?:\[\])?', '', part)).upper() for part in parts)
+    matched = re.fullmatch(re.escape(column) + r"=ANYARRAY\[((?:'[A-Z_]+'(?:,'[A-Z_]+')*))\]", normalized)
+    if not matched:
+        return None
+    values = re.findall(r"'([A-Z_]+)'", matched[1])
+    return values if len(values) == len(set(values)) else None
+
+
+def v502_pg_approval_boundary_errors(cursor: Any, facts: Any) -> list[str]:
+    failures = validate_v502_approval_repair_manifest(facts)
+    if failures:
+        return failures
+    cursor.execute(
+        "SELECT upper(c.conname),c.convalidated,c.connoinherit,c.conislocal,c.coninhcount,"
+        "ARRAY(SELECT upper(a.attname) FROM unnest(c.conkey) WITH ORDINALITY k(num,ord) "
+        "JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord),"
+        "pg_get_expr(c.conbin,c.conrelid) FROM pg_constraint c "
+        "WHERE c.conrelid=to_regclass(format('%I.approval_requests',current_schema())) AND c.contype='c'")
+    constraints = cursor.fetchall()
+    seen = set()
+    for name, validated, noinherit, islocal, inherited, columns, expression in constraints:
+        if name in seen:
+            failures.append("DUPLICATE_CHECK:" + name)
+        seen.add(name)
+        if name == "CK_AR_ENTITY":
+            failures.append("LEGACY_RESTRICTIVE_CHECK")
+        expected = facts['required_constraints'].get(name)
+        if expected:
+            values = _pg_approval_check_values(expression, expected['column'])
+            if (validated is not True or noinherit is not False or islocal is not True or inherited != 0
+                    or list(columns) != [expected['column']] or values is None
+                    or set(values) != set(expected['allowed_values'])):
+                failures.append("CHECK_DEFINITION:" + name)
+        elif set(columns) & {'ENTITY_TYPE', 'APPROVAL_STATUS'}:
+            failures.append("UNKNOWN_ENUM_CHECK:" + name)
+    failures.extend("MISSING_CHECK:" + name for name in facts['required_constraints'] if name not in seen)
+    return failures
+
+
+def validate_v502_static_contract(database: str, scripts: Sequence[Path], edition: str = "enterprise") -> dict[str, Any]:
+    base = validate_v501_static_contract(database, scripts, edition)
+    selected = {path.name: path for path in scripts}
+    required = migration_scripts_for_edition(v502_migration_scripts(database), edition)
+    missing = [name for name in required if name not in selected or not selected[name].is_file()]
+    invalid = {}
+    for name in v502_runtime_migration_scripts(database):
+        try:
+            facts = json.loads(selected[name].with_suffix(".schema.json").read_text(encoding="utf-8"))
+            failures = (validate_v502_approval_repair_manifest(facts) if name == V502_PG_APPROVAL_REPAIR_SCRIPT
+                        else validate_v502_schema_manifest(facts))
+            if failures:
+                invalid[name] = failures
+        except (KeyError, OSError, ValueError, TypeError):
+            invalid[name] = ["UNREADABLE_MANIFEST"]
+    control = {"scripts_missing": missing, "schema_manifests_invalid": invalid,
+               "passed": not missing and not invalid}
+    return {"database": database, "v501": base, "v502_model_processing_runtime": control,
+            "passed": bool(base.get("passed")) and control["passed"]}
+
+
 def _pg_runtime_permission_contract(cursor: Any) -> dict[str, Any]:
     """Read actual PostgreSQL grants; absence of the runtime role is a failure."""
     cursor.execute("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ai_agent_runtime')")
@@ -1847,6 +1996,7 @@ class ProbeResult:
     v452_task_continuity_contract: dict[str, Any] = field(default_factory=dict)
     v500_source_ip_access_contract: dict[str, Any] = field(default_factory=dict)
     v501_memory_context_quality_contract: dict[str, Any] = field(default_factory=dict)
+    v502_model_processing_runtime_contract: dict[str, Any] = field(default_factory=dict)
     error_type: str = ""
 
 
@@ -1865,14 +2015,20 @@ def _capture_v501_migrations(cursor: Any, database: str, target_version: str,
     for name in names:
         path = _migration_path(database, name)
         versions = [target_version]
-        if name == "102_v5_0_0_network_access.sql" and target_version == "5.0.1":
+        if name == "102_v5_0_0_network_access.sql" and target_version in {"5.0.1", "5.0.2"}:
+            if target_version == "5.0.2":
+                versions.append("5.0.1")
             versions.append("5.0.0")
+        if target_version == "5.0.2" and name in V501_MIGRATION_SCRIPTS[-3:]:
+            versions.append("5.0.1")
         observation = None
         for version in dict.fromkeys(versions):
             try:
                 row = runner._step_row(cursor, database, path, version=version)
             except Exception:
-                row = None
+                observation = {"version": version, "ledger_status": "UNREADABLE",
+                               "checksum_matches": False}
+                break
             if row is not None:
                 observation = {"version": version, "ledger_status": row["status"],
                                "checksum_matches": row["checksum"] == runner._checksum(path)}
@@ -1939,6 +2095,9 @@ def _capture_v43_catalog(cursor: Any, database: str, result: ProbeResult,
             cursor, database, target_version,
             ("103_v5_0_1_memory_quality.sql", "104_v5_0_1_context_assets.sql",
              "105_v5_0_1_answer_quality.sql"))
+    if release_tuple >= (5, 0, 2):
+        result.v502_model_processing_runtime_contract = _capture_v501_migrations(
+            cursor, database, target_version, v502_native_migration_scripts(database))
     result.v431_organization_contract = _capture_v431_organization(cursor, database)
     result.v434_compliance_contract = {
         "tables_missing": sorted(set(V434_COMPLIANCE_TABLES) - set(snapshot["tables"])),
@@ -2352,10 +2511,14 @@ def main() -> int:
     requires_v452 = at_least((4, 5, 2))
     requires_v500 = at_least((5, 0, 0))
     requires_v501 = at_least((5, 0, 1))
+    requires_v502 = at_least((5, 0, 2))
     static_contracts: dict[str, dict[str, Any]] = {}
     if requires_v43:
         for database in available_databases:
-            if at_least((5, 0, 1)):
+            if requires_v502:
+                migration_scripts = migration_scripts_for_edition(v502_migration_scripts(database), edition)
+                validator = lambda database, scripts: validate_v502_static_contract(database, scripts, edition)
+            elif at_least((5, 0, 1)):
                 migration_scripts = migration_scripts_for_edition(V501_MIGRATION_SCRIPTS, edition)
                 validator = lambda database, scripts: validate_v501_static_contract(database, scripts, edition)
             elif at_least((5, 0, 0)):
@@ -2477,6 +2640,7 @@ def main() -> int:
                 and (not requires_v452 or result.v452_task_continuity_contract.get("passed") is True)
                 and (not requires_v500 or result.v500_source_ip_access_contract.get("passed") is True)
                 and (not requires_v501 or result.v501_memory_context_quality_contract.get("passed") is True)
+                and (not requires_v502 or result.v502_model_processing_runtime_contract.get("passed") is True)
                 and not result.v43_partial_schema
             ))
             and (not requires_v431 or result.v431_organization_contract.get("passed") is True)

@@ -69,9 +69,24 @@ def progress(actor, execution_id, *, transaction=None):
     # Do not make progress inspection a second result/prompt export route.
     execution.pop("output", None)
     execution.pop("input_json", None)
-    observation = row(connection.execute_query_one("SELECT QUEUE_MS,PROVIDER_LATENCY_MS,FIRST_TOKEN_MS,CANCELLATION_STATE,FINISH_CODE FROM CX_EXECUTION_OBSERVATIONS WHERE EXECUTION_ID=:execution", {"execution": execution_id}))
-    return {"execution": execution, "observation": observation or None,
-            "remote_cancellation_confirmed": False, "diagnostic_available": True}
+    reader = transaction.query_one if transaction is not None else connection.execute_query_one
+    observation = row(reader("SELECT QUEUE_MS,PROVIDER_LATENCY_MS,FIRST_TOKEN_MS,CANCELLATION_STATE,FINISH_CODE FROM CX_EXECUTION_OBSERVATIONS WHERE EXECUTION_ID=:execution", {"execution": execution_id}))
+    result = {"execution": execution, "observation": observation or None,
+              "remote_cancellation_confirmed": False, "diagnostic_available": True}
+    from . import processing_recovery
+    if processing_recovery.schema_enabled():
+        def project(tx):
+            links = [row(value) for value in tx.query("SELECT CONTINUITY_ID FROM CX_TASK_CONTINUITY_LINKS WHERE LINK_KIND='RUNTIME' AND LINK_ID=:execution", {"execution": execution_id})]
+            return [value for link in links if (value := processing_recovery.read_diagnostics(tx, actor=actor, continuity_id=link["continuity_id"])) is not None]
+        result["processing"] = project(transaction) if transaction is not None else connection.execute_transaction_callback(project)
+        from . import model_observations, model_coordinator_observations
+        def authorize_source(tx, principal, source_id):
+            native_runtime.get_execution(principal, source_id, transaction=tx)
+        def observations(tx):
+            return [item for kind in ("NATIVE", "CHANNEL") for source in (model_observations, model_coordinator_observations)
+                for item in source.read_for_source(actor, kind, execution_id, authorize_source=authorize_source, transaction=tx)]
+        result["model_observations"] = observations(transaction) if transaction is not None else connection.execute_transaction_callback(observations)
+    return result
 
 
 def cancel(actor, execution_id):

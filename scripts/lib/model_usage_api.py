@@ -15,7 +15,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional
 
 from . import connection, identity_api, model_governance_api
+from . import model_credentials, model_dispatch, native_runtime
 from .llm_transport import request_timeout_seconds
+from .model_results import (ChatCompletionStream, ModelResultError, decode_json,
+                            normalize_usage, parse_completion, sse_events)
 
 
 class ModelUsageError(RuntimeError):
@@ -158,14 +161,15 @@ def revoke_gateway_credential(actor: str, credential_id: str, reason: str) -> Di
     return {"credential_id": credential_id, "status": "REVOKED", "changed": int(changed or 0)}
 
 
-def _credential(raw: str) -> Optional[Dict[str, Any]]:
+def _credential(raw: str, *, query_one=None) -> Optional[Dict[str, Any]]:
     if not raw:
         return None
-    return _row(connection.execute_query_one("SELECT CREDENTIAL_ID,DISPLAY_NAME,SCOPES_JSON,STATUS,EXPIRES_AT,CREATED_BY FROM CX_MODEL_GATEWAY_CREDENTIALS WHERE TOKEN_DIGEST=:digest AND STATUS='ACTIVE' AND (EXPIRES_AT IS NULL OR EXPIRES_AT>CURRENT_TIMESTAMP)", {"digest": _token(raw)})) or None
+    query = query_one or connection.execute_query_one
+    return _row(query("SELECT CREDENTIAL_ID,DISPLAY_NAME,SCOPES_JSON,STATUS,EXPIRES_AT,CREATED_BY FROM CX_MODEL_GATEWAY_CREDENTIALS WHERE TOKEN_DIGEST=:digest AND STATUS='ACTIVE' AND (EXPIRES_AT IS NULL OR EXPIRES_AT>CURRENT_TIMESTAMP)" + (" FOR UPDATE" if query_one is not None else ""), {"digest": _token(raw)})) or None
 
 
-def authenticate_gateway_credential(raw: str, profile_id: str, agent_id: str = "") -> Dict[str, Any]:
-    credential = _credential(raw)
+def authenticate_gateway_credential(raw: str, profile_id: str, agent_id: str = "", *, query_one=None) -> Dict[str, Any]:
+    credential = _credential(raw) if query_one is None else _credential(raw, query_one=query_one)
     if not credential:
         raise PermissionError("model gateway credential is invalid")
     try:
@@ -218,53 +222,63 @@ def _reserve_idempotency(actor: str, key: str, input_digest: str) -> None:
     raise ModelUsageConflict("request with this idempotency key already exists")
 
 
-def _idempotent_replay(actor: str, key: str, input_digest: str) -> Optional[Dict[str, Any]]:
+def _idempotent_replay(actor: str, key: str, input_digest: str, profile_id: str,
+                       agent_id: str, context: Dict[str, str], gateway_token: str) -> Optional[Dict[str, Any]]:
     if not key:
         return None
-    existing = _row(connection.execute_query_one(
-        "SELECT REQUEST_ID,INPUT_DIGEST,STATUS FROM CX_MODEL_REQUESTS WHERE ACTOR_PRINCIPAL_ID=:actor AND IDEMPOTENCY_KEY=:key",
-        {"actor": actor, "key": key[:160]},
-    ))
-    if not existing:
-        return None
-    if str(existing.get("input_digest") or "") != input_digest:
-        raise ModelUsageConflict("idempotency key was already used for a different request")
-    if str(existing.get("status") or "").upper() == "SUCCEEDED":
-        return model_governance_api.replay_snapshot(str(existing["request_id"]))
-    raise ModelUsageConflict("request with this idempotency key is still occupied")
+    def replay(tx):
+        # Credential revocation and response disclosure share the transaction.
+        # A known key/digest never substitutes for the original resource scope.
+        for principal in sorted({actor, *([agent_id] if agent_id else [])}):
+            current_principal = _row(tx.query_one("SELECT STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:principal_id FOR UPDATE",
+                                                  {"principal_id": principal}))
+            if current_principal.get("status") != "ACTIVE":
+                raise PermissionError("Original Gateway principal is no longer active")
+        if gateway_token:
+            current = authenticate_gateway_credential(gateway_token, profile_id, agent_id, query_one=tx.query_one)
+            if current["actor_principal_id"] != actor or current["credential_id"] != context["credential_id"]:
+                raise PermissionError("Original Gateway replay credential changed")
+        existing = _row(tx.query_one(
+            "SELECT REQUEST_ID,INPUT_DIGEST,STATUS,PROFILE_ID,AGENT_ID,CREDENTIAL_ID FROM CX_MODEL_REQUESTS "
+            "WHERE ACTOR_PRINCIPAL_ID=:actor AND IDEMPOTENCY_KEY=:key FOR UPDATE",
+            {"actor": actor, "key": key[:160]},
+        ))
+        if not existing:
+            return None
+        if (str(existing.get("profile_id") or "") != profile_id
+                or str(existing.get("agent_id") or "") != str(agent_id or "")
+                or str(existing.get("credential_id") or "") != context["credential_id"]):
+            raise ModelUsageConflict("idempotency key belongs to a different authorization boundary")
+        if str(existing.get("input_digest") or "") != input_digest:
+            raise ModelUsageConflict("idempotency key was already used for a different request")
+        if str(existing.get("status") or "").upper() != "SUCCEEDED":
+            raise ModelUsageConflict("request with this idempotency key is still occupied")
+        if not gateway_token:
+            from .edition_features import MODEL_RUNTIME_CONTEXT_ENABLED
+            if MODEL_RUNTIME_CONTEXT_ENABLED:
+                binding = model_credentials.capture(actor, required_scope="model_gateway.forward", tx=tx)
+                if binding is None:
+                    raise PermissionError("An authenticated Session is required for replay")
+            _authorize_forward(actor, "", profile_id, agent_id)
+        profile = _row(tx.query_one("SELECT STATUS FROM CX_LLM_PROVIDER_PROFILES WHERE PROFILE_ID=:profile_id FOR UPDATE", {"profile_id": profile_id}))
+        if profile.get("status") != "ACTIVE":
+            raise PermissionError("Original Gateway Profile is no longer active")
+        return model_governance_api.replay_snapshot(str(existing["request_id"]), transaction=tx)
+    return connection.execute_transaction_callback(replay)
 
 
 def _usage(result: Dict[str, Any]) -> Dict[str, Optional[int]]:
-    usage = result.get("usage") or {}
-    def n(*keys: str) -> Optional[int]:
-        for key in keys:
-            if usage.get(key) is not None:
-                try: return max(0, int(usage[key]))
-                except (TypeError, ValueError): return None
-        return None
-    prompt, completion = n("prompt_tokens", "input_tokens"), n("completion_tokens", "output_tokens")
-    total = n("total_tokens")
-    if total is None and prompt is not None and completion is not None: total = prompt + completion
-    def detail(parent: str, field: str) -> Optional[int]:
-        value = usage.get(parent)
-        if not isinstance(value, dict) or value.get(field) is None:
-            return None
-        try:
-            return max(0, int(value[field]))
-        except (TypeError, ValueError, OverflowError):
-            return None
-    cached = n("cached_tokens", "cache_read_input_tokens")
-    if cached is None:
-        cached = detail("prompt_tokens_details", "cached_tokens")
-    reasoning = n("reasoning_tokens")
-    if reasoning is None:
-        reasoning = detail("completion_tokens_details", "reasoning_tokens")
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "cached_tokens": cached, "reasoning_tokens": reasoning, "total_tokens": total}
+    return normalize_usage(result.get("usage") if isinstance(result, dict) else None)
 
 
 def _price(provider: str, model: str, usage: Dict[str, Optional[int]]) -> Dict[str, Any]:
     row = _row(connection.execute_query_one("SELECT PRICE_ID,PRICING_VERSION,CURRENCY,INPUT_PER_MILLION,OUTPUT_PER_MILLION,CACHE_PER_MILLION,REASONING_PER_MILLION FROM CX_MODEL_PRICING WHERE PROVIDER_KEY=:provider AND MODEL_ID=:model AND STATUS='ACTIVE' AND EFFECTIVE_FROM<=CURRENT_TIMESTAMP AND (EFFECTIVE_TO IS NULL OR EFFECTIVE_TO>CURRENT_TIMESTAMP) ORDER BY EFFECTIVE_FROM DESC FETCH FIRST 1 ROWS ONLY", {"provider": provider[:128], "model": model[:256]}))
     if not row: return {"cost": None, "currency": "", "pricing_version": ""}
+    if usage.get("cache_write_tokens"):
+        # The existing pricing contract has no cache-write tariff. Preserve
+        # those observed tokens and leave the price unknown instead of
+        # assigning an unverified rate or implying the write was free.
+        return {"cost": None, "currency": str(row.get("currency") or ""), "pricing_version": str(row.get("pricing_version") or "")}
     cost = Decimal("0")
     # Chat-completion detail counts are subsets of input/output totals.
     # A missing detail tariff keeps those tokens on the ordinary tariff.
@@ -273,6 +287,8 @@ def _price(provider: str, model: str, usage: Dict[str, Optional[int]]) -> Dict[s
         ("completion_tokens", "reasoning_tokens", "output_per_million", "reasoning_per_million"),
     ):
         total_count = usage.get(total_field)
+        if usage.get(detail_field) is None and row.get(detail_rate) is not None and row.get(detail_rate) != row.get(ordinary_rate):
+            return {"cost": None, "currency": str(row.get("currency") or ""), "pricing_version": str(row.get("pricing_version") or "")}
         detail_count = usage.get(detail_field) or 0
         if total_count is None or detail_count < 0 or detail_count > total_count:
             return {"cost": None, "currency": str(row.get("currency") or ""), "pricing_version": str(row.get("pricing_version") or "")}
@@ -285,7 +301,51 @@ def _price(provider: str, model: str, usage: Dict[str, Optional[int]]) -> Dict[s
     return {"cost": str(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)), "currency": str(row.get("currency") or ""), "pricing_version": str(row.get("pricing_version") or "")}
 
 
-def _write_usage(request_id: str, actor: str, agent_id: str, provider: str, model: str, usage: Dict[str, Optional[int]], provenance: str, started: float, status: str, idempotency_key: str = "") -> Dict[str, Any]:
+def _write_usage_atomic(request_id, actor, agent_id, provider, model, usage, provenance, started, status,
+                        idempotency_key, *, field_provenance=None, priceable=True):
+    counts = normalize_usage(usage)
+    pricing = _price(provider, model, counts) if priceable else {"cost": None, "currency": "", "pricing_version": ""}
+    complete_counts = all(counts.get(key) is not None for key in ("prompt_tokens", "completion_tokens", "total_tokens"))
+    detail_provenance = ("DERIVED_TOTAL" if complete_counts and (field_provenance or {}).get("total_tokens") == "SUM_OF_REPORTED_INPUT_OUTPUT"
+                         else "PROVIDER_REPORTED" if complete_counts
+                         else "PARTIAL" if any(value is not None for value in counts.values()) else "INCOMPLETE")
+    def write(tx):
+        request = _row(tx.query_one("SELECT ACTOR_PRINCIPAL_ID,AGENT_ID FROM CX_MODEL_REQUESTS WHERE REQUEST_ID=:request_id FOR UPDATE", {"request_id": request_id}))
+        if not request or request["actor_principal_id"] != actor or str(request.get("agent_id") or "") != str(agent_id or ""):
+            raise PermissionError("Usage must belong to the exact authorized model request")
+        existing = _row(tx.query_one("SELECT u.*,d.CACHE_WRITE_TOKENS,d.USAGE_PROVENANCE AS DETAIL_PROVENANCE FROM CX_MODEL_USAGE u "
+                                     "LEFT JOIN CX_MODEL_USAGE_DETAILS d ON d.USAGE_ID=u.USAGE_ID WHERE u.REQUEST_ID=:request_id", {"request_id": request_id}))
+        if existing:
+            observed = {key: int(existing[key]) if existing.get(key) is not None else None for key in counts}
+            if (observed != counts or existing.get("provider_key") != provider or existing.get("model_id") != model
+                    or existing.get("status") != status or existing.get("usage_provenance") != provenance
+                    or existing.get("detail_provenance") != detail_provenance):
+                raise ModelUsageConflict("Model request already has a different settled usage observation")
+            return {"usage_id": existing["usage_id"], "request_id": request_id, **observed,
+                    "usage_provenance": existing["usage_provenance"], "detail_provenance": detail_provenance,
+                    "cost": str(existing["cost"]) if existing.get("cost") is not None else None,
+                    "currency": existing.get("currency") or "", "pricing_version": existing.get("pricing_version") or ""}
+        usage_id = _id("USG")
+        tx.execute("INSERT INTO CX_MODEL_USAGE(USAGE_ID,REQUEST_ID,ACTOR_PRINCIPAL_ID,AGENT_ID,PROVIDER_KEY,MODEL_ID,PROMPT_TOKENS,COMPLETION_TOKENS,CACHED_TOKENS,REASONING_TOKENS,TOTAL_TOKENS,USAGE_PROVENANCE,COST,CURRENCY,PRICING_VERSION,STATUS,LATENCY_MS,IDEMPOTENCY_KEY) VALUES(:usage_id,:request_id,:actor,:agent,:provider,:model,:prompt,:completion,:cached,:reasoning,:total,:provenance,:cost,:currency,:price,:status,:latency,:idem_key)",
+                   {"usage_id": usage_id, "request_id": request_id, "actor": actor, "agent": agent_id or None, "provider": provider,
+                    "model": model, "prompt": counts["prompt_tokens"], "completion": counts["completion_tokens"], "cached": counts["cached_tokens"],
+                    "reasoning": counts["reasoning_tokens"], "total": counts["total_tokens"], "provenance": provenance,
+                    "cost": pricing["cost"], "currency": pricing["currency"], "price": pricing["pricing_version"], "status": status,
+                    "latency": int(max(0, (time.monotonic() - started) * 1000)), "idem_key": idempotency_key[:160] or None})
+        tx.execute("INSERT INTO CX_MODEL_USAGE_DETAILS(USAGE_ID,CACHE_WRITE_TOKENS,USAGE_PROVENANCE) VALUES(:usage_id,:cache_write,:provenance)",
+                   {"usage_id": usage_id, "cache_write": counts["cache_write_tokens"], "provenance": detail_provenance})
+        model_governance_api.settle_quota(request_id, counts["total_tokens"], pricing["cost"], pricing["currency"],
+                                         incomplete=not complete_counts, transaction=tx)
+        return {"usage_id": usage_id, "request_id": request_id, **counts, "usage_provenance": provenance,
+                "detail_provenance": detail_provenance, "cost": pricing["cost"], "currency": pricing["currency"], "pricing_version": pricing["pricing_version"]}
+    return connection.execute_transaction_callback(write)
+
+
+def _write_usage(request_id: str, actor: str, agent_id: str, provider: str, model: str, usage: Dict[str, Optional[int]], provenance: str, started: float, status: str, idempotency_key: str = "", *, field_provenance=None, priceable=True) -> Dict[str, Any]:
+    from .edition_features import MODEL_RUNTIME_CONTEXT_ENABLED
+    if MODEL_RUNTIME_CONTEXT_ENABLED:
+        return _write_usage_atomic(request_id, actor, agent_id, provider, model, usage, provenance, started, status,
+                                   idempotency_key, field_provenance=field_provenance, priceable=priceable)
     total = usage.get("total_tokens")
     if total is None and usage.get("prompt_tokens") is not None and usage.get("completion_tokens") is not None:
         total = int(usage["prompt_tokens"] or 0) + int(usage["completion_tokens"] or 0)
@@ -297,18 +357,114 @@ def _write_usage(request_id: str, actor: str, agent_id: str, provider: str, mode
     return {"usage_id": usage_id, "request_id": request_id, **usage, "usage_provenance": provenance, "cost": pricing["cost"], "currency": pricing["currency"], "pricing_version": pricing["pricing_version"]}
 
 
+def _gateway_send(actor, profile, messages, request_id, context, gateway_token, agent_id, *, stream=False):
+    """Use the common transport, retaining the original Gateway credential."""
+    profile_id = str(profile["profile_id"])
+    binding = None if gateway_token else model_credentials.capture(actor, required_scope="model_gateway.forward")
+    def reauthorize(tx, admission):
+        if gateway_token:
+            credential = authenticate_gateway_credential(gateway_token, profile_id, agent_id, query_one=tx.query_one)
+            current = {"actor": str(credential["actor_principal_id"]), "credential_id": str(credential["credential_id"])}
+        else:
+            current = _forward_context(actor, "", profile_id, agent_id)
+        if current != context:
+            raise PermissionError("Original Gateway authorization changed while queued")
+        if agent_id:
+            agent = tx.query_one("SELECT STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:agent_id", {"agent_id": agent_id})
+            if not agent or agent["status"] != "ACTIVE":
+                raise PermissionError("Original Agent is no longer active")
+    if gateway_token:
+        authorization = model_dispatch.authenticated_context(actor, "GATEWAY", request_id, request_id,
+            credential_digest=hashlib.sha256(gateway_token.encode()).hexdigest(), reauthorize=reauthorize,
+            worker_key="gateway:" + request_id, lock_principals=(agent_id,) if agent_id else ())
+    else:
+        authorization = model_credentials.dispatch_context(binding, "GATEWAY", request_id, request_id,
+            reauthorize=reauthorize, worker_key="gateway:" + request_id,
+            lock_principals=(agent_id,) if agent_id else ())
+    with authorization:
+        return (native_runtime._stream_llm(profile, messages, lambda piece: None) if stream
+                else native_runtime._call_llm(profile, messages))
+
+
+def _failed_usage(request_id, actor, agent_id, profile, started, key, error, *, completed_result=None):
+    from .edition_features import MODEL_RUNTIME_CONTEXT_ENABLED
+    if not MODEL_RUNTIME_CONTEXT_ENABLED:
+        model_governance_api.settle_quota(request_id, None, None, "", incomplete=True)
+        return
+    if completed_result is None and getattr(error, "model_not_dispatched", False):
+        model_governance_api.release_quota(request_id)
+        return
+    observation = completed_result if completed_result is not None else (error.observation if isinstance(error, ModelResultError) else getattr(error, "model_observation", {}))
+    complete = completed_result is not None or (error.request_complete if isinstance(error, ModelResultError) else observation.get("request_complete", False))
+    _write_usage(request_id, actor, agent_id, str(profile.get("profile_key") or profile["profile_id"]),
+                 str(observation.get("model") or profile.get("model_id") or ""), observation.get("usage") or {},
+                 "PROVIDER_REPORTED" if observation.get("usage_observation") == "PROVIDER_REPORTED" else "INCOMPLETE",
+                 started, "FAILED" if complete else "INCOMPLETE", key,
+                 field_provenance=observation.get("usage_field_provenance"),
+                 priceable=complete and getattr(error, "code", "") != "MODEL_MISMATCH")
+
+
+def _forward_failure(request_id, actor, agent_id, profile, started, key, error, *, parsed=None,
+                     settled=False, streaming=False):
+    """Preserve measured facts even when accounting itself is unavailable.
+
+    A failed atomic settlement remains unresolved; do not release its quota,
+    retry generation, disclose the answer, or expose storage/provider errors.
+    Request-state persistence is attempted independently of the failed ledger.
+    """
+    observation = parsed if parsed is not None else (
+        error.observation if isinstance(error, ModelResultError) else getattr(error, "model_observation", {}) or {})
+    complete = parsed is not None or (error.request_complete if isinstance(error, ModelResultError)
+                                    else bool(observation.get("request_complete", False)))
+    no_send = bool(getattr(error, "model_not_dispatched", False))
+    ledger_failed = bool(getattr(error, "model_ledger_failed", False))
+    if not settled:
+        try:
+            _failed_usage(request_id, actor, agent_id, profile, started, key, error, completed_result=parsed)
+        except Exception:
+            ledger_failed = True
+    status = "FAILED" if complete or no_send else "INCOMPLETE"
+    category = ("OBSERVATION_UNAVAILABLE" if ledger_failed else error.code if isinstance(error, ModelResultError)
+                else "FINALIZATION_FAILED" if parsed is not None else "NOT_DISPATCHED" if no_send
+                else "MODEL_RESULT_REJECTED" if complete else "GOVERNED_REQUEST_FAILED"
+                if isinstance(error, (model_governance_api.ModelGovernanceError, ModelUsageError))
+                else "STREAM_INTERRUPTED" if streaming else "PROVIDER_UNAVAILABLE")
+    failure = ModelUsageError("model provider result rejected: " + error.code if isinstance(error, ModelResultError)
+                              else "model provider streaming request failed" if streaming
+                              else "model provider request failed")
+    failure.model_ledger_failed = ledger_failed
+    failure.model_not_dispatched = no_send
+    failure.model_observation = {
+        "model": str(observation.get("model") or profile.get("model_id") or "")[:256],
+        "request_complete": complete,
+        "usage": normalize_usage(observation.get("usage")),
+        "usage_observation": "PROVIDER_REPORTED" if observation.get("usage_observation") == "PROVIDER_REPORTED" else "INCOMPLETE",
+        "usage_field_provenance": {"total_tokens": "SUM_OF_REPORTED_INPUT_OUTPUT"}
+            if (observation.get("usage_field_provenance") or {}).get("total_tokens") == "SUM_OF_REPORTED_INPUT_OUTPUT" else {},
+    }
+    try:
+        connection.execute("UPDATE CX_MODEL_REQUESTS SET STATUS=:status,ERROR_CATEGORY=:error,COMPLETED_AT=CURRENT_TIMESTAMP "
+                           "WHERE REQUEST_ID=:id AND STATUS<>'SUCCEEDED'",
+                           {"status": status, "error": category, "id": request_id})
+    except Exception:
+        # A complete storage outage cannot be recorded in that same store.
+        # Keep the occupied request and expose only a safe recovery flag.
+        failure.model_request_state_unavailable = True
+    return failure
+
+
 def forward(actor: str, provider_profile_id: str, messages: List[Dict[str, Any]], *, agent_id: str = "", stream: bool = False, idempotency_key: str = "", gateway_token: str = "", correlation_id: str = "") -> Dict[str, Any]:
+    if stream:
+        raise ModelUsageError("streaming forwarding requires stream_forward")
     context = _forward_context(actor, gateway_token, provider_profile_id, agent_id); actor = context["actor"]
     if not isinstance(messages, list) or not messages or len(messages) > 100:
         raise ModelUsageError("messages must contain between 1 and 100 items")
     profile = _row(connection.execute_query_one("SELECT PROFILE_ID,VERSION,PROFILE_KEY,PROVIDER_URL,MODEL_ID,STATUS,API_KEY_CIPHER FROM CX_LLM_PROVIDER_PROFILES WHERE PROFILE_ID=:id AND STATUS='ACTIVE'", {"id": provider_profile_id}))
     if not profile: raise ModelUsageError("LLM provider profile is unavailable")
     request_id = _id("LMR"); started = time.monotonic(); input_digest = _digest(messages)
-    replay = _idempotent_replay(actor, idempotency_key, input_digest)
+    replay = _idempotent_replay(actor, idempotency_key, input_digest, provider_profile_id, agent_id, context, gateway_token)
     if replay is not None:
         return replay
-    from .provider_capability_probes import apply_parameters
-    payload = json.dumps(apply_parameters(profile, {"model": profile.get("model_id"), "messages": messages, "stream": bool(stream), "stream_options": {"include_usage": True} if stream else None}), ensure_ascii=False).encode()
     _reserve_idempotency(actor, idempotency_key, input_digest)
     connection.execute("INSERT INTO CX_MODEL_REQUESTS(REQUEST_ID,ACTOR_PRINCIPAL_ID,AGENT_ID,PROFILE_ID,MODEL_ID,STATUS,IDEMPOTENCY_KEY,INPUT_DIGEST,CORRELATION_ID,CREDENTIAL_ID) VALUES(:id,:actor,:agent,:profile,:model,'AUTHORIZED',:key,:digest,:correlation,:credential)", {"id": request_id, "actor": actor, "agent": agent_id or None, "profile": provider_profile_id, "model": profile.get("model_id"), "key": idempotency_key[:160] or request_id, "digest": input_digest, "correlation": correlation_id[:128] or request_id, "credential": context["credential_id"] or None})
     try:
@@ -316,83 +472,61 @@ def forward(actor: str, provider_profile_id: str, messages: List[Dict[str, Any]]
     except model_governance_api.QuotaExceeded:
         connection.execute("UPDATE CX_MODEL_REQUESTS SET STATUS='QUOTA_REJECTED',ERROR_CATEGORY='QUOTA_EXCEEDED',COMPLETED_AT=CURRENT_TIMESTAMP WHERE REQUEST_ID=:id", {"id": request_id})
         raise
-    provider_url = str(profile.get("provider_url") or "").rstrip("/") + "/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    cipher = str(profile.get("api_key_cipher") or "")
-    if cipher:
-        from .connection_crypto import decrypt_section
-        secret = str(decrypt_section(cipher).get("api_key") or "")
-        if secret: headers["Authorization"] = "Bearer " + secret
-    req = urllib.request.Request(provider_url, data=payload, headers=headers, method="POST")
+    parsed, settled = None, False
     try:
-        with urllib.request.urlopen(req, timeout=request_timeout_seconds()) as response:
-            raw = response.read(1024 * 1024 + 1)
-        if len(raw) > 1024 * 1024:
-            raise ModelUsageError("model provider response exceeded the configured limit")
-        result = json.loads(raw.decode("utf-8"))
-        usage = _usage(result)
-        record = _write_usage(request_id, actor, agent_id, str(profile.get("profile_key") or provider_profile_id), str(result.get("model") or profile.get("model_id")), usage, "PROVIDER_REPORTED" if usage.get("total_tokens") is not None else "INCOMPLETE", started, "SUCCEEDED", idempotency_key)
-        response_payload = {"request_id": request_id, "model": result.get("model") or profile.get("model_id"), "choices": result.get("choices") or [], "usage": record, "quota_warnings": quota["warnings"], "correlation_id": correlation_id[:128] or request_id}
+        parsed = _gateway_send(actor, profile, messages, request_id, context, gateway_token, agent_id)
+        usage = parsed["usage"]
+        record = _write_usage(request_id, actor, agent_id, str(profile.get("profile_key") or provider_profile_id), parsed["model"], usage, "PROVIDER_REPORTED" if parsed["usage_observation"] == "PROVIDER_REPORTED" else "INCOMPLETE", started, "SUCCEEDED", idempotency_key, field_provenance=parsed.get("usage_field_provenance"))
+        settled = True
+        response_payload = {"request_id": request_id, "model": parsed["model"],
+                            "runtime_request_id": parsed.get("request_id"),
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": parsed["content"]},
+                                         "finish_reason": parsed["finish_reason"]}],
+                            "usage": record, "usage_observation": parsed["usage_observation"],
+                            "usage_field_provenance": parsed["usage_field_provenance"],
+                            "quota_warnings": quota["warnings"], "correlation_id": correlation_id[:128] or request_id}
         model_governance_api.finalize_replayable_success(request_id, response_payload)
         return response_payload
-    except (model_governance_api.ModelGovernanceError, ModelUsageError):
-        model_governance_api.release_quota(request_id)
-        connection.execute("UPDATE CX_MODEL_REQUESTS SET STATUS='FAILED',ERROR_CATEGORY='GOVERNED_REQUEST_FAILED',COMPLETED_AT=CURRENT_TIMESTAMP WHERE REQUEST_ID=:id AND STATUS<>'SUCCEEDED'", {"id": request_id})
-        raise
     except Exception as exc:
-        model_governance_api.release_quota(request_id)
-        connection.execute("UPDATE CX_MODEL_REQUESTS SET STATUS='FAILED',ERROR_CATEGORY='PROVIDER_UNAVAILABLE',COMPLETED_AT=CURRENT_TIMESTAMP WHERE REQUEST_ID=:id", {"id": request_id})
-        raise ModelUsageError("model provider request failed") from exc
+        raise _forward_failure(request_id, actor, agent_id, profile, started, idempotency_key, exc,
+                               parsed=parsed, settled=settled) from exc
 
 
 def stream_forward(actor: str, provider_profile_id: str, messages: List[Dict[str, Any]], *, agent_id: str = "", idempotency_key: str = "", gateway_token: str = "", correlation_id: str = "") -> Iterable[bytes]:
-    """Yield provider SSE data while reconciling terminal usage exactly once."""
+    """Validate a bounded complete stream before disclosing its safe content.
+
+    The Gateway, like native output, buffers for cross-chunk content inspection.
+    Hidden reasoning and malformed/partial events are never forwarded as text.
+    """
     context = _forward_context(actor, gateway_token, provider_profile_id, agent_id); actor = context["actor"]
     if not isinstance(messages, list) or not messages or len(messages) > 100:
         raise ModelUsageError("messages must contain between 1 and 100 items")
     profile = _row(connection.execute_query_one("SELECT PROFILE_ID,VERSION,PROFILE_KEY,PROVIDER_URL,MODEL_ID,STATUS,API_KEY_CIPHER FROM CX_LLM_PROVIDER_PROFILES WHERE PROFILE_ID=:id AND STATUS='ACTIVE'", {"id": provider_profile_id}))
     if not profile: raise ModelUsageError("LLM provider profile is unavailable")
     request_id, started, input_digest = _id("LMR"), time.monotonic(), _digest(messages)
-    from .provider_capability_probes import apply_parameters
-    payload = json.dumps(apply_parameters(profile, {"model": profile.get("model_id"), "messages": messages, "stream": True, "stream_options": {"include_usage": True}}), ensure_ascii=False).encode()
     _reserve_idempotency(actor, idempotency_key, input_digest)
-    connection.execute("INSERT INTO CX_MODEL_REQUESTS(REQUEST_ID,ACTOR_PRINCIPAL_ID,AGENT_ID,PROFILE_ID,MODEL_ID,STATUS,IDEMPOTENCY_KEY,INPUT_DIGEST,CORRELATION_ID,CREDENTIAL_ID) VALUES(:id,:actor,:agent,:profile,:model,'DISPATCHED',:key,:digest,:correlation,:credential)", {"id": request_id, "actor": actor, "agent": agent_id or None, "profile": provider_profile_id, "model": profile.get("model_id"), "key": idempotency_key[:160] or request_id, "digest": input_digest, "correlation": correlation_id[:128] or request_id, "credential": context["credential_id"] or None})
+    connection.execute("INSERT INTO CX_MODEL_REQUESTS(REQUEST_ID,ACTOR_PRINCIPAL_ID,AGENT_ID,PROFILE_ID,MODEL_ID,STATUS,IDEMPOTENCY_KEY,INPUT_DIGEST,CORRELATION_ID,CREDENTIAL_ID) VALUES(:id,:actor,:agent,:profile,:model,'AUTHORIZED',:key,:digest,:correlation,:credential)", {"id": request_id, "actor": actor, "agent": agent_id or None, "profile": provider_profile_id, "model": profile.get("model_id"), "key": idempotency_key[:160] or request_id, "digest": input_digest, "correlation": correlation_id[:128] or request_id, "credential": context["credential_id"] or None})
     try:
         model_governance_api.reserve_quota(request_id, actor, context["credential_id"], agent_id, provider_profile_id, str(profile.get("model_id") or ""))
     except model_governance_api.QuotaExceeded:
         connection.execute("UPDATE CX_MODEL_REQUESTS SET STATUS='QUOTA_REJECTED',ERROR_CATEGORY='QUOTA_EXCEEDED',COMPLETED_AT=CURRENT_TIMESTAMP WHERE REQUEST_ID=:id", {"id": request_id})
         raise
-    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
-    cipher = str(profile.get("api_key_cipher") or "")
-    if cipher:
-        from .connection_crypto import decrypt_section
-        secret = str(decrypt_section(cipher).get("api_key") or "")
-        if secret: headers["Authorization"] = "Bearer " + secret
-    request = urllib.request.Request(str(profile.get("provider_url") or "").rstrip("/") + "/chat/completions", data=payload, headers=headers, method="POST")
-    terminal: Dict[str, Any] = {}
-    streamed_bytes = 0
+    parsed, settled = None, False
     try:
-        with urllib.request.urlopen(request, timeout=request_timeout_seconds()) as response:
-            for raw in response:
-                streamed_bytes += len(raw)
-                if len(raw) > 256 * 1024 or streamed_bytes > 8 * 1024 * 1024:
-                    raise ModelUsageError("model provider stream exceeded the configured limit")
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"): continue
-                item = line[5:].strip()
-                if item != "[DONE]":
-                    try:
-                        payload_item = json.loads(item)
-                        if payload_item.get("usage"): terminal = payload_item
-                    except (TypeError, ValueError): pass
-                yield ("data: " + item + "\n\n").encode("utf-8")
-        usage = _usage(terminal)
-        _write_usage(request_id, actor, agent_id, str(profile.get("profile_key") or provider_profile_id), str(terminal.get("model") or profile.get("model_id")), usage, "PROVIDER_REPORTED" if usage.get("total_tokens") is not None else "INCOMPLETE", started, "SUCCEEDED", idempotency_key)
+        parsed = _gateway_send(actor, profile, messages, request_id, context, gateway_token, agent_id, stream=True)
+        usage = parsed["usage"]
+        _write_usage(request_id, actor, agent_id, str(profile.get("profile_key") or provider_profile_id), parsed["model"], usage, "PROVIDER_REPORTED" if parsed["usage_observation"] == "PROVIDER_REPORTED" else "INCOMPLETE", started, "SUCCEEDED", idempotency_key, field_provenance=parsed.get("usage_field_provenance"))
+        settled = True
         connection.execute("UPDATE CX_MODEL_REQUESTS SET STATUS='SUCCEEDED',COMPLETED_AT=CURRENT_TIMESTAMP WHERE REQUEST_ID=:id", {"id": request_id})
+        # Emit only the validated contract, not arbitrary provider properties.
+        for event in ({"model": parsed["model"], "choices": [{"index": 0, "delta": {"content": parsed["content"]}, "finish_reason": None}]},
+                      {"model": parsed["model"], "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                      {"model": parsed["model"], "choices": [], "usage": usage}):
+            yield ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode("utf-8")
+        yield b"data: [DONE]\n\n"
     except Exception as exc:
-        model_governance_api.settle_quota(request_id, None, None, "", incomplete=True)
-        connection.execute("UPDATE CX_MODEL_REQUESTS SET STATUS='INCOMPLETE',ERROR_CATEGORY='STREAM_INTERRUPTED',COMPLETED_AT=CURRENT_TIMESTAMP WHERE REQUEST_ID=:id", {"id": request_id})
-        raise ModelUsageError("model provider streaming request failed") from exc
+        raise _forward_failure(request_id, actor, agent_id, profile, started, idempotency_key, exc,
+                               parsed=parsed, settled=settled, streaming=True) from exc
 
 
 def usage_summary(actor: str, limit: int = 30, resource_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

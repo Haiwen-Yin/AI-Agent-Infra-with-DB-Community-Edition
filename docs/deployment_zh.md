@@ -1,4 +1,4 @@
-# 部署指南 v5.0.1
+# 部署指南 v5.0.2
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -134,6 +134,28 @@ v5.0.0 终点为 `102_v5_0_0_network_access.sql`；v5.0.1 在该校验绑定链�
 `105_v5_0_1_answer_quality.sql`，各自包含本底座的结构清单。以确切包版本生成的
 baseline 为准，历史 SQL 的版本号和校验和保持原值。
 
+v5.0.2 清单新增 `106_v5_0_2_model_capacity.sql`、
+`107_v5_0_2_processing_recovery.sql`、`108_v5_0_2_governed_model_turns.sql`，
+以及 `109_v5_0_2_observed_answer_reviews.sql`，每条迁移均携带三库各自的结构清单。
+108 继续承载结构化与受控模型回合，109 新增已观测回答的不可变 Human 审核记录。
+PostgreSQL 另加 110 号迁移，修复历史组织审批实体约束重叠，终点为 110，
+部署后核验完整 103–110 尾链。Oracle、YashanDB 终点仍为 109，核验 103–109。
+PostgreSQL 修复保留四种受支持实体、非法类型拒绝、审批状态和正常决定权限；
+遇到未知约束定义应停止部署。历史 SQL 及校验和保持原值。
+声明的 v5.0.1 转换先检查 103–105 的实际结构、APPLIED
+状态及确切校验和，再应用新链。新增表继续保持业务 Agent 原生 SQL 拒绝和原生
+不可变历史；结构链不完整时不能启动新运行路径。详见
+[模型容量](model-endpoint-capacity_zh.md)、[处理恢复](processing-recovery_zh.md)及
+[受控模型工作流](model-workflows_zh.md)。安装契约不会默认启用模型、工具、框架
+或新增受控能力。
+
+109 保存 typed 原始观测和人工决定；导入观测不会请求模型，也不会建立原生回答
+质量生成任务。Dashboard 接口要求真实、有效的 Human Session、当前
+`platform.manage`，并复查安全域、Agent/Profile 修订及原来源权限；POST 请求
+校验 CSRF。审核人必须同时区别于登记人和原责任主体。不可变事实与必须审计在
+同一事务提交。当前权限下读取/导出、原始捕获证据的独立核验仍各自必需；记录了
+审核不代表最终发布验收已完成。详见[已观测回答审核接口](api-reference_zh.md#已观测回答的-human-审核)。
+
 v5.0.1 部署后同时检查时间/便签/复盘、上下文/资产/来源、回答质量的实际对象、
 APPLIED 记录及脚本摘要；不能用终点 105 的账本记录代替缺失的 103、104 结构。
 这些服务不能对旧结构启动。已有数据、业务 Agent 原生 SQL 拒绝以及原 Task/Step/
@@ -144,7 +166,7 @@ APPLIED 记录及脚本摘要；不能用终点 105 的账本记录代替缺失�
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ```
@@ -168,7 +190,7 @@ bash scripts/install_platform.sh initialize \
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config "$CX_CONFIG_PATH"
 ./start_web_server.sh start
 ./start_web_server.sh status

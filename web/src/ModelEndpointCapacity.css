@@ -1,0 +1,43 @@
+.model-capacity,
+.model-runtime-observations {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.model-capacity fieldset,
+.model-capacity .workbench-field,
+.model-capacity input,
+.model-capacity select {
+  min-width: 0;
+  max-width: 100%;
+}
+.model-runtime-observations fieldset,
+.model-runtime-observations input,
+.model-runtime-observations select {
+  min-width: 0;
+  max-width: 100%;
+}
+.model-runtime-observations button { white-space: normal; }
+.model-capacity details > summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+.model-capacity button {
+  white-space: normal;
+}
+.model-runtime-observations article {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.model-runtime-observations dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 6px 12px;
+}
+.model-runtime-observations dd { margin: 0; }
+@media (max-width: 600px) {
+  .model-runtime-observations dl { grid-template-columns: minmax(0, 1fr); }
+  .model-runtime-observations dd { margin-bottom: 6px; }
+}

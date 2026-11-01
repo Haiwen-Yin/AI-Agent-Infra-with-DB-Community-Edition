@@ -102,7 +102,13 @@ def test_no_match_uses_model_without_disclosure_approval(store):
     value = payload(store)
     assert not value.get('knowledge_reply')
     assert not value.get('knowledge_citations')
-    assert 'general model knowledge' in value['messages'][0]['content']
+    assert value['answer_source'] == 'MODEL_SUPPLEMENT'
+    assert [message['role'] for message in value['messages']] == ['system', 'user']
+    assert value['messages'][1] == {'role': 'user', 'content': 'Please answer'}
+    instruction = value['messages'][0]['content'].casefold()
+    assert 'general knowledge' in instruction
+    assert 'do not invent citations' in instruction
+    assert 'Please answer' not in value['messages'][0]['content']
     store.execute("UPDATE CX_RUNTIME_EXECUTIONS SET STATUS='CLAIMED'")
     business.validate_response('agent', 'channel', result['execution_id'])
 
@@ -123,7 +129,13 @@ def test_filtered_private_sources_use_general_model_only(sources, monkeypatch):
     assert not value.get('knowledge_reply')
     assert not value.get('knowledge_citations')
     assert 'private source' not in json.dumps(value['messages'])
-    assert 'general model knowledge' in value['messages'][0]['content']
+    assert value['answer_source'] == 'MODEL_SUPPLEMENT'
+    assert [message['role'] for message in value['messages']] == ['system', 'user']
+    assert value['messages'][1] == {'role': 'user', 'content': 'Please answer'}
+    instruction = value['messages'][0]['content'].casefold()
+    assert 'general knowledge' in instruction
+    assert 'do not invent citations' in instruction
+    assert 'Please answer' not in value['messages'][0]['content']
 
 
 def test_legacy_queued_knowledge_is_not_sent(sources):

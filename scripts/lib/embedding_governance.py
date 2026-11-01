@@ -198,13 +198,16 @@ def _validated_dimension(value: Any, mode: str) -> int:
 
 
 def _canonical_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    normalize = profile.get("normalize_vectors", True)
+    if isinstance(normalize, str) and normalize.strip().upper() in {"Y", "N"}:
+        normalize = normalize.strip().upper() == "Y"
     return {
         "provider_identity": _text(profile.get("provider_url"), 512).rstrip("/"),
         "model_id": _text(profile.get("model_id"), 256),
         "model_fingerprint": _text(profile.get("model_fingerprint"), 256),
         "dimension": int(profile.get("dimension") or 0),
         "distance_metric": _text(profile.get("distance_metric") or "COSINE", 32).upper(),
-        "normalize_vectors": "Y" if bool(profile.get("normalize_vectors", True)) else "N",
+        "normalize_vectors": "Y" if bool(normalize) else "N",
         "preprocessing": profile.get("preprocessing") if isinstance(profile.get("preprocessing"), dict) else _parse(profile.get("preprocessing_json"), {}),
         "modalities": profile.get("modalities") if isinstance(profile.get("modalities"), list) else _parse(profile.get("modalities_json"), ["TEXT"]),
         "execution_mode": _validated_mode(profile.get("execution_mode")),
@@ -225,12 +228,53 @@ def _contract_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _same_profile_configuration(existing: Dict[str, Any], params: Dict[str, Any], api_key: str) -> bool:
+    """Compare the locked saved configuration without rewriting its credentials."""
+    columns = {
+        "provider_url": "provider_url", "model_id": "model_id", "model_fingerprint": "model_fingerprint",
+        "secret_reference": "secret_ref", "execution_mode": "execution_mode", "dimension": "embedding_dimension",
+        "distance_metric": "metric", "normalize_vectors": "normalize_value",
+    }
+    if existing.get("status") != "ACTIVE":
+        return False
+    for column, parameter in columns.items():
+        stored = existing.get(column)
+        if column in {"provider_url", "model_fingerprint", "secret_reference"} and stored == "":
+            stored = None
+        if stored != params[parameter]:
+            return False
+    for column in ("preprocessing_json", "modalities_json"):
+        stored = existing.get(column)
+        try:
+            decoded = stored if isinstance(stored, (dict, list)) else json.loads(stored)
+            if _json(decoded) != params[column]:
+                return False
+        except (TypeError, ValueError):
+            return False
+    # An omitted key preserves the existing encrypted value, as on an ordinary
+    # update. A supplied replacement must prove plaintext equality; randomized
+    # encryption and the public vector-space digest cannot establish it.
+    if api_key:
+        cipher = existing.get("api_key_cipher")
+        if not cipher:
+            return False
+        from .connection_crypto import decrypt_section
+        try:
+            credentials = decrypt_section(cipher)
+        except (TypeError, ValueError):
+            return False
+        saved_key = credentials.get("api_key") if isinstance(credentials, dict) else None
+        if not isinstance(saved_key, str) or not secrets.compare_digest(saved_key.encode("utf-8"), api_key.encode("utf-8")):
+            return False
+    return True
+
+
 def upsert_profile(actor: str, *, profile_key: str, provider_url: str, model_id: str,
                    execution_mode: str, dimension: int, distance_metric: str = "COSINE",
                    normalize_vectors: bool = True, preprocessing: Optional[Dict[str, Any]] = None,
                    modalities: Optional[List[str]] = None, api_key: str = "",
                    secret_reference: str = "", reason: str = "", expected_version: Optional[int] = None,
-                   model_fingerprint: str = "") -> Dict[str, Any]:
+                   model_fingerprint: str = "", reuse_unchanged: bool = False) -> Dict[str, Any]:
     key = _text(profile_key, 128)
     mode = _validated_mode(execution_mode)
     if not key or len(_text(reason, 2000)) < 3:
@@ -260,8 +304,12 @@ def upsert_profile(actor: str, *, profile_key: str, provider_url: str, model_id:
     }
 
     def work(tx: Any) -> Dict[str, Any]:
+        columns = "PROFILE_ID,VERSION"
+        if reuse_unchanged:
+            columns += (",PROVIDER_URL,MODEL_ID,MODEL_FINGERPRINT,API_KEY_CIPHER,SECRET_REFERENCE,EXECUTION_MODE,"
+                        "DIMENSION,DISTANCE_METRIC,NORMALIZE_VECTORS,PREPROCESSING_JSON,MODALITIES_JSON,STATUS")
         existing = _row(tx.query_one(
-            "SELECT PROFILE_ID,VERSION FROM CX_EMBEDDING_PROFILES WHERE PROFILE_KEY=:key FOR UPDATE",
+            "SELECT " + columns + " FROM CX_EMBEDDING_PROFILES WHERE PROFILE_KEY=:key FOR UPDATE",
             {"key": key},
         ))
         if existing and expected_version is not None and int(existing.get("version") or 0) != int(expected_version):
@@ -275,6 +323,10 @@ def upsert_profile(actor: str, *, profile_key: str, provider_url: str, model_id:
             "preprocessing_json": _json(payload["preprocessing"]), "modalities_json": _json(normalized_modalities),
             "updated_by": actor, "update_reason": _text(reason, 2000), "profile_version": version,
         }
+        if existing and reuse_unchanged and _same_profile_configuration(existing, params, api_key):
+            _audit(tx, actor, "EMBEDDING_PROFILE_REUSE", "EMBEDDING_PROFILE", params["profile_id"], "ALLOW", params["update_reason"])
+            return {"profile_id": params["profile_id"], "profile_key": key, "version": int(existing["version"]),
+                    "status": "ACTIVE", "idempotent": True}
         if existing:
             secret_sql = ",API_KEY_CIPHER=:api_cipher" if cipher else ""
             update_params = {name: value for name, value in params.items() if name not in {"profile_key", "api_cipher"}}

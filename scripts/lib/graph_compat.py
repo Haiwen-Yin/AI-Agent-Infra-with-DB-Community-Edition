@@ -611,7 +611,10 @@ def _drain_control_nodes(run_id: str, actor_id: str, worker_id: str) -> None:
 
 
 def _start_graph_run(kind: str, legacy_id: str, binding: Dict[str, Any], actor_id: str,
-                     initial_state: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                     initial_state: Optional[Dict[str, Any]] = None, *,
+                     processing_domain_id: Optional[str] = None,
+                     canonical_task_id: Optional[str] = None,
+                     processing_parent_run_id: Optional[str] = None) -> Optional[str]:
     from . import graph_definition_api, graph_runtime
     version = graph_definition_api.get_version(str(binding.get("graph_version_id")), include_topology=True)
     if not version or not version.get("plan_id"):
@@ -625,6 +628,8 @@ def _start_graph_run(kind: str, legacy_id: str, binding: Dict[str, Any], actor_i
         str(binding["graph_version_id"]), str(version["plan_id"]), actor_id,
         initial_state=initial_state or {}, budget=version.get("budget") or {},
         idempotency_key=f"compat:{kind}:{legacy_id}:{uuid.uuid4().hex}",
+        processing_domain_id=processing_domain_id, canonical_task_id=canonical_task_id,
+        processing_parent_run_id=processing_parent_run_id,
     )
     _upsert_binding(kind, legacy_id, str(binding["graph_id"]),
                     graph_version_id=str(binding["graph_version_id"]), graph_run_id=run_id,
@@ -638,7 +643,8 @@ def start_task_plan(plan: Dict[str, Any], steps: Iterable[Dict[str, Any]], actor
     if not binding:
         return None
     return _start_graph_run("TASK_PLAN", str(plan["plan_id"]), binding, actor_id,
-                            {"legacy_kind": "TASK_PLAN", "legacy_id": str(plan["plan_id"])})
+                            {"legacy_kind": "TASK_PLAN", "legacy_id": str(plan["plan_id"])},
+                            canonical_task_id=str(plan["plan_id"]))
 
 
 def _complete_compat_node(kind: str, legacy_id: str, node_key: str, actor_id: str,
@@ -682,7 +688,10 @@ def sync_task_step(step: Dict[str, Any], status: str, actor_id: str, output: Opt
     )
 
 
-def start_loop_run(run: Dict[str, Any], loop: Dict[str, Any], actor_id: str) -> Optional[str]:
+def start_loop_run(run: Dict[str, Any], loop: Dict[str, Any], actor_id: str, *,
+                   processing_domain_id: Optional[str] = None,
+                   canonical_task_id: Optional[str] = None,
+                   processing_parent_run_id: Optional[str] = None) -> Optional[str]:
     binding = ensure_loop_graph(loop)
     if not binding:
         return None
@@ -697,6 +706,8 @@ def start_loop_run(run: Dict[str, Any], loop: Dict[str, Any], actor_id: str) -> 
     return _start_graph_run(
         "LOOP_RUN", legacy_run_id, run_binding, actor_id,
         {"legacy_kind": "LOOP_RUN", "legacy_id": legacy_run_id, "loop_continue": True},
+        processing_domain_id=processing_domain_id, canonical_task_id=canonical_task_id,
+        processing_parent_run_id=processing_parent_run_id,
     )
 
 

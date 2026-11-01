@@ -51,13 +51,17 @@ def test_input_denied_before_network(monkeypatch):
 
 
 def test_credential_split_across_chunks_releases_nothing(monkeypatch):
+    from lib import model_dispatch, model_coordinator_origin
+    monkeypatch.setattr(model_dispatch, "_lookup", lambda profile: None)
+    monkeypatch.setattr(model_coordinator_origin, "selected_route", lambda profile: None)
     class Response:
         def __enter__(self): return self
         def __exit__(self, *_): return False
         def __iter__(self):
             for piece in ["Safe introduction. ", "-----BEGIN ", "PRIVATE", " KEY-----"]:
-                yield ("data: " + json.dumps({"model": "test", "choices": [{"delta": {"content": piece}}]}) + "\n").encode()
-            yield b"data: [DONE]\n"
+                yield ("data: " + json.dumps({"model": "test", "choices": [{"delta": {"content": piece}}]}) + "\n\n").encode()
+            yield b'data: {"model":"test","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            yield b"data: [DONE]\n\n"
     monkeypatch.setattr(native_runtime.urllib.request, "urlopen", lambda *_a, **_k: Response())
     delivered = []
     with pytest.raises(security.ContentDenied):

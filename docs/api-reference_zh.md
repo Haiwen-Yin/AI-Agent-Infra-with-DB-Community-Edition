@@ -1,4 +1,4 @@
-# API 参考 v5.0.1
+# API 参考 v5.0.2
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -206,4 +206,85 @@ API 行为必须针对当前运行的包进行验证。历史
 `GET /api/platform/ip-access`、`POST /api/platform/ip-access/preview` 和
 `PUT /api/platform/ip-access` 需要 `platform.manage`，写入校验 CSRF。
 参数、来源判断及应急恢复见[访问 IP 限制](source-ip-access_zh.md)。
+
+## 模型运行与处理契约
+
+v5.0.2 运行时要求完整前置链及迁移 106–109；PostgreSQL 另需 110 号迁移，
+确保组织审批实体约束兼容。PostgreSQL 核验完整 103–110 尾链，
+Oracle、YashanDB 核验 103–109。历史运行包不挂载新增容量与处理
+路由。路由权限只是前置，每次操作仍检查原资源、原凭据和当前策略。
+
+| 方法与路径 | 用途 |
+|---|---|
+| `GET/POST /api/model-endpoint-capacity/groups` | 管理权限下分页读取模型资源，或显式登记。 |
+| `GET /api/model-endpoint-capacity/groups/{group_id}` | 读取当前策略、参与主体、别名与占用。 |
+| `GET /api/model-endpoint-capacity/groups/{group_id}/admissions?after_sequence=...&limit=20` | 管理权限下读取请求元数据，单页最多 50 条。 |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/revisions` | 带预期版本、原因和幂等键修改容量与时限。 |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/origins` | 登记确切请求主体。 |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/origins/{origin_id}/state` | 按预期版本改变参与状态。 |
+| `POST /api/model-endpoint-capacity/groups/{group_id}/aliases` | 绑定端点别名与已保存的 Profile 修订。 |
+| `GET /api/model-endpoint-capacity/admissions/{admission_id}` | 读取本人确切已授权请求。 |
+| `GET /api/model-endpoint-capacity/admin/admissions/{admission_id}` | 管理权限下检查请求。 |
+| `POST /api/model-gateway/coordinator-bindings` | 管理员登记精确中央容量、参与方、Gateway 凭据和两边 Profile 版本。 |
+| `POST /api/model-gateway/coordinator-routes` | 管理员登记本地 Profile 到固定协调器的路由。 |
+| `GET /api/model-gateway/origin-requests/{receipt_id}` | 原主体读取本地远程请求回执、不可变观测及独立处理记录。 |
+| `POST /api/model-gateway/origin-requests/{receipt_id}/reconcile` | 读取原登记协调器的精确传输证据，再复查本地业务权限并保存独立记录；不发起模型请求或重试。 |
+| `POST /api/model-endpoint-capacity/admissions/{admission_id}/cancel` | 记录排队取消或派发后的本地取消。 |
+| `POST /api/model-endpoint-capacity/admissions/{admission_id}/reconcile` | 对原未知请求记录明确人工确认。 |
+| `GET /api/agent-extensions/executions/{execution_id}/progress` | 读取原执行的处理与模型观测。 |
+| `GET /api/agent-extensions/processing/{continuity_id}?after=...&limit=100` | 读取最多 100 条处理观测，不修复、不生成。 |
+| `POST /api/agent-extensions/processing/retries` | 由有效 Human 接纳精确、有界的恢复。 |
+| `POST /api/agent-extensions/processing/blocks/{block_id}/reconcile` | 读取原证据，或记录明确人工核对决定。 |
+| `POST /api/agent-extensions/processing/recoveries/{recovery_id}/dispatch` | 通过原可信适配器显式派发，请求体为空对象。 |
+
+容量管理需要 `model_gateway.manage`；本人请求读取与取消需要
+`model_gateway.forward` 及归属校验。处理读取需要 `workspaces.read`；恢复决定
+需要 `workspaces.write`、有效 Human 和当前原业务权限。会话写入校验 CSRF。
+admission ID、correlation ID、恢复回执或幂等键都不能作为访问凭据。Gateway
+重放保留原 Profile、Agent 和凭据边界，读取旧响应前重新检查当前权限。
+
+协调器登记还需要 `platform.manage`。本地远程回执读取需要 `workspaces.read`；
+明确核对需要 `agents.operate`，并通过原业务适配器重新验证当前权限。
+固定协调器的预留、完成、观测及取消入口使用原登记 `cxgw_` 机器凭据认证，
+不能沿用另一安装的浏览器会话。传输终止与模型响应完整分别记录；核对不会改写
+历史未知观测，也不代表内容审核通过。
+
+只有未使用的准入记录取消能证明没有发送。关闭派发后的本地连接不证明远端已
+停止；未知请求继续占用容量，直至取得原请求结束证据或明确人工决定。接纳恢复、
+实际派发、Task 完成与独立内容审核分别记录。
+
+用量区分未观测与已测零值，缓存和推理明细属于输入或输出，不重复相加。时长说明
+客户端观测位置，不推算 Provider 的 prefill/decode。元数据不包含提示词、回答、
+凭据或隐藏推理正文。详见[容量](model-endpoint-capacity_zh.md)、
+[处理恢复](processing-recovery_zh.md)、[结构化与工具工作流](model-workflows_zh.md)
+及[分版本 MCP](mcp-versioned-interoperability_zh.md)。
+
+## 已观测回答的 Human 审核
+
+109 号迁移为 v5.0.2 安装新增 `/api/observed-answer-reviews`。这些 Dashboard
+接口导入已完成回答的 typed 原始观测，并记录独立 Human 决定；不会请求模型
+生成，也不会把导入记录转换为原生回答质量生成任务。v5.0.1 原始观测可在升级
+到 v5.0.2 后登记，不改写 v5.0.1 包。
+
+| 方法与路径 | 用途与请求 |
+|---|---|
+| `POST /api/observed-answer-reviews/sets` | 提交 `{packet, reason}`。typed packet 绑定版本、阶段、目标、fresh/upgrade、generation、包/策略/报告摘要，以及每条原输出、责任主体、安全域、Agent/Profile 修订、query 和观测。 |
+| `GET /api/observed-answer-reviews/sets/{set_id}` | 在当前权限下读取原 packet 和已有审核。 |
+| `POST /api/observed-answer-reviews/sets/{set_id}/outputs/{key}/reviews` | 提交 `{output_digest, factual_correct, citations_supported, reason}`，针对该条精确输出；两个决定必须为 JSON 布尔值，审核原因需包含 3–1000 个字符并有实际内容。 |
+| `GET /api/observed-answer-reviews/sets/{set_id}/export` | 在当前权限下导出原不可变集合、输出、审核及必须审计事实；导出不声明可发布状态。 |
+
+四条路由均要求当前 `platform.manage`、有效 Human 主体和原真实 Dashboard
+Session。POST 请求还需该会话的 `X-CSRF-Token`，Gateway 凭据不能替代。
+每次操作重新检查安全域成员关系、原有效 Agent 的可见性、绑定的确切健康
+Profile 修订、当前 Knowledge 读取/引用权限交集，以及实际披露的精确上下文
+来源。修订过时或权限失效时拒绝披露或审核。
+
+审核人必须同时区别于登记人和原责任主体。`output_digest` 取自所选输出的
+已授权导出，绑定完整 canonical typed Observation 行，不能只对答案正文计算
+摘要。登记与审核保存真实 Session 事实，不可变记录和必须审计在同一事务提交；
+客户端标记或导入的评价不能替代 Human 审核。
+
+发布验证仍需独立核验原始捕获、确切包身份和矩阵覆盖。私有原生观察器可以在
+测试主体清理后保留历史审核事实，但这不授权后续 HTTP 读取。导入、记录人工
+审核与最终发布验收是分别需要证明的事实。
 

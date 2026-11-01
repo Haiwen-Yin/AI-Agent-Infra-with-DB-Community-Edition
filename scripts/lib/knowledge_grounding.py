@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import connection, content_security, identity_api, knowledge_api, agent_registration
+from . import connection, content_security, identity_api, knowledge_api, agent_registration, answer_query
 
 RETRIEVAL_POLICY = "authorized-rrf-v1"
 RRF_CONSTANT = 60
@@ -18,53 +18,32 @@ class GroundingError(ValueError):
     pass
 
 
-# Conversational filler is not evidence of subject relevance. In particular,
-# matching "in"/"one"/"explain" previously returned unrelated enterprise text.
-_QUERY_STOP_WORDS = frozenset('a an the and or of to in on at for from with by '
-    'is are was were be been being it its this that these those i me my we our '
-    'you your they their what which who when where why how can could would should '
-    'do does did please explain describe tell about one sentence sentences briefly'.split())
-
-
 def _search_terms(query: str) -> list[str]:
-    # Keep Chinese subjects intact: a shared fragment such as 公司 must not
-    # make 甲骨文公司 match an unrelated company policy. Strip only anchored
-    # conversational wrappers, never arbitrary characters inside the subject.
-    terms = []
-    for term in re.findall(r'[a-z0-9_]{2,}|[\u4e00-\u9fff]{2,}', query.lower()):
-        if re.fullmatch(r'[\u4e00-\u9fff]+', term):
-            previous = None
-            while term != previous:
-                previous = term
-                term = re.sub(r'^(?:请问|请|帮我|给我|麻烦|我想了解|想了解|查询一下|查询|查一下|介绍一下|介绍|解释一下|解释|告诉我|了解一下|了解|关于)', '', term)
-                term = re.sub(r'(?:是什么|有哪些功能|有什么功能|的相关信息|的基本情况|的信息|的情况|怎么样)$', '', term)
-        if len(term) >= 2 and term not in _QUERY_STOP_WORDS:
-            terms.append(term)
-    return list(dict.fromkeys(terms))
+    return answer_query.interpret(query).terms
 
 
 def _matches_subject(item: dict[str, Any], terms: list[str]) -> bool:
     # Summary is candidate metadata, not the title/content sent to the model.
     # Require the actual authorized source to support every subject term.
     text = (str(item.get('title') or '') + '\n' + str(item.get('content') or '')).lower()
-    return all(bool(re.search(r'(?<![a-z0-9_])' + re.escape(term) + r'(?![a-z0-9_])', text))
-               if re.fullmatch(r'[a-z0-9_]+', term) else term in text for term in terms)
+    return all(answer_query.supports_term(text, term) for term in terms)
 
 
-def require_reader(actor: str, agent: str) -> None:
+def require_reader(actor: str, agent: str, *, transaction=None) -> None:
     if not actor or not agent:
         raise PermissionError("Authenticated user and Agent are required")
     for principal in {actor, agent}:
         if identity_api.effective_access(principal, "knowledge.read").get("decision") != "ALLOW":
             raise PermissionError("Knowledge access is unavailable")
-        row = connection.execute_query_one("SELECT STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:id", {"id": principal})
+        query = transaction.query_one if transaction is not None else connection.execute_query_one
+        row = query("SELECT STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:id", {"id": principal})
         if row:
             if str(next((v for k, v in row.items() if k.lower() == "status"), "")).upper() != "ACTIVE":
                 raise PermissionError("Knowledge principal is inactive")
         elif principal == agent:
             # Pool Agents may expose a registry alias instead of a principal id.
             # Their admission is authoritative in the registration inventory.
-            registration = agent_registration.get_registration(principal)
+            registration = agent_registration.get_registration(principal, **({"transaction": transaction} if transaction is not None else {}))
             if not registration or str(registration.get("status") or "").upper() != "ACTIVE":
                 raise PermissionError("Knowledge Agent is inactive")
         else:
@@ -84,10 +63,11 @@ def _valid(item: dict[str, Any]) -> bool:
         return False
 
 
-def citation(actor: str, agent: str, entity_id: str, expected_digest: str = "") -> dict[str, Any]:
-    require_reader(actor, agent)
-    item = knowledge_api.get_knowledge(entity_id, principal_id=actor)
-    delegated = knowledge_api.get_knowledge(entity_id, principal_id=agent)
+def citation(actor: str, agent: str, entity_id: str, expected_digest: str = "", *, transaction=None) -> dict[str, Any]:
+    options = {"transaction": transaction} if transaction is not None else {}
+    require_reader(actor, agent, **options)
+    item = knowledge_api.get_knowledge(entity_id, principal_id=actor, **options)
+    delegated = knowledge_api.get_knowledge(entity_id, principal_id=agent, **options)
     if not item or not delegated or not _valid(item) or not _valid(delegated):
         raise PermissionError("Knowledge is unavailable")
     content = str(item.get("content") or "")

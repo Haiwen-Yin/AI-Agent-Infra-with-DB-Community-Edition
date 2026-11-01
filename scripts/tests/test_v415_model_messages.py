@@ -6,6 +6,9 @@ from lib import native_runtime
 
 @pytest.mark.parametrize("stream", [False, True])
 def test_provider_receives_one_leading_system_message(monkeypatch, stream):
+    from lib import model_dispatch, model_coordinator_origin
+    monkeypatch.setattr(model_dispatch,'_lookup',lambda _:None)
+    monkeypatch.setattr(model_coordinator_origin, "selected_route", lambda profile: None)
     messages = [{"role": "system", "content": "Rules"},
                 {"role": "system", "content": "Quoted reference data"},
                 {"role": "user", "content": "Question"}]
@@ -15,9 +18,10 @@ def test_provider_receives_one_leading_system_message(monkeypatch, stream):
         def __enter__(self): return self
         def __exit__(self, *_): return False
         def read(self, *_):
-            return json.dumps({"model": "demo", "choices": [{"message": {"content": "42"}}]}).encode()
+            return json.dumps({"model": "demo", "choices": [{"message": {"content": "42"}, "finish_reason": "stop"}]}).encode()
         def __iter__(self):
-            yield b'data: {"choices":[{"delta":{"content":"42"}}]}\n'
+            yield b'data: {"model":"demo","choices":[{"delta":{"content":"42"}}]}\n'
+            yield b'data: {"model":"demo","choices":[{"delta":{},"finish_reason":"stop"}]}\n'
             yield b'data: [DONE]\n'
 
     def open_request(request, **_):

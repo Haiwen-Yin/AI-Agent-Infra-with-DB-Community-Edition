@@ -1,0 +1,7 @@
+.continuity-quality-panel :is(pre, code, dd) { max-width: 100%; overflow-wrap: anywhere; }
+.continuity-quality-panel pre { white-space: pre-wrap; overflow: auto; }
+.continuity-quality-panel fieldset { min-width: 0; }
+.model-tool-workflow dd { margin-inline-start: 0; margin-block-end: 12px; }
+.model-tool-workflow dt { color: var(--muted); font-size: 12px; }
+.model-tool-workflow > .secondary-button { margin-block-end: 16px; }
+.retrospective-output-contract { grid-column: 1 / -1; }

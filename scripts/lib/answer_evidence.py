@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from . import answer_query
 
-POLICY_REVISION = "answer-evidence-v1"
+POLICY_REVISION = "answer-evidence-v2"
 
 # These identity aliases describe a single subject, never a search permission.
 _COMPANY_ALIASES = ("oracle corporation", "oracle corp", "甲骨文公司", "甲骨文")
@@ -24,7 +25,7 @@ _FACETS = {
 
 
 def _contains(text, token):
-    return bool(re.search(r"(?<![a-z0-9_])" + re.escape(token) + r"(?![a-z0-9_])", text)) if token.isascii() else token in text
+    return answer_query.supports_term(text, token)
 
 
 def subject_aliases(question):
@@ -47,12 +48,12 @@ def _subject_terms(question, terms, facets):
     """Separate recognized requested attributes from the entity identifier."""
     result = []
     for term in terms:
-        if any(term in _FACETS[facet] for facet in facets):
+        if any(term in _FACETS.get(facet, ()) for facet in facets):
             continue
         # Chinese questions lack whitespace. Strip only a recognized trailing
         # attribute and its possessive separator, retaining the whole subject.
         for facet in facets:
-            for alias in _FACETS[facet]:
+            for alias in _FACETS.get(facet, ()):
                 if not alias.isascii():
                     term = re.sub(r"(?:的|如何|怎么|怎样)?" + re.escape(alias) + r"(?:情况|信息|说明|方式|流程)?$", "", term)
                     term = re.sub(r"^(?:如何|怎么|怎样)" + re.escape(alias), "", term)
@@ -103,13 +104,14 @@ def _conflicts(items):
 
 def assess(question, candidates):
     """Select usable evidence conservatively without consulting rank scores."""
-    from .knowledge_grounding import _search_terms
-    terms = _search_terms(question)
+    interpretation = answer_query.interpret(question)
+    terms = interpretation.terms
     query = question.casefold()
     company = any(_contains(query, alias) for alias in _COMPANY_ALIASES)
     facets = [key for key, aliases in _FACETS.items() if any(_contains(query, alias) for alias in aliases)]
+    facets = list(dict.fromkeys([*facets, *interpretation.attributes]))
     subject_terms = _subject_terms(question, terms, facets)
-    years = sorted(set(re.findall(r"\b(?:19|20)\d{2}\b", query)))
+    years = [qualifier.value for qualifier in interpretation.qualifiers if qualifier.kind == "year"]
     selected, rejected = [], []
     coverage = {key: [] for key in facets}
     for item in candidates:
@@ -120,6 +122,8 @@ def assess(question, candidates):
             reason = "OUTSIDE_VALIDITY"
         elif years and not all(_contains(text, year) for year in years):
             reason = "TEMPORAL_SCOPE_UNSUPPORTED"
+        elif not all(answer_query.supports_qualifier(text, qualifier) for qualifier in interpretation.qualifiers):
+            reason = "QUERY_QUALIFIER_UNSUPPORTED"
         elif company:
             same_subject = any(_contains(text, alias) for alias in _COMPANY_ALIASES)
             company_title = any(_contains(title, alias) for alias in _COMPANY_ALIASES)
@@ -129,12 +133,21 @@ def assess(question, candidates):
                 reason = "SUBJECT_MISMATCH"
             elif not company_title and not _COMPANY_FACT.search(text):
                 reason = "SUBJECT_EVIDENCE_INSUFFICIENT"
+            elif interpretation.frame_candidate:
+                residual = interpretation.subject.casefold()
+                for alias in sorted(_COMPANY_ALIASES, key=len, reverse=True):
+                    residual = re.sub(r"(?<![a-z0-9_])" + re.escape(alias) + r"(?![a-z0-9_])", " ", residual)
+                if not all(_supports_term(text, term) for term in answer_query.interpret(residual).terms):
+                    reason = "SUBJECT_OR_CLAIM_UNSUPPORTED"
         elif subject_terms and not all(_supports_term(text, term) for term in subject_terms):
             reason = "SUBJECT_OR_CLAIM_UNSUPPORTED"
         if reason:
             rejected.append({"entity_id": item["entity_id"], "reason": reason})
             continue
-        supported_facets = [facet for facet in facets if any(_contains(text, alias) for alias in _FACETS[facet])]
+        supported_facets = [facet for facet in facets if
+            (facet == "identity" and bool(str(item.get("content") or "").strip()))
+            or (facet == "version" and any(qualifier.kind == "version" for qualifier in answer_query.qualifiers(text)))
+            or (facet in _FACETS and any(_contains(text, alias) for alias in _FACETS[facet]))]
         if facets and not supported_facets:
             rejected.append({"entity_id": item["entity_id"], "reason": "REQUESTED_CLAIM_UNSUPPORTED"})
             continue

@@ -892,39 +892,19 @@ def probe_llm_profile(actor: str, profile_key: str, provider_url: str, model_id:
         raise NativeAgentError("profile key, provider URL, and model ID are required")
     if parsed.username or parsed.password or parsed.fragment:
         raise NativeAgentError("LLM provider URL is invalid")
-    headers = {"Content-Type": "application/json"}
-    secret = _text(api_key, 4096)
-    if secret:
-        headers["Authorization"] = "Bearer " + secret
     started = time.monotonic()
     try:
-        request = urllib.request.Request(
-            url + "/chat/completions",
-            data=json.dumps({
-                "model": model,
-                "messages": [{"role": "user", "content": "Reply with exactly CX_OK."}],
-                "max_tokens": 1024,
-                "stream": False,
-                **(parameter_values or {}),
-            }, ensure_ascii=False).encode("utf-8"),
-            headers=headers,
-            method="POST",
+        from . import edition_features, model_endpoint_capacity
+        if getattr(edition_features, "MODEL_RUNTIME_CONTEXT_ENABLED", False):
+            controlled = connection.execute_transaction_callback(
+                lambda tx: model_endpoint_capacity.selected_group(tx, "", url))
+            if controlled:
+                raise NativeAgentError("A saved Provider Profile is required for a capacity-controlled endpoint")
+        parsed_result = _probe_llm_profile_transport(
+            {"profile_id": "", "version": 0, "provider_url": url, "model_id": model},
+            api_key, timeout=timeout, parameter_values=parameter_values,
         )
-        with urllib.request.urlopen(request, timeout=max(1, min(int(timeout), 60))) as response:
-            raw = response.read(1024 * 1024 + 1)
-            if len(raw) > 1024 * 1024:
-                raise NativeAgentError("LLM provider response is too large")
-            payload = json.loads(raw.decode("utf-8"))
-        if not isinstance(payload, dict) or not (payload.get("choices") or []):
-            raise NativeAgentError("LLM provider returned no completion")
-        choice = payload["choices"][0]
-        message = choice.get("message") if isinstance(choice, dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, str) or not content.strip():
-            raise NativeAgentError("LLM provider returned no content")
-        observed_model = _text(payload.get("model"), 256)
-        if not _llm_model_matches(model, observed_model):
-            raise NativeAgentError("LLM provider returned a different model")
+        observed_model = parsed_result["model"]
         elapsed_ms = round((time.monotonic() - started) * 1000)
         # The audit contains only the profile identity and outcome; it never
         # contains the URL query, prompt, response, or API Key.
@@ -935,7 +915,7 @@ def probe_llm_profile(actor: str, profile_key: str, provider_url: str, model_id:
                     "observed_model": observed_model,
                     "latency_ms": elapsed_ms}
         return connection.execute_transaction_callback(work)
-    except (NativeAgentError, urllib.error.URLError, TimeoutError, ValueError) as exc:
+    except (NativeAgentError, PermissionError, urllib.error.URLError, TimeoutError, ValueError) as exc:
         def work(tx: Any) -> Dict[str, Any]:
             _audit(tx, actor, "LLM_PROFILE_DRAFT_PROBE", "LLM_PROFILE_DRAFT", key,
                    "DENY", "LLM draft connectivity probe failed")
@@ -943,7 +923,61 @@ def probe_llm_profile(actor: str, profile_key: str, provider_url: str, model_id:
         connection.execute_transaction_callback(work)
         if isinstance(exc, NativeAgentError):
             raise NativeAgentError(str(exc)) from exc
+        if isinstance(exc, PermissionError):
+            raise
+        from .model_results import ModelResultError
+        if isinstance(exc, ModelResultError):
+            errors = {"EMPTY_COMPLETION": "LLM provider returned no content",
+                      "MODEL_MISMATCH": "LLM provider returned a different model",
+                      "RESPONSE_TOO_LARGE": "LLM provider response is too large"}
+            raise NativeAgentError(errors.get(exc.code, "LLM provider returned no completion")) from exc
         raise NativeAgentError("LLM provider probe failed") from exc
+
+
+def _probe_llm_profile_transport(profile, api_key, *, timeout, parameter_values=None):
+    """One bounded probe; admission owns its original request lifecycle."""
+    from . import model_dispatch
+    from .model_results import ModelResultError, decode_json, parse_completion
+    from .provider_capability_probes import parameters
+    url = str(profile["provider_url"]).strip().rstrip("/")
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        raise NativeAgentError("LLM provider URL is invalid")
+    headers = {"Content-Type": "application/json"}
+    secret = _text(api_key, 4096)
+    if secret:
+        headers["Authorization"] = "Bearer " + secret
+    payload = {"model": profile["model_id"],
+               "messages": [{"role": "user", "content": "Reply with exactly CX_OK."}],
+               "max_tokens": 1024, "stream": False, **parameters(parameter_values or {})}
+    request = urllib.request.Request(
+        url + "/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST")
+    maximum = 1024 * 1024
+    with model_dispatch.dispatch(profile, payload) as ticket:
+        with ticket.open(request, timeout=ticket.timeout_seconds(max(1, min(int(timeout), 60))),
+                         default_open=urllib.request.urlopen) as response:
+            raw = ticket.read_response(response, maximum)
+            value = decode_json(raw, max_bytes=maximum)
+            try:
+                result = parse_completion(value, profile["model_id"],
+                                          model_matches=_llm_model_matches, max_content_bytes=maximum)
+            except ModelResultError as exc:
+                # Preserve the health API's empty-content category, including
+                # providers which omit content for reasoning-only output.
+                choices = value.get("choices") if isinstance(value, dict) else None
+                choice = choices[0] if isinstance(choices, list) and len(choices) == 1 else {}
+                message = choice.get("message") if isinstance(choice, dict) else None
+                if (exc.code == "INVALID_COMPLETION" and isinstance(message, dict)
+                        and message.get("content") is None and choice.get("finish_reason") == "stop"
+                        and message.get("role", "assistant") == "assistant" and not message.get("tool_calls")
+                        and _llm_model_matches(profile["model_id"], value.get("model"))):
+                    raise ModelResultError("EMPTY_COMPLETION", request_complete=True, finish_reason="stop",
+                                           usage=value.get("usage")) from None
+                raise
+            ticket.observe_result(result)
+            ticket.response_complete()
+            return result
 
 
 def _policy_row() -> Dict[str, Any]:
@@ -973,17 +1007,46 @@ def probe_saved_llm_profile(actor: str, profile_id: str, *, timeout: int = 20) -
         from .connection_crypto import decrypt_section
         secret = str(decrypt_section(cipher).get("api_key") or "")
     try:
+        from . import model_credentials
         from .provider_capability_probes import request_parameters
         verified_parameters = request_parameters(key, row["version"])
-        result = probe_llm_profile(
-            actor, str(row.get("profile_key") or key), str(row.get("provider_url") or ""),
-            str(row.get("model_id") or ""), secret, timeout=timeout, parameter_values=verified_parameters,
-        )
-    except Exception:
+        credential = model_credentials.capture(actor, required_scope="platform.manage")
+        attempt = _id("LPH")
+        def reauthorize(tx, admission):
+            # A queued probe must never switch to a newer Profile or identity.
+            with identity_api.cached_authorization():
+                allowed = identity_api.effective_access(str(actor), "platform.manage").get("decision") == "ALLOW"
+            if not allowed:
+                raise PermissionError("platform management permission is required")
+            current = _row(tx.query_one(
+                "SELECT PROFILE_ID,VERSION,PROFILE_KEY,PROVIDER_URL,MODEL_ID,API_KEY_CIPHER,STATUS "
+                "FROM CX_LLM_PROVIDER_PROFILES WHERE PROFILE_ID=:id FOR UPDATE", {"id": key}))
+            if current != row:
+                raise NativeAgentConflict("Provider Profile changed during its health check")
+        def check_before_send(tx):
+            if credential is not None:
+                model_credentials.recheck(tx, credential)
+            reauthorize(tx, {})
+        connection.execute_transaction_callback(check_before_send)
+        started = time.monotonic()
+        with model_credentials.dispatch_context(credential, "PROBE", attempt, attempt, reauthorize=reauthorize,
+                                                worker_key="health:" + attempt, lock_principals=(str(actor),)):
+            parsed_result = _probe_llm_profile_transport(row, secret, timeout=timeout, parameter_values=verified_parameters)
+        result = {"status": "VERIFIED", "profile_key": str(row.get("profile_key") or key),
+                  "observed_model": parsed_result["model"], "latency_ms": round((time.monotonic() - started) * 1000)}
+    except Exception as exc:
         connection.execute(
             "UPDATE CX_LLM_PROVIDER_PROFILES SET HEALTH_STATE='DEGRADED',UPDATED_AT=CURRENT_TIMESTAMP "
             "WHERE PROFILE_ID=:id AND VERSION=:version AND STATUS='ACTIVE'", {"id": key, "version": row["version"]},
         )
+        connection.execute_transaction_callback(lambda tx: _audit(
+            tx, actor, "LLM_PROFILE_PROBE", "LLM_PROFILE", key, "DENY", "LLM connectivity probe failed"))
+        from .model_results import ModelResultError
+        if isinstance(exc, ModelResultError):
+            errors = {"EMPTY_COMPLETION": "LLM provider returned no content",
+                      "MODEL_MISMATCH": "LLM provider returned a different model",
+                      "RESPONSE_TOO_LARGE": "LLM provider response is too large"}
+            raise NativeAgentError(errors.get(exc.code, "LLM provider returned no completion")) from exc
         raise
     changed = connection.execute(
         "UPDATE CX_LLM_PROVIDER_PROFILES SET HEALTH_STATE='HEALTHY',UPDATED_AT=CURRENT_TIMESTAMP "
@@ -991,6 +1054,8 @@ def probe_saved_llm_profile(actor: str, profile_id: str, *, timeout: int = 20) -
     )
     if int(changed or 0) != 1:
         raise NativeAgentConflict("Provider Profile changed during its health check")
+    connection.execute_transaction_callback(lambda tx: _audit(
+        tx, actor, "LLM_PROFILE_PROBE", "LLM_PROFILE", key, "ALLOW", "LLM connectivity probe verified"))
     return {**result, "profile_id": key, "health_state": "HEALTHY"}
 
 
@@ -1436,6 +1501,8 @@ def create_channel_execution(actor: str, channel_id: str, message_id: str, body:
             {"id": execution_id, "agent": mentioned_agent_id, "target": agent.get("deployment_target_id"),
              "input": input_json, "digest": digest},
         )
+        from . import native_runtime
+        native_runtime.bind_model_credential(tx, actor, execution_id, payload, required_scope='channels.write')
         _audit(tx, actor, "CHANNEL_MANAGEMENT_AGENT_DISPATCH", "CHANNEL_MESSAGE", message_id,
                "ALLOW", "explicit management Agent mention queued")
         return {"execution_id": execution_id, "agent_id": mentioned_agent_id,
@@ -1467,14 +1534,38 @@ def claim_runtime(worker_id: str, node_id: str, limit: int = 10) -> List[Dict[st
     claimed: List[Dict[str, Any]] = []
     for raw in rows:
         row = _row(raw) or {}
-        changed = connection.execute(
+        def claim(tx):
+            changed = tx.execute(
             "UPDATE CX_RUNTIME_EXECUTIONS SET STATUS='CLAIMED',WORKER_ID=:worker,NODE_ID=:node,"
             "LEASE_EXPIRES_AT=" + _lease_deadline_sql() + ",FENCING_TOKEN=FENCING_TOKEN+1,"
             "STARTED_AT=" + _lease_started_sql() + ",UPDATED_AT=CURRENT_TIMESTAMP WHERE EXECUTION_ID=:id AND (STATUS='PENDING' OR "
             "(STATUS='CLAIMED' AND LEASE_EXPIRES_AT<=CURRENT_TIMESTAMP))",
             {"worker": worker, "node": node, "id": row.get("execution_id")},
-        )
+            )
+            if changed:
+                current = _row(tx.query_one("SELECT e.*," + connection.session_timestamp_utc_expression("e.LEASE_EXPIRES_AT") +
+                    " AS LEASE_EXPIRES_AT_UTC FROM CX_RUNTIME_EXECUTIONS e WHERE EXECUTION_ID=:execution",
+                    {"execution": row.get("execution_id")}))
+                from . import native_runtime, processing_native
+                if native_runtime._model_runtime_enabled():
+                    processing_native.claim(tx, current)
+                return current
+            return None
+        from . import native_runtime
+        if native_runtime._model_runtime_enabled():
+            current = connection.execute_transaction_callback(claim)
+            changed = bool(current)
+        else:
+            current = None
+            changed = connection.execute(
+                "UPDATE CX_RUNTIME_EXECUTIONS SET STATUS='CLAIMED',WORKER_ID=:worker,NODE_ID=:node,"
+                "LEASE_EXPIRES_AT=" + _lease_deadline_sql() + ",FENCING_TOKEN=FENCING_TOKEN+1,"
+                "STARTED_AT=" + _lease_started_sql() + ",UPDATED_AT=CURRENT_TIMESTAMP WHERE EXECUTION_ID=:id AND STATUS='PENDING'",
+                {"worker": worker, "node": node, "id": row.get("execution_id")})
         if changed:
+            if current is not None:
+                claimed.append(current)
+                continue
             row["fencing_token"] = int(row.get("fencing_token") or 0) + 1
             row["worker_id"] = worker
             row["node_id"] = node
@@ -1498,12 +1589,27 @@ def reconcile_expired_runtime(limit: int = 100) -> int:
         )
         changed = 0
         for item in rows:
-            changed += int(connection.execute(
+            def expire(tx):
+                current = _row(tx.query_one("SELECT * FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution FOR UPDATE", {"execution": _row(item).get("execution_id")}))
+                count = tx.execute(
                 "UPDATE CX_RUNTIME_EXECUTIONS SET STATUS='UNOBSERVED',FAILURE_REASON='LEASE_EXPIRED_UNOBSERVED',"
                 "COMPLETED_AT=CURRENT_TIMESTAMP,UPDATED_AT=CURRENT_TIMESTAMP,FENCING_TOKEN=FENCING_TOKEN+1 "
                 "WHERE EXECUTION_ID=:id AND STATUS='CLAIMED' AND LEASE_EXPIRES_AT<=CURRENT_TIMESTAMP",
                 {"id": _row(item).get("execution_id")},
-            ) or 0)
+                )
+                if count:
+                    from . import processing_native
+                    processing_native.finish(tx, current, "UNOBSERVED", "LEASE_EXPIRED")
+                return count
+            from . import native_runtime
+            if native_runtime._model_runtime_enabled():
+                changed += int(connection.execute_transaction_callback(expire) or 0)
+            else:
+                changed += int(connection.execute(
+                    "UPDATE CX_RUNTIME_EXECUTIONS SET STATUS='UNOBSERVED',FAILURE_REASON='LEASE_EXPIRED_UNOBSERVED',"
+                    "COMPLETED_AT=CURRENT_TIMESTAMP,UPDATED_AT=CURRENT_TIMESTAMP,FENCING_TOKEN=FENCING_TOKEN+1 "
+                    "WHERE EXECUTION_ID=:id AND STATUS='CLAIMED' AND LEASE_EXPIRES_AT<=CURRENT_TIMESTAMP",
+                    {"id": _row(item).get("execution_id")}) or 0)
         return changed
     except RuntimeError as exc:
         # Offline/source tests may intentionally omit a configured adapter;

@@ -90,27 +90,31 @@ def search(actor, domain, family, query="", *, after="", limit=20):
 def load(actor, domain, family, entity_id, version, content_digest):
     if family not in {"SKILL", "TOOL"}:
         raise ValueError("Invalid directory family")
-    def perform(tx):
-        access = _authority(tx, actor, domain, family)
-        value = skill_api.get_skill(entity_id) if family == "SKILL" else tool_registry.get_tool(entity_id)
-        if (not value or family == "SKILL" and (value.get("skill_status") != "ACTIVE" or not _skill_visible(actor, value, access)) or
-                family == "TOOL" and (value.get("status") != "ACTIVE" or value.get("mcp_exposed") != "Y")):
-            raise PermissionError("Directory entry was withdrawn")
-        metadata, content = _metadata(family, value)
-        if metadata["version"] != version or metadata["content_digest"] != content_digest:
-            raise ValueError("Directory entry version or content changed")
-        _authority(tx, actor, domain, family)
-        return {**metadata, "content": content, "execution_authorized": False}
-    return connection.execute_transaction_callback(perform)
+    return connection.execute_transaction_callback(
+        lambda tx: _load(tx, actor, domain, family, entity_id, version, content_digest))
 
 
-def recommend(actor, domain, query, *, limit=5, candidate_limit=50):
+def _load(tx, actor, domain, family, entity_id, version, content_digest):
+    access = _authority(tx, actor, domain, family)
+    value = skill_api.get_skill(entity_id) if family == "SKILL" else tool_registry.get_tool(entity_id)
+    if (not value or family == "SKILL" and (value.get('status') != 'ACTIVE' or value.get("skill_status") != "ACTIVE" or not _skill_visible(actor, value, access)) or
+            family == "TOOL" and (value.get("status") != "ACTIVE" or value.get("mcp_exposed") != "Y")):
+        raise PermissionError("Directory entry was withdrawn")
+    metadata, content = _metadata(family, value)
+    if metadata["version"] != version or metadata["content_digest"] != content_digest:
+        raise ValueError("Directory entry version or content changed")
+    _authority(tx, actor, domain, family)
+    return {**metadata, "content": content, "execution_authorized": False}
+
+
+def recommend(actor, domain, query, *, limit=5, candidate_limit=50,
+              schema_token_budget=None, schema_byte_budget=262144, model_name=''):
     """Rank authorized Skill metadata, loading exact bodies only if selected.
 
     A zero-match result is valid. No result from this method confers invocation
     authority, and load() rechecks its revision/digest independently.
     """
-    from .context_selection import score
+    from .context_selection import score, plan_schema_contracts
     if not isinstance(query, str) or not query.strip() or len(query) > 4000:
         raise ValueError('A bounded question or task is required')
     if isinstance(limit, bool) or isinstance(candidate_limit, bool) or not 1 <= int(limit) <= 10 or not int(limit) <= int(candidate_limit) <= 100:
@@ -126,6 +130,45 @@ def recommend(actor, domain, query, *, limit=5, candidate_limit=50):
             "SELECT e.ENTITY_ID,e.TITLE,sm.SKILL_NAME,sm.SKILL_VERSION,sm.SKILL_DESCRIPTION,sm.RESOURCE_CHECKSUM "
             "FROM ENTITIES e JOIN SKILL_META sm ON sm.ENTITY_ID=e.ENTITY_ID WHERE " + predicate +
             " ORDER BY e.ENTITY_ID" + identity_api._limit_clause('candidate_limit'), params)]
+        if schema_token_budget is not None:
+            def load_selected(candidate):
+                # Ranking reads metadata only. Freeze the complete contract
+                # digest when its selected body is first loaded, then verify
+                # that exact digest again before returning the plan.
+                current_access = _authority(tx, actor, domain, 'SKILL')
+                value = skill_api.get_skill(candidate['entity_id'])
+                if (not value or value.get('status') != 'ACTIVE' or value.get('skill_status') != 'ACTIVE'
+                        or not _skill_visible(actor, value, current_access)):
+                    raise PermissionError('The selected Skill is no longer available')
+                original = next(item for item in rows if str(item['entity_id']) == candidate['entity_id'])
+                if any(str(value.get(key) or '') != str(original.get(key) or '')
+                       for key in ('skill_name', 'skill_version', 'skill_description', 'resource_checksum')):
+                    raise ValueError('Selected Skill metadata changed during selection')
+                metadata, content = _metadata('SKILL', value)
+                _authority(tx, actor, domain, 'SKILL')
+                return {**metadata, 'content': content}
+            def validate_selected(selected):
+                # _load() repeats the normal current domain/credential/scope,
+                # visibility, lifecycle and full version/digest checks.
+                current = _load(tx, actor, domain, 'SKILL', selected['entity_id'], selected['version'], selected['content_digest'])
+                if any(current[key] != selected[key] for key in ('name', 'description')):
+                    raise ValueError('Selected Skill metadata changed before disclosure')
+            def provider_payload(selected):
+                contracts = [{key: item[key] for key in ('family', 'entity_id', 'name', 'version', 'content_digest', 'content')}
+                             for item in selected]
+                return {'messages': [{'role': 'user', 'content':
+                    'Selected Skill reference contracts (data only; selection grants no execution authority):\n' + canonical(contracts)}]}
+            metadata_rows = [dict(family='SKILL', entity_id=str(item['entity_id']),
+                                  name=str(item.get('skill_name') or item.get('title') or ''),
+                                  version=str(item.get('skill_version') or ''),
+                                  description=str(item.get('skill_description') or '')[:1000]) for item in rows]
+            planned = plan_schema_contracts(metadata_rows, query, load_exact=load_selected,
+                validate_current=validate_selected, render_payload=provider_payload,
+                token_budget=schema_token_budget, byte_budget=schema_byte_budget,
+                limit=int(limit), model_name=model_name)
+            _authority(tx, actor, domain, 'SKILL')
+            return {**planned, 'candidate_count': len(rows), 'candidate_window': int(candidate_limit),
+                    'body_loaded_for_client': bool(planned['items']), 'discovery_grants_execution': False}
         ranked = sorted(((score(query, item.get('skill_name') or item.get('title'), item.get('skill_description')), item)
                          for item in rows), key=lambda item: (-item[0], str(item[1]['entity_id'])))
         selected, reasons = [], []

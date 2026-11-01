@@ -10,7 +10,7 @@ import json
 import re
 from typing import Any
 
-from . import answer_evidence, knowledge_grounding, product_identity
+from . import answer_evidence, knowledge_grounding, product_identity, answer_query
 
 
 _VENDOR_ONLY = {"oracle", "pg", "postgresql", "yashandb", "崖山数据库", "甲骨文"}
@@ -22,6 +22,10 @@ _METADATA_KEYS = (
 
 
 def _parts(question: str) -> list[str]:
+    # Attribute conjunctions share one explicit subject. An unrecognized frame
+    # also stays whole, so decomposition cannot discard its unknown modifiers.
+    if answer_query.interpret(question).frame_candidate:
+        return [question]
     parts = [part.strip() for part in re.split(r"[；;]|(?:以及|另外|同时)|\band\b", question, flags=re.I) if part.strip()]
     return parts if 2 <= len(parts) <= 4 else [question]
 
@@ -161,18 +165,16 @@ def prepare(question, profile_id, configured, retrieval):
         if allowed:
             source = "MODEL_SUPPLEMENT"
             instruction = (
-                "No matching authorized sources are available for this question. "
-                "Answer the user's question from general model knowledge. "
-                "For a conceptual question about stored information, explain the stated "
-                "scenario and its general lifecycle or authorization principles. "
-                "For questions about sharing private information, explain the access-control "
-                "boundary: disclosure requires explicit authorization for the recipient "
-                "and purpose; privacy risks or good intentions do not grant that permission. "
-                "Do not replace that explanation with a statement about your own personal "
-                "experiences or capabilities. A missing authorized match does not establish "
-                "whether a record exists, what it contains, or its current state. "
-                "Do not claim to have inspected, recovered or changed records. "
-                "Do not invent enterprise facts or claim that enterprise documents support your answer."
+                "Before answering, identify what is actually known and what is merely suggested by the question. "
+                "Draft the smallest direct answer. Silently try ordinary counterexamples to every defining condition, "
+                "causal explanation and comparative claim; if they fit the question, remove that condition or state "
+                "the necessary assumption explicitly. Give definitions by their essential meaning, and comparisons "
+                "by criteria that apply to both sides."
+            )
+            instruction += (
+                " Do not fill gaps with a familiar story. Preserve established knowledge and useful explanations. "
+                "Never invent case facts, verification, sources or actions. Output only the final answer, at most "
+                "two short sentences unless another format is requested."
             )
             messages = [{"role": "system", "content": instruction},
                         {"role": "user", "content": question}]
@@ -206,6 +208,31 @@ def prepare(question, profile_id, configured, retrieval):
                   "authorized_sources": [{"citation": index + 1, "title": item.get("title", ""),
                                           "content": item.get("content", "")[:12000]}
                                          for index, item in enumerate(sources)]}
+        requested = answer_query.interpret(question)
+        if requested.framed:
+            # Audience filtering can remove sources after retrieval. Assess only
+            # the final references and the exact content visible to this call;
+            # old coverage and text outside the prompt cannot support an answer.
+            visible_sources = [dict(item, content=reference["content"])
+                               for item, reference in zip(sources, prompt["authorized_sources"])]
+            coverage = answer_evidence.assess(question, visible_sources)["evidence_decision"]["coverage"]
+            prompt["requested_attributes"] = [
+                {"attribute": attribute,
+                 "source_citations": [index + 1 for index, item in enumerate(sources)
+                                      if item["entity_id"] in coverage.get(attribute, [])]}
+                for attribute in requested.attributes if attribute in {"identity", "version"}
+            ]
+            instruction += (
+                " Answer each requested_attributes item from its source_citations and cite the supporting reference. "
+                "For identity, explicitly state the subject's name and type as documented in those references; "
+                "a pronoun or generic category alone does not identify the subject. "
+                "For version, report the version stated at the requested source/document snapshot, "
+                "even if that reference calls it current; this does not prove the current running product version. "
+                "Do not require a separate document-revision identifier unless the question asks for it. "
+                "The citation list identifies relevant evidence, not a guaranteed fact value. "
+                "If the references lack the requested value or conflict, say so; never fill it "
+                "from the question, installed product identity, or general model knowledge."
+            )
         if mixed:
             prompt["question_parts"] = _parts(question)
         messages = [{"role": "system", "content": instruction},

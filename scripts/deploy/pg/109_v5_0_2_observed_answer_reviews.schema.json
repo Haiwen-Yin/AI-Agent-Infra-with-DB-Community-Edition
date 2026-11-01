@@ -1,0 +1,416 @@
+{
+  "CX_OBS_ANSWER_REVIEWS": {
+    "check_expressions": [
+      "FACTUAL_CORRECT IN ('Y','N')",
+      "CITATIONS_SUPPORTED IN ('Y','N')",
+      "PERMISSION_VERSION>0"
+    ],
+    "checks": 3,
+    "columns": {
+      "AUTH_METHOD": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CITATIONS_SUPPORTED": {
+        "default": null,
+        "not_null": true,
+        "type": "CHAR(1)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "FACTUAL_CORRECT": {
+        "default": null,
+        "not_null": true,
+        "type": "CHAR(1)"
+      },
+      "MFA_LEVEL": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "NODE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "OUTPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "OUTPUT_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PERMISSION_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "REVIEWER_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REVIEW_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SESSION_CREATED_AT": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SESSION_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "REVIEW_ID",
+      "SET_ID",
+      "OUTPUT_KEY",
+      "REVIEWER_ID",
+      "OUTPUT_DIGEST",
+      "FACTUAL_CORRECT",
+      "CITATIONS_SUPPORTED",
+      "REASON",
+      "SESSION_DIGEST",
+      "AUTH_METHOD",
+      "PERMISSION_VERSION",
+      "MFA_LEVEL",
+      "NODE_ID",
+      "SESSION_CREATED_AT",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "REVIEW_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "REVIEWER_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "SESSION_DIGEST"
+        ],
+        "CX_WEB_SESSIONS",
+        [
+          "SESSION_DIGEST"
+        ]
+      ],
+      [
+        "U",
+        [
+          "SET_ID",
+          "OUTPUT_KEY",
+          "REVIEWER_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "SET_ID",
+          "OUTPUT_KEY"
+        ],
+        "CX_OBS_ANSWER_ROWS",
+        [
+          "SET_ID",
+          "OUTPUT_KEY"
+        ]
+      ]
+    ],
+    "trigger": "CX109_617B289C55AB059B",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx109_reject_runtime_mutation"
+  },
+  "CX_OBS_ANSWER_ROWS": {
+    "check_expressions": [
+      "PROFILE_VERSION>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "AGENT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "ORIGINAL_ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "OUTPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "OUTPUT_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ROW_CIPHER": {
+        "default": null,
+        "not_null": true,
+        "type": "TEXT"
+      },
+      "SECURITY_DOMAIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "SET_ID",
+      "OUTPUT_KEY",
+      "OUTPUT_DIGEST",
+      "ORIGINAL_ACTOR_ID",
+      "SECURITY_DOMAIN_ID",
+      "AGENT_ID",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "ROW_CIPHER",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "R",
+        [
+          "SET_ID"
+        ],
+        "CX_OBS_ANSWER_SETS",
+        [
+          "SET_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ORIGINAL_ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "SECURITY_DOMAIN_ID"
+        ],
+        "CX_SECURITY_DOMAINS",
+        [
+          "SECURITY_DOMAIN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "AGENT_ID"
+        ],
+        "CX_NATIVE_AGENTS",
+        [
+          "AGENT_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "SET_ID",
+          "OUTPUT_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX109_6E9D29F88147395C",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx109_reject_runtime_mutation"
+  },
+  "CX_OBS_ANSWER_SETS": {
+    "check_expressions": [
+      "PERMISSION_VERSION>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "AUTH_METHOD": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "CREATED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "MFA_LEVEL": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "NODE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "PACKET_CIPHER": {
+        "default": null,
+        "not_null": true,
+        "type": "TEXT"
+      },
+      "PACKET_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "PERMISSION_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "SESSION_CREATED_AT": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SESSION_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "SET_ID",
+      "PACKET_DIGEST",
+      "PACKET_CIPHER",
+      "CREATED_BY",
+      "SESSION_DIGEST",
+      "AUTH_METHOD",
+      "PERMISSION_VERSION",
+      "MFA_LEVEL",
+      "NODE_ID",
+      "SESSION_CREATED_AT",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "SET_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "PACKET_DIGEST"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CREATED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "SESSION_DIGEST"
+        ],
+        "CX_WEB_SESSIONS",
+        [
+          "SESSION_DIGEST"
+        ]
+      ]
+    ],
+    "trigger": "CX109_D2BD3AE645F825B2",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx109_reject_runtime_mutation"
+  }
+}

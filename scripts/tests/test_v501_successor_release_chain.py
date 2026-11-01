@@ -8,7 +8,7 @@ from lib import continuity_schema_validation
 from lib.package_layout import active_database, deployment_dir
 
 
-CHAIN = ('4.4.15', '4.4.16', '4.5.0', '4.5.1', '4.5.2', '5.0.0', '5.0.1')
+CHAIN = ('4.4.15', '4.4.16', '4.5.0', '4.5.1', '4.5.2', '5.0.0', '5.0.1', '5.0.2')
 HISTORICAL_CASES = [(release, previous) for index, release in enumerate(CHAIN)
                     for previous in CHAIN[:index]]
 
@@ -68,11 +68,11 @@ def test_nearest_present_invalid_row_never_falls_back_to_older_applied(
 
     monkeypatch.setattr(runner, '_step_row', row)
     assert not runner._handoff_policy_applied(None, database, successor, version='5.0.1')
-    expected = list(reversed(CHAIN))
+    expected = list(reversed(CHAIN[:CHAIN.index('5.0.1') + 1]))
     assert calls == expected[:expected.index(nearest) + 1]
 
 
-@pytest.mark.parametrize('release', ['4.4.14', '5.0.2', '99.0.0', ''])
+@pytest.mark.parametrize('release', ['4.4.14', '5.0.3', '99.0.0', ''])
 def test_unrecognized_release_has_no_inferred_historical_trust(monkeypatch, release):
     calls = []
 
@@ -90,7 +90,7 @@ def test_older_release_never_uses_newer_applied_evidence(monkeypatch):
 
     def row(_cursor, _database, _script, *, version=None):
         calls.append(version)
-        assert version not in {'5.0.0', '5.0.1'}
+        assert version not in {'5.0.0', '5.0.1', '5.0.2'}
         return None
 
     monkeypatch.setattr(runner, '_step_row', row)

@@ -108,9 +108,9 @@ def _source(tx, actor, agent, domain, source, policy='PINNED', *, metadata_only=
     return {**value, 'source': source.model_dump(mode='json')}
 
 
-def _lock(tx, actor, binding_id, *, write=False):
-    root = tx.query_one("SELECT * FROM CX_AGENT_ASSET_BINDINGS WHERE BINDING_ID=:binding" + (' FOR UPDATE' if write else ''), {'binding': binding_id})
-    if not root:
+def _lock(tx, actor, binding_id, *, write=False, _root=None):
+    root = (_root if _root is not None else tx.query_one("SELECT * FROM CX_AGENT_ASSET_BINDINGS WHERE BINDING_ID=:binding" + (' FOR UPDATE' if write else ''), {'binding': binding_id}))
+    if not root or root.get('binding_id')!=binding_id:
         raise PermissionError('Agent assets access denied')
     _agent(tx, actor, root['security_domain_id'], root['agent_id'], write=write)
     if actor != root['owner_principal_id']:
@@ -216,6 +216,94 @@ def load(actor, binding_id, *, metadata_only=False, transaction=None):
     return perform(transaction) if transaction else connection.execute_transaction_callback(perform)
 
 
+def _batch_records(tx,identifiers,*,lock=True):
+    from .continuity_sources import read_ids
+    roots={row['binding_id']:row for row in read_ids(tx,
+        "SELECT * FROM CX_AGENT_ASSET_BINDINGS WHERE BINDING_ID IN ({ids}) ORDER BY BINDING_ID"+(' FOR UPDATE' if lock else ''),identifiers)}
+    revisions={row['binding_id']:row for row in read_ids(tx,
+        "SELECT r.* FROM CX_AGENT_ASSET_REVISIONS r JOIN CX_AGENT_ASSET_BINDINGS b ON b.BINDING_ID=r.BINDING_ID "
+        "AND b.CURRENT_REVISION=r.REVISION_NO WHERE r.BINDING_ID IN ({ids})",identifiers)}
+    return roots,revisions
+
+
+def load_many(actor,binding_ids,*,metadata_only=False,transaction=None,omit_denied=False):
+    """Batch original binding/revision inputs; every source keeps its reader.
+
+    This is eligibility, never a grant. Every full load retains the canonical
+    per-source authority; CURRENT bindings retain their ordinary resolver.
+    """
+    from .context_selection import metadata_many
+    from .continuity_sources import resolve_many
+    identifiers=list(dict.fromkeys(binding_ids))
+    if len(identifiers)>100:raise ValueError('A bounded binding list is required')
+    if not identifiers:return {}
+    def perform(tx):
+        work._lock_actor(tx,actor)
+        preliminary,_unused=_batch_records(tx,identifiers,lock=False)
+        authorized_groups=set()
+        for domain,agent in sorted({(row['security_domain_id'],row['agent_id']) for row in preliminary.values()}):
+            try:
+                _agent(tx,actor,domain,agent)
+                authorized_groups.add((domain,agent))
+            except PermissionError:
+                if not omit_denied:raise
+        readable=[identifier for identifier in identifiers if identifier in preliminary
+            and (preliminary[identifier]['security_domain_id'],preliminary[identifier]['agent_id']) in authorized_groups]
+        roots,revisions=_batch_records(tx,readable)
+        if roots!={identifier:preliminary[identifier] for identifier in readable}:
+            raise PermissionError('Configured assets changed before batch locking')
+        allowed={};groups={};result={}
+        for identifier in identifiers:
+            try:
+                if identifier not in roots:raise PermissionError('Agent assets access denied')
+                root=_lock(tx,actor,identifier,_root=roots[identifier])
+                if root['status']!='ACTIVE':raise PermissionError('Configured asset is inactive')
+                revision=revisions.get(identifier)
+                if not revision:raise PermissionError('Configured asset expired')
+                until=revision.get('valid_until')
+                if isinstance(until,str):until=datetime.fromisoformat(until.replace('Z','+00:00'))
+                if until is not None:
+                    until=until.replace(tzinfo=timezone.utc) if until.tzinfo is None else until.astimezone(timezone.utc)
+                    if until<=datetime.now(timezone.utc):raise PermissionError('Configured asset expired')
+                allowed[identifier]=(root,revision)
+                if revision['resolution_policy']=='PINNED':
+                    groups.setdefault((root['security_domain_id'],root['agent_id']),[]).append(identifier)
+                else:
+                    value=_source(tx,actor,root['agent_id'],root['security_domain_id'],
+                        {key:revision[key] for key in ('family','entity_id','revision_id','content_digest')},
+                        revision['resolution_policy'],metadata_only=metadata_only)
+                    result[identifier]=value
+            except PermissionError:
+                if not omit_denied:raise
+        for (domain,agent),members in groups.items():
+            sources=[{key:allowed[identifier][1][key] for key in ('family','entity_id','revision_id','content_digest')} for identifier in members]
+            loader=metadata_many if metadata_only else resolve_many
+            human=loader(tx,actor,domain,sources,omit_denied=omit_denied)
+            recipient=loader(tx,agent,domain,sources,omit_denied=omit_denied)
+            for identifier,source,visible,received in zip(members,sources,human,recipient):
+                if visible is not None and received is not None:
+                    result[identifier]=(dict(source=source,name=visible['name']) if metadata_only else dict(visible,source=source))
+        if _batch_records(tx,readable)!=(roots,revisions):
+            raise PermissionError('Configured assets changed during batch loading')
+        for domain,agent in sorted({(allowed[identifier][0]['security_domain_id'],allowed[identifier][0]['agent_id']) for identifier in result}):
+            _agent(tx,actor,domain,agent)
+            if any(actor!=allowed[identifier][0]['owner_principal_id'] for identifier in result
+                    if allowed[identifier][0]['security_domain_id']==domain and allowed[identifier][0]['agent_id']==agent):
+                access=identity_api.effective_access(actor,'agents.operate',resource={'security_domain_id':domain})
+                if 'ALL' not in access.get('scopes',[]):raise PermissionError('Agent assets access denied')
+        for identifier,value in list(result.items()):
+            root,revision=allowed[identifier]
+            until=revision.get('valid_until')
+            if isinstance(until,str):until=datetime.fromisoformat(until.replace('Z','+00:00'))
+            if until is not None:
+                until=until.replace(tzinfo=timezone.utc) if until.tzinfo is None else until.astimezone(timezone.utc)
+                if until<=datetime.now(timezone.utc):raise PermissionError('Configured asset expired')
+            result[identifier]=dict(binding_id=identifier,version=int(root['row_version']),purpose=revision['purpose'],
+                priority=int(revision['priority']),resolution_policy=revision['resolution_policy'],**value,binding_grants_authority=False)
+        return result
+    return perform(transaction) if transaction is not None else connection.execute_transaction_callback(perform)
+
+
 def list_bindings(actor, domain, agent, *, limit=20, after=''):
     if isinstance(limit, bool) or not 1 <= int(limit) <= 100:
         raise ValueError('Invalid binding inventory limit')
@@ -227,13 +315,9 @@ def list_bindings(actor, domain, agent, *, limit=20, after=''):
             sql += " AND BINDING_ID>:after"
             params['after'] = after
         rows = tx.query(sql + " ORDER BY BINDING_ID" + identity_api._limit_clause('page_limit'), params)
-        items = []
-        for row in rows[:int(limit)]:
-            try:
-                items.append(load(actor, row['binding_id'], metadata_only=True, transaction=tx))
-            except PermissionError:
-                # Private/revoked/expired assets are not directory disclosures.
-                continue
+        identifiers=[row['binding_id'] for row in rows[:int(limit)]]
+        loaded=load_many(actor,identifiers,metadata_only=True,transaction=tx,omit_denied=True)
+        items=[loaded[identifier] for identifier in identifiers if identifier in loaded]
         return {'items': items, 'next_cursor': rows[int(limit)-1]['binding_id'] if len(rows) > int(limit) else None}
     return connection.execute_transaction_callback(perform)
 
@@ -246,8 +330,9 @@ def assemble(actor, binding_ids, value):
         raise ValueError('A bounded binding list is required')
     def perform(tx):
         sources,bindings = [],[]
+        loaded=load_many(actor,binding_ids,transaction=tx)
         for binding_id in dict.fromkeys(binding_ids):
-            item = load(actor, binding_id, transaction=tx)
+            item = loaded[binding_id]
             root = _lock(tx, actor, binding_id)
             if root['security_domain_id'] != value['security_domain_id']:
                 raise PermissionError('Asset assembly must retain its configured domain')
@@ -270,8 +355,9 @@ def assemble(actor, binding_ids, value):
 
 def revalidate_assembly(tx,actor,assembly_id):
     uses=tx.query("SELECT * FROM CX_CONTEXT_ASSET_USES WHERE ASSEMBLY_ID=:assembly",{'assembly':assembly_id})
+    loaded=load_many(actor,[use['binding_id'] for use in uses],transaction=tx)
     for use in uses:
-        item=load(actor,use['binding_id'],transaction=tx)
+        item=loaded[use['binding_id']]
         source=item['source']
         if item['version']!=int(use['binding_version']) or any(source[key]!=use[key] for key in ('family','entity_id','revision_id','content_digest')):
             raise ContinuityConflict('STALE_BINDING','An assembly asset binding changed; prepare a new assembly')

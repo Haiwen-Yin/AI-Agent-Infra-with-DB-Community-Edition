@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.2 - Community Edition - Database Connection Pool Manager
 
 Unified yaspy connection pool with bind-variable support.
 Replaces all deploy_yashandb.py subprocess calls with direct yaspy access.
@@ -10,6 +10,16 @@ import json
 import hashlib
 import yaspy
 DATABASE_DIALECT = "yashandb"
+
+
+def utc_wall_clock_expression() -> str:
+    """A fresh UTC wall clock after row-lock waits."""
+    return "SYS_EXTRACT_UTC(SYSTIMESTAMP)"
+
+
+def session_timestamp_utc_expression(timestamp_sql: str) -> str:
+    """Attach the session timezone before projecting a naive TIMESTAMP."""
+    return "SYS_EXTRACT_UTC(FROM_TZ(CAST(" + timestamp_sql + " AS TIMESTAMP), SESSIONTIMEZONE))"
 
 
 def scalar_select_suffix() -> str:
@@ -435,16 +445,79 @@ def execute_insert_returning_id(sql: str, params: Optional[Dict[str, Any]] = Non
             return val[0] if isinstance(val, list) else val
 
 
-def execute_many(sql: str, params_list: List[Dict[str, Any]]) -> int:
+_BATCH_SIZE = 100
+# Application routing ceiling, not a claim about yaspy's maximum bind size.
+# Mixed arrays with a large text value have lost both text and NULL indicators
+# in native validation. Send those rows individually before attempting any DML.
+_ARRAY_TEXT_BYTES = 32767
+
+
+def _array_dml_segments(chunk):
+    start = 0
+    for index, row in enumerate(chunk):
+        if any(isinstance(value, str) and len(value.encode('utf-8')) > _ARRAY_TEXT_BYTES
+               for value in row.values()):
+            if start < index:
+                for segment in _null_safe_array_segments(chunk[start:index]):
+                    yield True, segment
+            yield False, row
+            start = index + 1
+    if start < len(chunk):
+        for segment in _null_safe_array_segments(chunk[start:]):
+            yield True, segment
+
+
+def _null_safe_array_segments(chunk):
+    """Avoid yaspy inferring a later type over a segment's initial NULL bind."""
+    start = 0
+    first_nulls = {name for name, value in chunk[0].items() if value is None}
+    for index, row in enumerate(chunk[1:], 1):
+        if any(row.get(name) is not None for name in first_nulls):
+            yield chunk[start:index]
+            start = index
+            first_nulls = {name for name, value in row.items() if value is None}
+    yield chunk[start:]
+
+
+def _execute_many_cursor(cur, sql, params_list) -> int:
     sql = sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())")
-    with get_connection_for_agent() as conn:
-        with conn.cursor() as cur:
-            total = 0
-            for params in params_list:
+    total = 0
+    native = callable(getattr(cur, 'executemany', None))
+    for start in range(0, len(params_list), _BATCH_SIZE):
+        chunk = params_list[start:start + _BATCH_SIZE]
+        if native:
+            for array, segment in _array_dml_segments(chunk):
+                if array:
+                    cur.executemany(sql, segment)
+                    logger.debug("batch_dml method=yaspy_array_dml rows=%d", len(segment))
+                else:
+                    # Native checks found array-to-scalar failure with the
+                    # identical statement object. Preserve the exact SQL text
+                    # but supply a fresh string for the scalar operation.
+                    cur.execute(sql.encode('utf-8').decode('utf-8'), segment)
+                    logger.debug("batch_dml method=serial_large_text rows=1")
+                total += max(cur.rowcount, 0)
+        else:
+            # Older drivers may lack array DML. Never call this a native batch.
+            logger.warning("batch_dml method=serial_fallback reason=driver_missing_executemany rows=%d", len(chunk))
+            for params in chunk:
                 cur.execute(sql, params)
-                total += cur.rowcount
+                total += max(cur.rowcount, 0)
+    return total
+
+
+def execute_many(sql: str, params_list: List[Dict[str, Any]]) -> int:
+    if not params_list:
+        return 0
+    with get_connection_for_agent() as conn:
+        try:
+            with conn.cursor() as cur:
+                total = _execute_many_cursor(cur, sql, params_list)
             conn.commit()
             return total
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def execute_transaction(statements: List[tuple[str, Optional[Dict[str, Any]]]]) -> int:
@@ -479,6 +552,12 @@ class _Transaction:
     def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> int:
         self.cursor.execute(sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())"), params or {})
         return max(self.cursor.rowcount, 0)
+
+    def execute_many(self, sql: str, params_list: List[Dict[str, Any]]) -> int:
+        if not params_list:
+            return 0
+        with self.conn.cursor() as cur:
+            return _execute_many_cursor(cur, sql, params_list)
 
     def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         self.cursor.execute(sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())"), params or {})

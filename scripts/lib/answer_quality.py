@@ -16,6 +16,7 @@ from .agent_extension_contracts import bounded_json, canonical, digest, identifi
 from .connection_crypto import decrypt_section, encrypt_section
 from .continuity_contracts import Contract, Identifier, Reason, Revision
 from .continuity_state import ContinuityConflict
+from . import model_credentials
 
 
 class Rubric(Contract):
@@ -221,23 +222,42 @@ def execute(actor, run_id, *, worker_id="answer-quality-worker"):
                     return {"run_id": run_id, "status": "UNOBSERVED", "replayed": True}
         if record["status"] != "PENDING":
             return {"run_id": run_id, "status": record["status"], "replayed": True}
+        from . import processing_runtime
+        current_link = task_continuity._row(tx.query_one('SELECT LINK_ID FROM CX_TASK_CONTINUITY_LINKS WHERE CONTINUITY_ID=:chain',
+            {'chain': record['continuity_id']}))
+        retry = str(current_link.get('link_id') or '').startswith('recovery:')
+        binding = processing_runtime.evaluation_credential(tx, actor, run_id, required=retry)
+        if binding is None:
+            captured = model_credentials.capture(actor, required_scope='platform.manage', tx=tx)
+            binding = processing_runtime.evaluation_credential(tx, actor, run_id, captured)
+        frozen = row(tx.query_one('SELECT INPUT_CIPHER,INPUT_DIGEST FROM CX_ANSWER_QUALITY_INPUTS WHERE RUN_ID=:run',
+            {'run': run_id})) if retry else None
+        if frozen:
+            _sources(tx, actor, record)
+            if digest(decrypt_section(frozen['input_cipher'])) != frozen['input_digest']:
+                raise PermissionError('The original evaluation input integrity changed')
         attempt = task_continuity.claim_attempt(tx, continuity_id=record["continuity_id"], worker_id=worker_id,
             business_key=run_id, request_digest=record["request_digest"], lease_seconds=300)
         if attempt.get("replayed") or attempt.get("reconciliation_required"):
             return {"run_id": run_id, "status": "UNOBSERVED" if attempt.get("reconciliation_required") else "RUNNING", "replayed": True}
         tx.execute("UPDATE CX_ANSWER_QUALITY_RUNS SET STATUS='RUNNING' WHERE RUN_ID=:run_id AND STATUS='PENDING'", {"run_id": run_id})
-        return record, profile, configured, case, rubric, attempt
+        return record, profile, configured, case, rubric, attempt, binding, frozen
     claimed = connection.execute_transaction_callback(claim)
     if isinstance(claimed, dict):
         return claimed
-    record, profile, configured, case, rubric, attempt = claimed
+    record, profile, configured, case, rubric, attempt, binding, saved = claimed
     started = time.monotonic()
     sent = False
     try:
-        retrieval = answer_planning.retrieve(actor, record["agent_id"], case["query_text"], strategy=rubric.strategy)
-        prepared = answer_planning.prepare(case["query_text"], record["profile_id"], configured, retrieval)
-        frozen_input = {"entry_kind": record["entry_kind"], "messages": prepared["messages"], "knowledge_reply": prepared["knowledge_reply"],
-                        "retrieval": retrieval, "prepared": {key: value for key, value in prepared.items() if key != "messages"}}
+        if saved:
+            frozen_input = decrypt_section(saved['input_cipher'])
+            retrieval = frozen_input['retrieval']
+            prepared = dict(frozen_input['prepared'], messages=frozen_input['messages'])
+        else:
+            retrieval = answer_planning.retrieve(actor, record["agent_id"], case["query_text"], strategy=rubric.strategy)
+            prepared = answer_planning.prepare(case["query_text"], record["profile_id"], configured, retrieval)
+            frozen_input = {"entry_kind": record["entry_kind"], "messages": prepared["messages"], "knowledge_reply": prepared["knowledge_reply"],
+                            "retrieval": retrieval, "prepared": {key: value for key, value in prepared.items() if key != "messages"}}
         bounded_json(frozen_input, maximum=1024 * 1024)
         def bind_input(tx):
             _authority(tx, actor, record)
@@ -249,6 +269,12 @@ def execute(actor, run_id, *, worker_id="answer-quality-worker"):
                 return False
             if current.get("attempt_id") != attempt["attempt_id"] or current.get("fencing_token") != attempt["fencing_token"]:
                 raise ContinuityConflict("FENCING_MISMATCH", "Evaluation attempt was replaced before dispatch")
+            if saved:
+                _sources(tx, actor, record)
+                tx.execute('INSERT INTO CX_ANSWER_QUALITY_RETRY_INPUTS(ATTEMPT_ID,RUN_ID,CONTINUITY_ID,INPUT_CIPHER,INPUT_DIGEST) '
+                    'VALUES(:attempt,:run,:chain,:cipher,:digest)', {'attempt': attempt['attempt_id'], 'run': run_id,
+                    'chain': record['continuity_id'], 'cipher': saved['input_cipher'], 'digest': saved['input_digest']})
+                return True
             for number, source in enumerate(prepared["citations"], 1):
                 knowledge_grounding.citation(actor, record["agent_id"], source["entity_id"], source["digest"])
                 tx.execute("INSERT INTO CX_ANSWER_QUALITY_SOURCES(RUN_ID,ITEM_NO,ENTITY_ID,CONTENT_DIGEST) VALUES(:run_id,:v_item_no,:entity,:digest)",
@@ -260,8 +286,38 @@ def execute(actor, run_id, *, worker_id="answer-quality-worker"):
             return {"run_id": run_id, "status": "UNOBSERVED", "replayed": True}
         result = {"content": prepared["knowledge_reply"], "model": None, "usage": None, "usage_observation": "UNAVAILABLE"}
         if result["content"] is None:
+            def reauthorize(tx, admission):
+                live = row(tx.query_one('SELECT * FROM CX_ANSWER_QUALITY_RUNS WHERE RUN_ID=:run_id AND ACTOR_ID=:actor',
+                                       {'run_id': run_id, 'actor': actor}))
+                if not live or live.get('status') != 'RUNNING' or live.get('request_digest') != record['request_digest']:
+                    raise PermissionError('The original evaluation run is no longer current')
+                _authority(tx, actor, live)
+                portal_grounding._recheck_profile(tx, profile)
+                _inputs(tx, live)
+                _sources(tx, actor, live)
+                current = tx.query_one("SELECT a.ATTEMPT_ID FROM CX_TASK_CONTINUITY_ATTEMPTS a JOIN CX_TASK_CONTINUITY_LEASES l "
+                    "ON l.CONTINUITY_ID=a.CONTINUITY_ID WHERE a.ATTEMPT_ID=:attempt AND a.STATUS='SENDING' "
+                    "AND a.FENCING_TOKEN=:fence AND a.REQUEST_DIGEST=:digest AND a.LEASE_EXPIRES_AT>:utc_now "
+                    "AND l.LEASE_OWNER=:worker AND l.FENCING_TOKEN=:fence AND l.STATUS='ACTIVE' AND l.LEASE_EXPIRES_AT>:utc_now",
+                    {'attempt': attempt['attempt_id'], 'fence': attempt['fencing_token'], 'digest': record['request_digest'],
+                     'utc_now': task_continuity._now(), 'worker': worker_id})
+                if saved:
+                    frozen = row(tx.query_one('SELECT INPUT_CIPHER,INPUT_DIGEST,ATTEMPT_ID FROM CX_ANSWER_QUALITY_RETRY_INPUTS '
+                        'WHERE RUN_ID=:run_id AND ATTEMPT_ID=:attempt', {'run_id': run_id, 'attempt': attempt['attempt_id']}))
+                else:
+                    frozen = row(tx.query_one('SELECT INPUT_CIPHER,INPUT_DIGEST,ATTEMPT_ID FROM CX_ANSWER_QUALITY_INPUTS WHERE RUN_ID=:run_id',
+                                              {'run_id': run_id}))
+                if (not current or frozen.get('attempt_id') != attempt['attempt_id']
+                        or frozen.get('input_digest') != digest(frozen_input)
+                        or digest(decrypt_section(frozen['input_cipher'])) != digest(frozen_input)):
+                    raise PermissionError('The original evaluation Worker or frozen input changed')
+                from .processing_runtime import dispatch_gate
+                dispatch_gate(tx, record['continuity_id'], admission)
             sent = True
-            result = native_runtime._call_llm(profile, prepared["messages"])
+            with model_credentials.dispatch_context(binding, 'EVALUATION', run_id, attempt['attempt_id'],
+                    reauthorize=reauthorize, worker_key=worker_id, allow_wait=False,
+                    lock_principals=(actor, record['agent_id'])):
+                result = native_runtime._call_llm(profile, prepared["messages"])
         generation_kind = "REAL_MODEL" if sent else "DETERMINISTIC"
         answer = answer_planning.render_reply(str(result["content"]), prepared)
         assessment = assess(case, rubric, prepared, retrieval, answer, generation_kind)
@@ -270,6 +326,8 @@ def execute(actor, run_id, *, worker_id="answer-quality-worker"):
                   "usage": result.get("usage"), "usage_observation": result.get("usage_observation", "UNAVAILABLE")}
         bounded_json(output, maximum=1024 * 1024)
         def finish(tx):
+            if binding is not None:
+                model_credentials.recheck(tx, binding)
             _authority(tx, actor, record)
             _inputs(tx, record)
             _sources(tx, actor, record)
@@ -286,14 +344,38 @@ def execute(actor, run_id, *, worker_id="answer-quality-worker"):
             identity_api._audit_tx(tx, actor, "ANSWER_QUALITY_OBSERVED", "ANSWER_QUALITY_RUN", run_id, "ALLOW", generation_kind)
             return {"run_id": run_id, "status": "SUCCEEDED", "assertions_passed": assessment["assertions_passed"], "factual_review": assessment["factual_review"]}
         return connection.execute_transaction_callback(finish)
-    except Exception:
+    except Exception as exc:
+        from .model_dispatch import CapacityQueued
+        cancellation_error = None
+        if isinstance(exc, CapacityQueued):
+            from . import model_endpoint_capacity
+            queued = exc.admission
+            try:
+                model_endpoint_capacity.cancel_admission(actor, queued['admission_id'], dict(
+                    expected_version=queued['version'], reason='Evaluation Worker does not wait with an active business lease',
+                    idempotency_key='evaluation-no-send:' + queued['admission_id']))
+            except Exception as problem:
+                # The queue rejection still proves this Worker did not send.
+                # Release its business lease even when queue cleanup failed.
+                cancellation_error = problem
+        if getattr(exc, 'model_not_dispatched', False):
+            sent = False
         outcome = "UNOBSERVED" if sent else "FAILED"
         def fail(tx):
             observed = task_continuity.finish_attempt(tx, attempt_id=attempt["attempt_id"], worker_id=worker_id,
-                fencing_token=attempt["fencing_token"], status=outcome, request_digest=record["request_digest"], error_code="EVALUATION_UNOBSERVED" if sent else "EVALUATION_FAILED",
+                fencing_token=attempt["fencing_token"], status=outcome, request_digest=record["request_digest"], error_code=(exc.code if isinstance(exc, CapacityQueued) else "EVALUATION_UNOBSERVED" if sent else "EVALUATION_FAILED"),
                 error_message="Evaluation did not produce an accepted observation")
             tx.execute("UPDATE CX_ANSWER_QUALITY_RUNS SET STATUS=:status,COMPLETED_AT=CURRENT_TIMESTAMP WHERE RUN_ID=:run_id AND STATUS='RUNNING'", {"status": observed["status"], "run_id": run_id})
-        connection.execute_transaction_callback(fail)
+        try:
+            connection.execute_transaction_callback(fail)
+        except ContinuityConflict as cleanup_error:
+            if cleanup_error.code not in {'FENCING_MISMATCH', 'ATTEMPT_TERMINAL'}:
+                raise
+            # A replaced Worker must not settle its successor's attempt/lease.
+            # Keep the original dispatch outcome visible with cleanup evidence.
+            raise exc from cleanup_error
+        if cancellation_error is not None:
+            raise cancellation_error from exc
         raise
 
 

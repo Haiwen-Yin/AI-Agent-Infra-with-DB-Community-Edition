@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Task Plan API
+"""AI Agent Infra v5.0.2 - Community Edition - Task Plan API
 
 Task plan creation, step management, breakpoint recovery,
 tool call auditing, and dependency tracking.
@@ -246,6 +246,15 @@ def update_step(step_id: str, **kwargs: Any) -> bool:
     if not valid:
         return False
 
+    from . import processing_legacy
+    if processing_legacy.enabled():
+        from . import connection as _connection
+        affected = int(_connection.execute_transaction_callback(
+            lambda tx: processing_legacy.update_step(tx, step_id, valid)))
+        if affected and valid.get("status") in _STEP_TERMINAL_STATUSES:
+            _sync_step_graph(step_id, valid["status"])
+        return affected > 0
+
     set_parts = []
     params: Dict[str, Any] = {"step_id": step_id}
     for key, value in valid.items():
@@ -274,19 +283,23 @@ def update_step(step_id: str, **kwargs: Any) -> bool:
         else:
             raise
     if affected > 0 and "status" in valid and valid["status"] in _STEP_TERMINAL_STATUSES:
-        try:
-            from . import graph_compat
-            step = _row_to_dict(execute_query_one(
-                "SELECT s.STEP_ID,s.PLAN_ID,s.STATUS,s.TOOL_OUTPUT,p.AGENT_ID AS GRAPH_ACTOR_ID "
-                "FROM TASK_STEPS s JOIN TASK_PLANS p ON p.PLAN_ID=s.PLAN_ID WHERE s.STEP_ID=:step_id",
-                {"step_id": step_id},
-            ) or {"step_id": step_id})
-            graph_compat.sync_task_step(step, valid["status"], str(step.get("graph_actor_id") or "system"),
-                                        step.get("tool_output") if isinstance(step.get("tool_output"), dict) else None)
-        except Exception:
-            logger.exception("Failed to synchronize Task Step with Graph Runtime")
-            raise
+        _sync_step_graph(step_id, valid["status"])
     return affected > 0
+
+
+def _sync_step_graph(step_id: str, status: str):
+    try:
+        from . import graph_compat
+        step = _row_to_dict(execute_query_one(
+            "SELECT s.STEP_ID,s.PLAN_ID,s.STATUS,s.TOOL_OUTPUT,p.AGENT_ID AS GRAPH_ACTOR_ID "
+            "FROM TASK_STEPS s JOIN TASK_PLANS p ON p.PLAN_ID=s.PLAN_ID WHERE s.STEP_ID=:step_id",
+            {"step_id": step_id},
+        ) or {"step_id": step_id})
+        graph_compat.sync_task_step(step, status, str(step.get("graph_actor_id") or "system"),
+                                    step.get("tool_output") if isinstance(step.get("tool_output"), dict) else None)
+    except Exception:
+        logger.exception("Failed to synchronize Task Step with Graph Runtime")
+        raise
 
 
 def get_plan_steps(plan_id: str) -> List[Dict[str, Any]]:
@@ -354,6 +367,12 @@ def log_tool_call(plan_id: str, step_id: Optional[str] = None,
                   status: str = "PENDING",
                   duration_ms: Optional[int] = None) -> str:
     """Log a tool call and return its CALL_ID."""
+    from . import processing_legacy
+    if processing_legacy.enabled():
+        from . import connection as _connection
+        return _connection.execute_transaction_callback(lambda tx: processing_legacy.log_tool_call(
+            tx, plan_id=plan_id, step_id=step_id, tool_name=tool_name, tool_input=tool_input,
+            tool_output=tool_output, status=status, duration_ms=duration_ms))
     sql = """
         INSERT INTO TASK_TOOL_CALLS (CALL_ID, PLAN_ID, STEP_ID, TOOL_NAME,
                                      TOOL_INPUT, TOOL_OUTPUT, STATUS, DURATION_MS)
@@ -539,16 +558,8 @@ def distribute_plan_to_group(plan_id: str, group_id: str) -> Dict[str, Any]:
 
 
 def bind_loop_to_step(step_id: str, loop_id: str, binding_type: str = 'COMPLETION', auto_start: str = 'N') -> str:
-    from .loop_api import start_run
-    binding_id = execute_insert_returning_id("""
-        INSERT INTO TASK_LOOP_BINDING (BINDING_ID, STEP_ID, LOOP_ID, BINDING_TYPE, AUTO_START)
-        VALUES (AI_NEW_ID(), :step_id, :loop_id, :binding_type, :auto_start)
-        RETURNING BINDING_ID INTO :ret_id
-    """, {"step_id": step_id, "loop_id": loop_id, "binding_type": binding_type, "auto_start": auto_start})
-    execute("UPDATE TASK_STEPS SET LOOP_ID = :loop_id, STEP_COMPLETION_TYPE = 'LOOP' WHERE STEP_ID = :step_id", {"loop_id": loop_id, "step_id": step_id})
-    if auto_start == 'Y':
-        start_run(loop_id, ...)
-    return binding_id
+    from . import loop_api
+    return loop_api.bind_loop_to_step(loop_id, step_id, binding_type, auto_start)
 
 def get_step_loop(step_id: str) -> Optional[Dict[str, Any]]:
     row = execute_query_one("""

@@ -1,4 +1,4 @@
-# Deployment guide v5.0.1
+# Deployment guide v5.0.2
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -159,6 +159,38 @@ package has one per backend under `scripts/deploy/<database>/`. v5.0.0 ends at
 Use the baseline generated for the exact package version. Historical filenames
 and applied checksums are not renamed.
 
+The v5.0.2 baseline adds `106_v5_0_2_model_capacity.sql`,
+`107_v5_0_2_processing_recovery.sql`,
+`108_v5_0_2_governed_model_turns.sql` and
+`109_v5_0_2_observed_answer_reviews.sql`, with a schema manifest for each
+migration on each backend. Migration 108 retains structured/governed model
+turns; 109 adds immutable Human reviews of imported observed answers. The
+PostgreSQL also adds migration110 to reconcile the historical overlapping
+organization-approval entity constraints. Its terminal is110 and postflight
+verifies103–110. Oracle and YashanDB retain terminal109 and verify103–109.
+The PostgreSQL successor preserves the four supported entity types, rejection
+of unsupported types, approval status and ordinary decision authority; unknown
+constraint definitions stop deployment. Historical SQL and checksums remain
+unchanged. The declared
+v5.0.1 transition verifies the actual predecessor
+103–105 structures, APPLIED state and exact checksums before applying the new
+chain. New runtime tables retain independent business-Agent SQL denials and
+native immutable history. Do not serve the new runtime on a partial chain.
+See [model capacity](model-endpoint-capacity.md),
+[processing recovery](processing-recovery.md) and
+[governed model workflows](model-workflows.md). Installing these contracts does
+not enable a model, tool, framework or new capability by default.
+
+Migration 109 stores typed original observations and Human decisions; importing
+an observation makes no model request and creates no native answer-quality run.
+Its Dashboard routes require an actual authenticated Human Session, current
+`platform.manage` and current Domain, Agent/Profile and source authority; POST
+requests require CSRF. A reviewer must differ from both the registering actor
+and the original responsible actor. Immutable facts and required audit commit
+together. Current-authority reads/exports and independently verified original
+capture evidence remain separate requirements; a recorded review does not
+establish final release acceptance. See [observed-answer review APIs](api-reference.md#observed-answer-human-reviews).
+
 For v5.0.1, postflight verifies the actual time/note/retrospective, context/asset/
 source and answer-quality objects as well as their APPLIED entries and script
 digests. A terminal 105 ledger row cannot substitute for missing 103 or 104
@@ -173,7 +205,7 @@ regular file with mode `0600`, then run:
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ```
@@ -202,7 +234,7 @@ They must not enter public archives.
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config "$CX_CONFIG_PATH"
 ./start_web_server.sh start
 ./start_web_server.sh status

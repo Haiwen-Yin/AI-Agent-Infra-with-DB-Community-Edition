@@ -50,7 +50,8 @@ def _load(monkeypatch, backend, kind):
         _module(monkeypatch, 'yaspy', Connection=type('Connection', (), {}))
     else:
         pool = _module(monkeypatch, 'psycopg2.pool', ThreadedConnectionPool=type('Pool', (), {}))
-        _module(monkeypatch, 'psycopg2.extras', RealDictCursor=type('Cursor', (), {}))
+        _module(monkeypatch, 'psycopg2.extras', RealDictCursor=type('Cursor', (), {}),
+                execute_values=lambda *a, **k: pytest.fail('Identity eviction must not execute batch DML'))
         _module(monkeypatch, 'psycopg2', pool=pool,
                 errors=types.SimpleNamespace(InsufficientPrivilege=type('InsufficientPrivilege', (Exception,), {})),
                 sql=types.SimpleNamespace(SQL=SQL, Identifier=lambda value: SQL('"' + value.replace('"', '""') + '"')))

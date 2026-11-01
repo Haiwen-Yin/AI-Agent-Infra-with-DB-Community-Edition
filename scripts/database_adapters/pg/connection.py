@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.2 - Community Edition - Database Connection Pool Manager
 
 psycopg2-based connection pool with parameterized query support.
 Supports Admin/Agent separation modes (standalone, admin, agent).
@@ -15,13 +15,23 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2
 from psycopg2 import pool as pg_pool
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 
 from .config import get_config, DatabaseConfig, AgentModeConfig
 from lib.transaction_reads import TransactionReads, connection_identity
 
 logger = logging.getLogger(__name__)
 DATABASE_DIALECT = "postgresql"
+
+
+def utc_wall_clock_expression() -> str:
+    """A fresh clock after row-lock waits, independent of transaction start."""
+    return "clock_timestamp() AT TIME ZONE 'UTC'"
+
+
+def session_timestamp_utc_expression(timestamp_sql: str) -> str:
+    """Project a session-local TIMESTAMP as a UTC-naive value."""
+    return "(" + timestamp_sql + " AT TIME ZONE current_setting('TimeZone')) AT TIME ZONE 'UTC'"
 
 
 def scalar_select_suffix() -> str:
@@ -571,15 +581,54 @@ def _split_top_level_commas(s: str) -> List[str]:
     return parts
 
 
+_BATCH_SIZE = 100
+
+
+def _insert_batch_template(sql):
+    # Limit rewriting to plain INSERT VALUES. Complex DML keeps its original
+    # sequential semantics and exact affected-row count through an explicit fallback.
+    value = r"(?:%s|NULL|CURRENT_TIMESTAMP|[-+]?\d+(?:\.\d+)?|'(?:[^']|'')*')"
+    match = re.fullmatch(
+        r"\s*(INSERT\s+INTO\s+[A-Za-z_][\w.]*\s*\([^()]+\)\s*VALUES)\s*"
+        r"(\(\s*" + value + r"(?:\s*,\s*" + value + r")*\s*\))\s*;?\s*",
+        sql, flags=re.IGNORECASE,
+    )
+    return (match[1] + ' %s', match[2]) if match else None
+
+
+def _execute_many_cursor(cur, sql, params_list) -> int:
+    total = 0
+    for start in range(0, len(params_list), _BATCH_SIZE):
+        chunk = [_convert_params(sql, params) for params in params_list[start:start + _BATCH_SIZE]]
+        converted_sql = chunk[0][0]
+        template = _insert_batch_template(converted_sql)
+        if template and all(statement == converted_sql for statement, _ in chunk):
+            statement, values = template
+            execute_values(cur, statement, [params for _, params in chunk],
+                           template=values, page_size=len(chunk))
+            total += max(cur.rowcount, 0)
+            logger.debug("batch_dml method=postgresql_multi_values rows=%d", len(chunk))
+        else:
+            logger.warning("batch_dml method=serial_fallback reason=complex_dml rows=%d", len(chunk))
+            for statement, params in chunk:
+                cur.execute(statement, params)
+                total += max(cur.rowcount, 0)
+    return total
+
+
 def execute_many(sql: str, params_list) -> int:
-    """Execute a batch INSERT/UPDATE/DELETE."""
+    """Batch selected INSERTs; complex DML has an explicit sequential fallback."""
+    if not params_list:
+        return 0
     with get_connection_for_agent() as conn:
-        with conn.cursor() as cur:
-            for params in params_list:
-                converted_sql, converted_params = _convert_params(sql, params)
-                cur.execute(converted_sql, converted_params)
+        try:
+            with conn.cursor() as cur:
+                total = _execute_many_cursor(cur, sql, params_list)
             conn.commit()
-            return cur.rowcount
+            return total
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def execute_transaction(statements: List[tuple[str, Optional[Dict[str, Any]]]]) -> int:
@@ -615,6 +664,12 @@ class _Transaction:
         converted_sql, converted_params = _convert_params(sql, params)
         self.cursor.execute(converted_sql, converted_params)
         return max(self.cursor.rowcount, 0)
+
+    def execute_many(self, sql: str, params_list) -> int:
+        if not params_list:
+            return 0
+        with self.conn.cursor() as cur:
+            return _execute_many_cursor(cur, sql, params_list)
 
     def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         converted_sql, converted_params = _convert_params(sql, params)

@@ -878,6 +878,25 @@ def postflight(database: str, edition: str, config: Dict[str, Any], terminal_mig
                 "Resolve failed migration steps before handoff.", {"count": failed},
             ))
 
+            if terminal_migration in {"109_v5_0_2_observed_answer_reviews.sql", "110_v5_0_2_pg_approval_entity_repair.sql"}:
+                import migration_runner
+                native_tail = migration_runner.v502_native_migration_scripts(database)
+                checks.append(_check(
+                    "V502_BACKEND_TERMINAL", "PASS" if terminal_migration == native_tail[-1] else "BLOCKED",
+                    "Packaged terminal matches the selected backend",
+                    "Use the current PostgreSQL 110 or Oracle/YashanDB 109 deployment baseline.",
+                    {"expected": native_tail[-1], "actual": terminal_migration},
+                ))
+                deploy_dir = _package_deploy_dir(database, root)
+                for name in native_tail:
+                    complete = migration_runner._step_objects_complete(cursor, database, deploy_dir / name, version="5.0.2")
+                    checks.append(_check(
+                        "V502_NATIVE_" + name.split('_', 1)[0], "PASS" if complete else "BLOCKED",
+                        "Native release schema and security boundary verified",
+                        "Apply and verify the exact backend migration chain before handoff.", {"step": name},
+                    ))
+                terminal_migration = "102_v5_0_0_network_access.sql"
+
             if terminal_migration == "105_v5_0_1_answer_quality.sql":
                 import migration_runner
                 deploy_dir = _package_deploy_dir(database, root)
@@ -1232,6 +1251,7 @@ def _configure_models(raw: Dict[str, Any], run_id: str) -> Dict[str, Any]:
         preprocessing=dict(embedding.get("preprocessing") or {}), modalities=list(embedding.get("modalities") or ["TEXT"]),
         api_key=str(embedding.get("api_key") or ""), secret_reference=str(embedding.get("secret_reference") or ""),
         reason="Bootstrap Deployment Agent initial Embedding configuration", model_fingerprint=str(embedding.get("model_fingerprint") or ""),
+        reuse_unchanged=True,
     )
     contract = embedding_governance.create_contract(actor, str(profile["profile_id"]), "Bootstrap initial Embedding Contract")
     space = embedding_governance.create_space(actor, "DEFAULT", str(contract["contract_id"]), "Bootstrap default Embedding Space", default=True, writable=True)

@@ -5,6 +5,7 @@ import FindingReview from "./FindingReview";
 import CatalogPicker from "./CatalogPicker";
 import PrincipalPicker from "./PrincipalPicker";
 import ToolsCatalog from "./ToolsCatalog";
+import ModelEndpointCapacity from "./ModelEndpointCapacity";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -1321,7 +1322,7 @@ function PageView({
 function WorkspacesAndContinuity({ lang, me, capabilities, text, onNotice }: { lang: Lang; me: Row | null; capabilities: Row | null; text: (zh: string, en: string) => string; onNotice: (value: string) => void }) {
   const [view, setView] = useUrlState("view", ["workspaces", "continuity"] as const, "workspaces");
   return <section className="page-stack"><ViewToggle value={view} onChange={setView} options={[["workspaces", text("工作区", "Workspaces"), Layers3], ["continuity", text("工作交接", "Work continuity"), History]]} />
-    {view === "workspaces" ? <DataPage page="workspaces" lang={lang} text={text} onNotice={onNotice} /> : <><SectionHeading title={text("工作交接", "Work continuity")} subtitle={text("记录目标与验收条件，明确交接责任，保留修订和执行结果。", "Record objectives and acceptance criteria, assign handoff responsibility, and retain revisions and outcomes.")} text={text} /><ContinuityWorkbench request={api} text={text} principalId={String(me?.principal_id || "")} canWrite={canAction(capabilities, "workspaces.write")} canManage={canAction(capabilities, "platform.manage")} canOperateAgents={canAction(capabilities, "agents.operate")} /></>}
+    {view === "workspaces" ? <DataPage page="workspaces" lang={lang} text={text} onNotice={onNotice} /> : <><SectionHeading title={text("工作交接", "Work continuity")} subtitle={text("记录目标与验收条件，明确交接责任，保留修订和执行结果。", "Record objectives and acceptance criteria, assign handoff responsibility, and retain revisions and outcomes.")} text={text} /><ContinuityWorkbench request={api} text={text} principalId={String(me?.principal_id || "")} canWrite={canAction(capabilities, "workspaces.write")} canManage={canAction(capabilities, "platform.manage")} canOperateAgents={canAction(capabilities, "agents.operate")} modelRuntimeEnabled={Boolean(capabilities?.model_runtime_context_enabled)} /></>}
   </section>;
 }
 
@@ -1966,6 +1967,7 @@ function LLMProviderProfilesPanel({ lang, capabilities, text, onNotice }: {
     </form>}
     {loading ? <PageLoading text={text} /> : <DataTable headers={[text("配置", "Profile"), text("模型", "Model"), text("密钥", "Secret"), text("健康", "Health"), text("模型路由", "Model routing"), text("操作", "Action")]} rows={profiles.map((item) => { const id = String(item.profile_id || ""); const saved = routingByProfile[id] || { direct: true, gateway: false, address: "" }; const draft = routingDraft[id] || saved; const changed = draft.direct !== saved.direct || draft.gateway !== saved.gateway; const update = (key: "direct" | "gateway") => setRoutingDraft((current) => ({ ...current, [id]: { ...draft, [key]: !draft[key] } })); return [item.profile_key, item.model_id, item.secret_present ? text("已加密", "Encrypted") : text("未设置", "Not set"), displayRowValue(lang, item.health_state), canManage ? <div className="route-mode-control"><div className="route-mode-options"><label className={draft.direct ? "route-choice active" : "route-choice"}><input type="checkbox" checked={draft.direct} onChange={() => update("direct")} disabled={busy} />{text("直连", "Direct")}</label><label className={draft.gateway ? "route-choice active" : "route-choice"}><input type="checkbox" checked={draft.gateway} onChange={() => update("gateway")} disabled={busy} />{text("平台网关", "Gateway")}</label><input className="route-address" value={draft.address} readOnly title={draft.address} aria-label={text("平台自动分发地址", "Platform-distributed URL")} /></div><button type="button" className={`small-button route-confirm${changed ? " pending" : ""}`} disabled={busy || !changed} onClick={() => void confirmRouting(item)}><Check size={13} />{text("确认变更", "Confirm")}</button></div> : text("只读", "Read-only"), canManage && String(item.status || "").toUpperCase() !== "RETIRED" ? <span className="actions-row"><button className="small-button" disabled={busy} onClick={() => void probe(String(item.profile_id))}>{text("探活", "Probe")}</button><button className="small-button danger" disabled={busy} onClick={() => setReasonDialog({ kind: "retire", item })}>{text("移除", "Retire")}</button></span> : displayRowValue(lang, item.status)]; })} empty={text("暂无 LLM 配置", "No LLM profiles")} text={text} />}
     <DetailDrawer open={Boolean(reasonDialog)} title={text("输入变更原因", "Enter change reason")} onClose={() => { if (!busy) setReasonDialog(null); }} text={text}>{reasonDialog && <form className="configuration-form compact-configuration-form" onSubmit={(event) => { event.preventDefault(); const reason = String(new FormData(event.currentTarget).get("reason") || "").trim(); if (reason.length < 3) return; if (reasonDialog.kind === "retire") void retire(reasonDialog.item, reason); else void confirmRouting(reasonDialog.item, reason); }}><ConfigField label={text("原因", "Reason")} hint={text("至少三个字符并写入审计。", "At least three characters and audited.")}><input name="reason" required /></ConfigField><button className={`small-button confirm-drawer-button${reasonDialog.kind === "retire" ? " danger" : ""}`} disabled={busy}><Check size={14} />{text(reasonDialog.kind === "retire" ? "确认移除" : "确认变更", reasonDialog.kind === "retire" ? "Confirm retirement" : "Confirm change")}</button></form>}</DetailDrawer>
+    {capabilities?.model_runtime_context_enabled && canAction(capabilities, "model_gateway.manage") && <ModelEndpointCapacity request={(path, options) => api<Row>(path, options)} text={text} profiles={profiles} />}
   </InfoPanel>;
 }
 
@@ -9170,6 +9172,8 @@ function LegacyOperations({
   const [skillEditingId, setSkillEditingId] = useState("");
   const [skillDetail, setSkillDetail] = useState<Row | null>(null);
   const [runs, setRuns] = useState<Row[]>([]);
+  const [loopDomains, setLoopDomains] = useState<Row[]>([]);
+  const [loopDomainId, setLoopDomainId] = useState("");
   const endpoint =
     page === "skills"
       ? "/api/skills"
@@ -9200,6 +9204,13 @@ function LegacyOperations({
   };
   useEffect(() => {
     void load();
+  }, [page]);
+  useEffect(() => {
+    setLoopDomainId("");
+    if (page !== "loops") return;
+    api<Row>("/api/security-domains?limit=200")
+      .then((value) => setLoopDomains(value.items || []))
+      .catch(() => setLoopDomains([]));
   }, [page]);
   useEffect(() => {
     if (page !== "loops" || !selected) {
@@ -9471,6 +9482,7 @@ function LegacyOperations({
       title: data.title,
       summary: data.summary,
       visibility: data.visibility,
+      agent_id: data.agent_id,
       goal_definition: { goal: data.goal || data.title },
       stop_conditions: { max_iterations: Number(data.max_iterations || 10) },
       evaluation_config: { eval_type: "MANUAL" },
@@ -9492,7 +9504,6 @@ function LegacyOperations({
     );
     setRuns(listPayload(value, ["runs"]));
   };
-  const selectedLoop = items.find((item) => String(item.loop_id) === selected);
   const startRun = async () => {
     if (!selected) return;
     try {
@@ -9500,8 +9511,7 @@ function LegacyOperations({
         method: "POST",
         body: JSON.stringify({
           loop_id: selected,
-          agent_id:
-            selectedLoop?.owned_by_agent || selectedLoop?.agent_id || "system",
+          processing_domain_id: loopDomainId || undefined,
         }),
       });
       const value = await api<Row>(
@@ -9523,6 +9533,7 @@ function LegacyOperations({
       <p className="cx-form-hint">{text("创建循环只保存定义与停止条件，不会自动启动运行。请从下方选定循环后明确点击“启动运行”；暂停、恢复和停止均由运行状态机处理。", "Creating a Loop stores its definition and stop condition only; it never starts a run automatically. Select the Loop below and explicitly start it; pause, resume, and stop use the run state machine.")}</p>
       <form className="operation-explainer-form" onSubmit={createLoop}>
         <label className="workbench-field"><span>{text("循环标题", "Loop title")}</span><input name="title" required /><small>{text("用于识别该循环定义。", "Identifies this Loop definition.")}</small></label>
+        <label className="workbench-field"><span>{text("执行 Agent ID", "Execution Agent ID")}</span><input name="agent_id" required /><small>{text("填写你负责且已进入目标安全域的 Agent。", "Use an Agent you are responsible for that belongs to the target Security Domain.")}</small></label>
         <label className="workbench-field"><span>{text("目标", "Goal")}</span><input name="goal" required /><small>{text("定义每次迭代要达成的结果。", "Defines the result each iteration works toward.")}</small></label>
         <label className="workbench-field"><span>{text("摘要", "Summary")}</span><input name="summary" /><small>{text("可选；为操作人员提供简短背景说明。", "Optional; provides brief context for operators.")}</small></label>
         <label className="workbench-field"><span>{text("最大迭代次数", "Maximum iterations")}</span><input name="max_iterations" type="number" min="1" defaultValue="10" /><small>{text("达到上限后循环停止，防止无限运行。", "Stops the Loop at this limit to prevent unbounded runs.")}</small></label>
@@ -9541,6 +9552,7 @@ function LegacyOperations({
             </option>
           ))}
         </select>
+        <label className="workbench-field"><span>{text("运行安全域", "Run Security Domain")}</span><input list="loop-run-domains" value={loopDomainId} onChange={(event) => setLoopDomainId(event.target.value)} placeholder={text("唯一有效域可自动解析", "Resolves only a unique authorized domain")} /><datalist id="loop-run-domains">{loopDomains.map((domain) => <option key={domain.security_domain_id} value={domain.security_domain_id}>{domain.name || domain.security_domain_id}</option>)}</datalist><small>{text("多个有效域时必须明确指定；服务端重新核验人和 Agent 的权限。", "Select an exact domain when several apply; the server rechecks both Human and Agent authority.")}</small></label>
         <span className="row-actions">
           <button
             className="small-button"

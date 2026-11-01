@@ -9,6 +9,10 @@ from . import provider_capability_probes
 from . import agent_directory, context_derivations, graph_inspection, registered_protocols, managed_inputs, agent_diagnostics, answer_evaluation
 from . import telemetry_delivery
 from . import answer_quality
+from . import model_endpoint_capacity
+from .model_endpoint_contracts import (CapacityAlias, CapacityCancellation, CapacityObservation,
+                                       CapacityOrigin, CapacityOriginState, CapacityRevision, NewCapacityGroup,
+                                       OperatorCapacityResolution)
 from . import agent_assets, agent_source_sync, continuity_notes, continuity_retrospectives, memory_quality
 from .agent_extension_contracts import bounded_json
 from .continuity_contracts import AssemblyRequest, Contract
@@ -94,8 +98,11 @@ class AnswerReviewBody(BaseModel):
 class RecommendationBody(Contract):
     security_domain_id: str = Field(min_length=1, max_length=128)
     query: str = Field(min_length=1, max_length=2000)
-    limit: int = Field(default=5, ge=1, le=20)
+    limit: int = Field(default=5, ge=1, le=10)
     candidate_limit: int = Field(default=50, ge=1, le=100)
+    schema_token_budget: int | None = Field(default=None, ge=1, le=16777216)
+    schema_byte_budget: int = Field(default=262144, ge=1, le=262144)
+    model_name: str = Field(default="", max_length=200)
 
 
 class AssetAssemblyBody(Contract):
@@ -116,10 +123,11 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
     def invoke(operation, session, *args, **kwargs):
         try:
             from .continuity_bindings import authenticated_transport
-            with schema_owner_context(), authenticated_transport(session.get("continuity_transport")):
+            from .model_credentials import server_session
+            with schema_owner_context(), authenticated_transport(session.get("continuity_transport")), server_session(session):
                 return operation(str(session["principal_id"]), *args, **kwargs)
         except ContinuityError as exc:
-            raise HTTPException(status_code=409 if exc.code in {"VERSION_CONFLICT", "IDEMPOTENCY_CONFLICT", "FENCING_MISMATCH", "LEASE_HELD", "UNKNOWN_SEND", "STALE_OUTPUT"} else 422,
+            raise HTTPException(status_code=409 if exc.code in {"VERSION_CONFLICT", "STALE_VERSION", "IDEMPOTENCY_CONFLICT", "FENCING_MISMATCH", "LEASE_HELD", "UNKNOWN_SEND", "STALE_OUTPUT", "CAPACITY_DRAINING", "ALIAS_ALREADY_BOUND", "PROFILE_ALREADY_BOUND", "INVALID_TRANSITION"} else 422,
                                 detail={"code": exc.code, "message": str(exc)}) from exc
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -134,6 +142,57 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
     def provider_probes(profile_id: str, session=Depends(require_action("platform.manage"))):
         return invoke(provider_capability_probes.list_probes, session, profile_id)
 
+    capacity_root = prefix + "/model-endpoint-capacity"
+    capacity_router = APIRouter()
+
+    @capacity_router.get(capacity_root + "/groups")
+    def capacity_groups(after: str = "", limit: int = Query(20, ge=1, le=50), session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.list_groups, session, after=after, limit=limit)
+
+    @capacity_router.post(capacity_root + "/groups")
+    def capacity_create(body: NewCapacityGroup, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.create_group, session, body.model_dump(mode="json"))
+
+    @capacity_router.get(capacity_root + "/groups/{group_id}")
+    def capacity_group(group_id: str, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.read_group, session, group_id)
+
+    @capacity_router.get(capacity_root + "/groups/{group_id}/admissions")
+    def capacity_requests(group_id: str, after_sequence: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=50), session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.list_group_admissions, session, group_id, after_sequence=after_sequence, limit=limit)
+
+    @capacity_router.post(capacity_root + "/groups/{group_id}/revisions")
+    def capacity_revise(group_id: str, body: CapacityRevision, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.revise_group, session, group_id, body.model_dump(mode="json"))
+
+    @capacity_router.post(capacity_root + "/groups/{group_id}/origins")
+    def capacity_origin(group_id: str, body: CapacityOrigin, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.register_origin, session, group_id, body.model_dump(mode="json"))
+
+    @capacity_router.post(capacity_root + "/groups/{group_id}/origins/{origin_id}/state")
+    def capacity_origin_state(group_id: str, origin_id: str, body: CapacityOriginState, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.change_origin, session, group_id, origin_id, body.model_dump(mode="json"))
+
+    @capacity_router.post(capacity_root + "/groups/{group_id}/aliases")
+    def capacity_alias(group_id: str, body: CapacityAlias, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.register_alias, session, group_id, body.model_dump(mode="json"))
+
+    @capacity_router.get(capacity_root + "/admissions/{admission_id}")
+    def capacity_admission(admission_id: str, session=Depends(require_action("model_gateway.forward"))):
+        return invoke(model_endpoint_capacity.read_admission, session, admission_id)
+
+    @capacity_router.get(capacity_root + "/admin/admissions/{admission_id}")
+    def capacity_admin_admission(admission_id: str, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.read_admission, session, admission_id, administrator=True)
+
+    @capacity_router.post(capacity_root + "/admissions/{admission_id}/cancel")
+    def capacity_cancel(admission_id: str, body: CapacityCancellation, session=Depends(require_action("model_gateway.forward"))):
+        return invoke(model_endpoint_capacity.cancel_admission, session, admission_id, body.model_dump(mode="json"))
+
+    @capacity_router.post(capacity_root + "/admissions/{admission_id}/reconcile")
+    def capacity_reconcile(admission_id: str, body: OperatorCapacityResolution, session=Depends(require_action("model_gateway.manage"))):
+        return invoke(model_endpoint_capacity.observe_completion, session, admission_id, body.model_dump(mode="json"), reconcile=True)
+
     @router.post(prefix + "/llm-provider-profiles/{profile_id}/capability-probes")
     def provider_probe(profile_id: str, body: ProviderProbeBody, session=Depends(require_action("platform.manage"))):
         return invoke(provider_capability_probes.probe, session, profile_id, body.capability,
@@ -144,6 +203,10 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
         return invoke(provider_capability_probes.approve_parameters, session, profile_id, body.probe_id, body.parameters)
 
     root = prefix + "/agent-extensions"
+    from .governed_model_http import install as install_governed_model_routes
+    install_governed_model_routes(router, root, invoke, require_action)
+    from .processing_recovery_http import install as install_processing_recovery_routes
+    install_processing_recovery_routes(router, root, invoke, require_action)
 
     @router.get(root + "/directory")
     def directory(security_domain_id: str, family: str, query: str = "", after: str = "", limit: int = Query(20, ge=1, le=50), session=Depends(require_action("workspaces.read"))):
@@ -152,7 +215,9 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
     @router.post(root + "/directory/recommend")
     def directory_recommend(body: RecommendationBody, session=Depends(require_action("workspaces.read"))):
         return invoke(agent_directory.recommend, session, body.security_domain_id, body.query,
-                      limit=body.limit, candidate_limit=body.candidate_limit)
+                      limit=body.limit, candidate_limit=body.candidate_limit,
+                      schema_token_budget=body.schema_token_budget, schema_byte_budget=body.schema_byte_budget,
+                      model_name=body.model_name)
 
     @router.post(root + "/asset-bindings")
     def asset_binding(body: agent_assets.AssetBinding, session=Depends(require_action("agents.operate"))):
@@ -435,4 +500,7 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
     def read_telemetry(delivery_id: str, session=Depends(require_action("platform.manage"))):
         return invoke(telemetry_delivery.read, session, delivery_id)
 
+    from .edition_features import MODEL_RUNTIME_CONTEXT_ENABLED
+    if MODEL_RUNTIME_CONTEXT_ENABLED:
+        router.include_router(capacity_router)
     app.include_router(router)

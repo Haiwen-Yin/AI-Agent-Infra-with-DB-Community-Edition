@@ -157,6 +157,9 @@ def test_baseline_declares_packaged_version_and_terminal():
             terminal = "102_v5_0_0_network_access.sql"
         if version == "5.0.1":
             terminal = "105_v5_0_1_answer_quality.sql"
+        if version == "5.0.2":
+            terminal = ("110_v5_0_2_pg_approval_entity_repair.sql" if database == "pg"
+                        else "109_v5_0_2_observed_answer_reviews.sql")
         baseline = deployment_orchestrator.release_baseline(database, root)
         assert baseline["version"] == version
         assert baseline["deployment"] == "bootstrap-deployment-agent"

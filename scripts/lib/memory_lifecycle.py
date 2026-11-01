@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -38,6 +39,8 @@ SAFE_REPRESENTATION_ORDER = {
     "REVIEW": ("SOURCE", "STANDARD_SUMMARY", "SHORT_SUMMARY", "ATOMIC_FACT", "TOPIC_SUMMARY"),
     "AUDIT": ("SOURCE", "STANDARD_SUMMARY", "SHORT_SUMMARY", "ATOMIC_FACT", "TOPIC_SUMMARY"),
 }
+
+_logger = logging.getLogger(__name__)
 
 
 class MemoryLifecycleError(ValueError):
@@ -214,9 +217,10 @@ def _require_memory_access(principal_id: str, version: Mapping[str, Any], *, pur
 
 def _authorized_version(principal_id: str, version_id: str, *, purpose: str,
                         agent_instance_id: Optional[str] = None,
-                        agent_fencing_token: Optional[int] = None) -> dict[str, Any]:
-    row = execute_query_one("SELECT * FROM CX_MEMORY_VERSIONS WHERE VERSION_ID=:version_id", {"version_id": version_id})
-    if not row:
+                        agent_fencing_token: Optional[int] = None, _version=None) -> dict[str, Any]:
+    row = (execute_query_one("SELECT * FROM CX_MEMORY_VERSIONS WHERE VERSION_ID=:version_id", {"version_id": version_id})
+           if _version is None else _version)
+    if not row or str(row.get('version_id')) != str(version_id):
         raise _safe_error()
     _require_memory_access(principal_id, row, purpose=purpose, agent_instance_id=agent_instance_id,
                            agent_fencing_token=agent_fencing_token)
@@ -518,39 +522,97 @@ def attach_artifact(version_id: str, artifact_id: str, *, actor: str, relation: 
     return link_id
 
 
+def _representation_metadata(reader,version_ids,*,limit,snapshot=False):
+    """Per-version limits and original ordering; ambiguous ties stay serial.
+
+    No representation bodies are read here. The window is supported by all
+    three native backends and has at most 100 bound version identifiers.
+    """
+    from .continuity_sources import read_ids
+    order=("CASE REPRESENTATION_TYPE WHEN 'SHORT_SUMMARY' THEN 1 WHEN 'ATOMIC_FACT' THEN 2 ELSE 3 END"
+           if snapshot else 'CREATED_AT DESC')
+    def original(version):
+        fields='REPRESENTATION_ID,REPRESENTATION_TYPE,TOKEN_COUNT' if snapshot else '*'
+        statement="SELECT "+fields+" FROM CX_MEMORY_REPRESENTATIONS WHERE VERSION_ID=:version_id AND VALIDATION_STATE='VALID' "
+        statement+="AND INDEX_STATE='HOT' ORDER BY "+order+" FETCH FIRST :lim ROWS ONLY"
+        return reader.query(statement,{'version_id':version,'lim':limit})
+    if not callable(getattr(reader,'execute_many',None)):
+        _logger.debug('context_read method=serial_fallback reason=legacy_representation_reader')
+        return {version:original(version) for version in version_ids}
+    rows=read_ids(reader,"SELECT * FROM (SELECT r.REPRESENTATION_ID,r.VERSION_ID,r.REPRESENTATION_TYPE,r.TOKEN_COUNT,"
+        "r.CONTENT_DIGEST,r.CREATED_AT,ROW_NUMBER() OVER (PARTITION BY r.VERSION_ID ORDER BY "+order+") AS BATCH_POSITION "
+        "FROM CX_MEMORY_REPRESENTATIONS r WHERE r.VERSION_ID IN ({ids}) AND r.VALIDATION_STATE='VALID' AND r.INDEX_STATE='HOT') "
+        "cx_ranked WHERE BATCH_POSITION<="+str(limit+1)+" ORDER BY VERSION_ID,BATCH_POSITION",version_ids)
+    grouped={version:[] for version in version_ids}
+    for row in rows:grouped.setdefault(row['version_id'],[]).append(row)
+    for version,items in grouped.items():
+        keys=[({'SHORT_SUMMARY':1,'ATOMIC_FACT':2}.get(item['representation_type'],3) if snapshot else item['created_at'])
+              for item in items]
+        if len(keys)!=len(set(keys)):
+            # The historical query gives no tie breaker. Do not invent a new
+            # order or choose another row at its per-version limit boundary.
+            _logger.debug('context_read method=serial_fallback reason=representation_order_tie')
+            grouped[version]=original(version)
+        else:grouped[version]=items[:limit]
+    return grouped
+
+
+def _version_metadata(reader,version_ids):
+    from .continuity_sources import read_ids
+    rows=read_ids(reader,"SELECT VERSION_ID,FAMILY_ID,LIFECYCLE_STATE,CLASSIFICATION,SECURITY_DOMAIN_ID,OWNER_PRINCIPAL_ID "
+        "FROM CX_MEMORY_VERSIONS WHERE VERSION_ID IN ({ids}) ORDER BY VERSION_ID FOR UPDATE",version_ids)
+    return {row['version_id']:row for row in rows}
+
+
 def select_representations(principal_id: str, version_ids: Iterable[str], *, purpose: str = "RUNTIME_CONTEXT",
                            token_budget: int = 2048, agent_instance_id: Optional[str] = None,
                            agent_fencing_token: Optional[int] = None) -> list[dict[str, Any]]:
     """Build diverse, authorized context without silently including duplicate source text."""
-    remaining = max(0, min(int(token_budget), 100000))
-    selected: list[dict[str, Any]] = []
-    families: set[str] = set()
-    digests: set[str] = set()
-    order = SAFE_REPRESENTATION_ORDER.get(str(purpose).upper(), SAFE_REPRESENTATION_ORDER["RUNTIME_CONTEXT"])
-    for version_id in list(dict.fromkeys(str(value) for value in version_ids))[:500]:
-        version = _authorized_version(principal_id, version_id, purpose=purpose,
-                                      agent_instance_id=agent_instance_id, agent_fencing_token=agent_fencing_token)
-        if str(version.get("family_id") or "") in families:
-            continue
-        representations = execute_query(
-            "SELECT * FROM CX_MEMORY_REPRESENTATIONS WHERE VERSION_ID=:version_id AND VALIDATION_STATE='VALID' "
-            "AND INDEX_STATE='HOT' ORDER BY CREATED_AT DESC FETCH FIRST :lim ROWS ONLY",
-            {"version_id": version_id, "lim": 20},
-        )
-        ranked = sorted(representations, key=lambda row: order.index(str(row.get("representation_type") or "SOURCE"))
-                        if str(row.get("representation_type") or "SOURCE") in order else len(order))
-        representation = next((row for row in ranked if int(row.get("token_count") or 0) <= remaining
-                               and str(row.get("content_digest") or "") not in digests), None)
-        if not representation:
-            continue
-        selected.append({"family_id": version.get("family_id"), "version_id": version_id,
-                         "representation_id": representation.get("representation_id"),
-                         "representation_type": representation.get("representation_type"),
-                         "body_text": representation.get("body_text"), "token_count": int(representation.get("token_count") or 0)})
-        families.add(str(version.get("family_id") or ""))
-        digests.add(str(representation.get("content_digest") or ""))
-        remaining -= int(representation.get("token_count") or 0)
-    return selected
+    from . import continuity_work,context_selection
+    from .continuity_sources import read_ids
+    identifiers=list(dict.fromkeys(str(value) for value in version_ids))[:500]
+    if not identifiers:return []
+    def perform(tx):
+        continuity_work._lock_actor(tx,principal_id)
+        with context_selection.permission_inputs(tx,principal_id,{'memory.read'},cache=True):
+            versions=_version_metadata(tx,identifiers)
+            for version_id in identifiers:
+                if version_id not in versions:raise _safe_error()
+                _authorized_version(principal_id,version_id,purpose=purpose,_version=versions[version_id],
+                    agent_instance_id=agent_instance_id,agent_fencing_token=agent_fencing_token)
+            representations=_representation_metadata(tx,identifiers,limit=20)
+            remaining=max(0,min(int(token_budget),100000));selected=[];families=set();digests=set()
+            order=SAFE_REPRESENTATION_ORDER.get(str(purpose).upper(),SAFE_REPRESENTATION_ORDER['RUNTIME_CONTEXT'])
+            for version_id in identifiers:
+                version=versions[version_id]
+                if str(version.get('family_id') or '') in families:continue
+                ranked=sorted(representations[version_id],key=lambda row:order.index(str(row.get('representation_type') or 'SOURCE'))
+                    if str(row.get('representation_type') or 'SOURCE') in order else len(order))
+                representation=next((row for row in ranked if int(row.get('token_count') or 0)<=remaining
+                    and str(row.get('content_digest') or '') not in digests),None)
+                if not representation:continue
+                selected.append(dict(family_id=version.get('family_id'),version_id=version_id,
+                    representation_id=representation.get('representation_id'),representation_type=representation.get('representation_type'),
+                    token_count=int(representation.get('token_count') or 0)))
+                families.add(str(version.get('family_id') or ''));digests.add(str(representation.get('content_digest') or ''))
+                remaining-=int(representation.get('token_count') or 0)
+            bodies={row['representation_id']:row for row in read_ids(tx,
+                "SELECT REPRESENTATION_ID,VERSION_ID,REPRESENTATION_TYPE,TOKEN_COUNT,CONTENT_DIGEST,BODY_TEXT "
+                "FROM CX_MEMORY_REPRESENTATIONS WHERE REPRESENTATION_ID IN ({ids}) "
+                "AND VALIDATION_STATE='VALID' AND INDEX_STATE='HOT'",[item['representation_id'] for item in selected])}
+            if _version_metadata(tx,identifiers)!=versions:raise _safe_error()
+            for item in selected:
+                _require_memory_access(principal_id,versions[item['version_id']],purpose=purpose,
+                    agent_instance_id=agent_instance_id,agent_fencing_token=agent_fencing_token)
+                if item['representation_id'] not in bodies:raise _safe_error()
+                body=bodies[item['representation_id']]
+                original=next(row for row in representations[item['version_id']]
+                    if row['representation_id']==item['representation_id'])
+                if any(body[name]!=original[name] for name in
+                    ('version_id','representation_type','token_count','content_digest')):raise _safe_error()
+                item['body_text']=body['body_text']
+            return selected
+    return execute_transaction_callback(perform)
 
 
 def archive_version(version_id: str, *, actor: str, reason: str, cold: bool = True) -> bool:
@@ -638,9 +700,7 @@ def _select_snapshot_members(reader: Any, *, token_budget: int, limit: int = 200
     """
     from .memory_quality import applicable_sql
     versions = reader.query(
-        "SELECT f.FAMILY_ID,f.LEGACY_ENTITY_ID,v.VERSION_ID,v.VERSION_NUMBER,v.TITLE,v.BODY_TEXT,"
-        "v.MEMORY_TYPE,v.MEMORY_SCOPE,v.LIFECYCLE_STATE,v.CLASSIFICATION,v.OWNER_PRINCIPAL_ID,"
-        "v.OWNER_AGENT_ID,v.WORKSPACE_ID,v.SECURITY_DOMAIN_ID,v.VALID_FROM,v.VALID_UNTIL "
+        "SELECT f.FAMILY_ID,v.VERSION_ID "
         "FROM CX_MEMORY_FAMILIES f JOIN CX_MEMORY_VERSIONS v ON v.VERSION_ID=f.CURRENT_VERSION_ID "
         "WHERE v.LIFECYCLE_STATE IN ('ACTIVE','STALE','CONFLICTED','MIGRATED') "
         "AND (v.VALID_UNTIL IS NULL OR v.VALID_UNTIL > CURRENT_TIMESTAMP) AND "+applicable_sql()+" "
@@ -649,11 +709,9 @@ def _select_snapshot_members(reader: Any, *, token_budget: int, limit: int = 200
     )
     remaining = max(0, min(int(token_budget), 100000))
     members = []
+    by_version=_representation_metadata(reader,[version['version_id'] for version in versions],limit=10,snapshot=True)
     for rank, version in enumerate(versions):
-        representations = reader.query(
-            "SELECT REPRESENTATION_ID, REPRESENTATION_TYPE, TOKEN_COUNT FROM CX_MEMORY_REPRESENTATIONS WHERE VERSION_ID = :version_id AND VALIDATION_STATE = 'VALID' AND INDEX_STATE = 'HOT' ORDER BY CASE REPRESENTATION_TYPE WHEN 'SHORT_SUMMARY' THEN 1 WHEN 'ATOMIC_FACT' THEN 2 ELSE 3 END FETCH FIRST :lim ROWS ONLY",
-            {"version_id": version["version_id"], "lim": 10},
-        )
+        representations=by_version[version['version_id']]
         representation = next((item for item in representations if int(item.get("token_count") or 0) <= remaining), None)
         if not representation:
             continue
@@ -694,8 +752,16 @@ def _insert_snapshot(tx: Any, *, snapshot_id: str, run_id: str, actor: str, purp
     digest = _digest(run_id, purpose, query_version, _json(members))
     subject = dict(subject or {})
     tx.execute("INSERT INTO CX_MEMORY_SNAPSHOTS (SNAPSHOT_ID,RUN_ID,SNAPSHOT_VERSION,PURPOSE,POLICY_VERSION,QUERY_DIGEST,SNAPSHOT_DIGEST,STATE,CREATED_BY,IDEMPOTENCY_KEY,PRINCIPAL_ID,PRINCIPAL_PERMISSION_VERSION,AGENT_INSTANCE_ID,AGENT_FENCING_TOKEN) VALUES (:snapshot_id,:run_id,1,:purpose,'v4.3.2',:query_digest,:snapshot_digest,'ACTIVE',:actor,:idempotency_key,:principal_id,:principal_permission_version,:agent_instance_id,:agent_fencing_token)", {"snapshot_id": snapshot_id, "run_id": run_id, "purpose": purpose, "query_digest": _digest(query_version, purpose), "snapshot_digest": digest, "actor": actor, "idempotency_key": idempotency_key, **subject})
-    for member in members:
-        tx.execute("INSERT INTO CX_MEMORY_SNAPSHOT_MEMBERS (SNAPSHOT_ID,FAMILY_ID,VERSION_ID,REPRESENTATION_ID,SELECTION_RANK,SELECTED_TOKENS) VALUES (:snapshot_id,:family_id,:version_id,:representation_id,:rank,:tokens)", {"snapshot_id": snapshot_id, **member})
+    if members:
+        statement = "INSERT INTO CX_MEMORY_SNAPSHOT_MEMBERS (SNAPSHOT_ID,FAMILY_ID,VERSION_ID,REPRESENTATION_ID,SELECTION_RANK,SELECTED_TOKENS) VALUES (:snapshot_id,:family_id,:version_id,:representation_id,:rank,:tokens)"
+        rows = [{"snapshot_id": snapshot_id, **member} for member in members]
+        batch = getattr(tx, 'execute_many', None)
+        if callable(batch):
+            batch(statement, rows)
+        else:
+            _logger.info('batch_dml method=serial_fallback reason=legacy_transaction rows=%d', len(rows))
+            for params in rows:
+                tx.execute(statement, params)
     return {"snapshot_id": snapshot_id, "snapshot_version": 1, "snapshot_digest": digest, "members": len(members), "token_count": sum(item["tokens"] for item in members)}
 
 

@@ -81,11 +81,12 @@ class Response:
         return False
 
     def read(self, *_):
-        return json.dumps({"model": "demo", "choices": [{"message": {"content": "answer"}}],
+        return json.dumps({"model": "demo", "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
                            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}}).encode()
 
     def __iter__(self):
         yield b'data: {"model":"demo","choices":[{"delta":{"content":"answer"}}]}\n'
+        yield b'data: {"model":"demo","choices":[{"delta":{},"finish_reason":"stop"}]}\n'
         yield b'data: [DONE]\n'
 
 
@@ -100,6 +101,9 @@ def _legacy_helper(stream):
 
 @pytest.fixture
 def dispatch(monkeypatch):
+    # This suite freezes the v5.0.1 transport contract without migration106.
+    from lib import edition_features
+    monkeypatch.setattr(edition_features, "MODEL_RUNTIME_CONTEXT_ENABLED", False)
     configured = config.LLMConfig(api_url="http://example.test/v1", model="demo", request_timeout_seconds=247.5)
     monkeypatch.setattr(config, "get_config", lambda: SimpleNamespace(llm=configured))
     monkeypatch.setattr(provider_capability_probes, "apply_parameters", lambda _profile, payload: dict(payload))
@@ -109,7 +113,7 @@ def dispatch(monkeypatch):
     monkeypatch.setattr(model_usage_api.connection, "execute", lambda *_: 1)
     monkeypatch.setattr(model_usage_api, "_idempotent_replay", lambda *_: None)
     monkeypatch.setattr(model_usage_api, "_reserve_idempotency", lambda *_: None)
-    monkeypatch.setattr(model_usage_api, "_write_usage", lambda *_: {})
+    monkeypatch.setattr(model_usage_api, "_write_usage", lambda *args, **kwargs: {})
     monkeypatch.setattr(model_usage_api.model_governance_api, "reserve_quota", lambda *_: {"warnings": []})
     monkeypatch.setattr(model_usage_api.model_governance_api, "release_quota", lambda *_: None)
     monkeypatch.setattr(model_usage_api.model_governance_api, "settle_quota", lambda *_args, **_kwargs: None)

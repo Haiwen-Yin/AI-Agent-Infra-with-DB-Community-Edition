@@ -1,16 +1,19 @@
 import React, { FormEvent, useEffect, useRef, useState } from "react";
 import { ClipboardCheck, RotateCcw } from "lucide-react";
 import { statusLabel } from "./statusLabels";
+import RetrospectiveOutputContract, { probeIsFresh, RetrospectiveOutput } from "./RetrospectiveOutputContract";
+import ModelToolWorkflow from "./ModelToolWorkflow";
+import "./ModelWorkflows.css";
 
 type Row = Record<string, any>;
 type SourceRef = { family: string; entity_id: string; revision_id: string; content_digest: string };
-type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; principalId: string; work?: Row; sources: SourceRef[]; canWrite: boolean; canManage: boolean };
+type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; principalId: string; work?: Row; sources: SourceRef[]; canWrite: boolean; canManage: boolean; modelRuntimeEnabled?: boolean };
 const ROOT = "/api/agent-extensions";
 const newId = () => crypto.randomUUID();
 const SOURCE_MODES = ["KNOWLEDGE_GROUNDED", "MIXED_SOURCES", "MODEL_SUPPLEMENT", "KNOWLEDGE_EXTRACTS", "CLARIFICATION_REQUIRED", "INSUFFICIENT_KNOWLEDGE"];
 
-export default function ContinuityQuality({ request, text, domain, principalId, work, sources, canWrite, canManage }: Props) {
-  const [view, setView] = useState<"retrospective" | "evaluation">("retrospective");
+export default function ContinuityQuality({ request, text, domain, principalId, work, sources, canWrite, canManage, modelRuntimeEnabled = false }: Props) {
+  const [view, setView] = useState<"retrospective" | "evaluation" | "tools">("retrospective");
   const [profiles, setProfiles] = useState<Row[]>([]);
   const [nativeAgents, setNativeAgents] = useState<Row[]>([]);
   const [policy, setPolicy] = useState<Row | null>(null);
@@ -20,6 +23,8 @@ export default function ContinuityQuality({ request, text, domain, principalId, 
   const [rubricRevision, setRubricRevision] = useState(0);
   const [runRecord, setRunRecord] = useState<Row | null>(null);
   const [profileId, setProfileId] = useState("");
+  const [targetFamily, setTargetFamily] = useState("MEMORY");
+  const [outputSelection, setOutputSelection] = useState<RetrospectiveOutput>({ mode: "TEXT_JSON" });
   const [allowModelSend, setAllowModelSend] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -44,6 +49,8 @@ export default function ContinuityQuality({ request, text, domain, principalId, 
     setCases(Array.isArray(value) ? value : value.items || []);
   };
   useEffect(() => {
+    setRetrospective(null); setRunRecord(null); setAllowModelSend(false); setProfileId(""); setOutputSelection({ mode: "TEXT_JSON" });
+    setProfiles([]); setNativeAgents([]); setPolicy(null); setCases([]); setSelectedCase(null); setRubricRevision(0);
     if (!canManage) return;
     let active = true;
     void Promise.all([
@@ -58,27 +65,36 @@ export default function ContinuityQuality({ request, text, domain, principalId, 
     }).catch(e => { if (active) setError(e instanceof Error ? e.message : text("模型或验收目录不可用", "Model or evaluation inventory is unavailable")); });
     return () => { active = false; };
   }, [domain, canManage]);
+  useEffect(() => { if (!modelRuntimeEnabled) { setOutputSelection({ mode: "TEXT_JSON" }); if (view === "tools") setView("retrospective"); } }, [modelRuntimeEnabled]);
 
   const submitRetrospective = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
     const refs = sources.filter(item => data.getAll("source_ref").includes(JSON.stringify(item)));
     void run(async () => {
       if (!refs.length) throw new Error(text("至少选择一个已授权的精确来源。", "Select at least one authorized exact source."));
+      const version = Number(data.get("profile_version"));
+      if (modelRuntimeEnabled && outputSelection.mode === "NATIVE_STRICT" && (!outputSelection.probeId || outputSelection.profileId !== profileId || outputSelection.profileVersion !== version || outputSelection.family !== targetFamily || !probeIsFresh(outputSelection.expiresAt)))
+        throw new Error(text("请选择当前模型修订、目标类型的未过期精确探测证据。", "Select fresh exact evidence for the current profile revision and target family."));
       const value = await post(`${ROOT}/retrospectives`, {
         security_domain_id: domain, task_id: String(data.get("task_id")), trigger: String(data.get("trigger")), target_family: String(data.get("target_family")),
         sources: refs, policy_revision: String(policy?.version || data.get("policy_revision")), profile_id: String(data.get("profile_id")),
         profile_version: Number(data.get("profile_version")), token_budget: Number(data.get("token_budget")), reason: String(data.get("reason")),
+        ...(modelRuntimeEnabled ? { output_mode: outputSelection.mode, output_probe_id: outputSelection.mode === "NATIVE_STRICT" ? outputSelection.probeId : null } : {}),
       });
       setRetrospective(value); setAllowModelSend(false); setNotice(text("回顾作业已创建为待执行任务。", "Retrospective job created and is awaiting an explicit run."));
     });
   };
   const runRetrospective = () => {
-    if (!retrospective?.job_id || !allowModelSend) return;
+    if (!retrospective?.job_id || retrospective.status !== "PENDING" || !allowModelSend || !canWrite || !canManage) return;
     void run(async () => {
       const value = await request(`${ROOT}/retrospectives/${encodeURIComponent(retrospective.job_id)}/run`, { method: "POST" });
       setRetrospective(value); setAllowModelSend(false);
       setNotice(text("模型结果仅生成待审核候选；不会自动审批或发布。", "Model output is only a pending candidate; it is not automatically approved or published."));
     });
+  };
+  const refreshRetrospective = () => {
+    if (!retrospective?.job_id) return;
+    void run(async () => { setAllowModelSend(false); setRetrospective(await request(`${ROOT}/retrospectives/${encodeURIComponent(retrospective.job_id)}`)); });
   };
   const createCase = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
@@ -154,6 +170,7 @@ export default function ContinuityQuality({ request, text, domain, principalId, 
     <div className="continuity-extension-tabs" role="tablist" aria-label={text("质量工作区", "Quality workspace")}>
       <button role="tab" aria-selected={view === "retrospective"} className={view === "retrospective" ? "active" : ""} type="button" onClick={() => setView("retrospective")}><RotateCcw size={16} />{text("工作回顾", "Work retrospective")}</button>
       <button role="tab" aria-selected={view === "evaluation"} className={view === "evaluation" ? "active" : ""} type="button" onClick={() => setView("evaluation")}><ClipboardCheck size={16} />{text("答案验收", "Answer evaluation")}</button>
+      {modelRuntimeEnabled && <button role="tab" aria-selected={view === "tools"} className={view === "tools" ? "active" : ""} type="button" onClick={() => setView("tools")}>{text("受控工具协作", "Governed tool collaboration")}</button>}
     </div>
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {!canManage && <p>{text("模型配置、来源披露策略和答案验收由有平台管理权限的人员在 Dashboard 中操作。", "Model configuration, source-disclosure policy, and answer evaluation are managed in the Dashboard by authorized platform managers.")}</p>}
@@ -161,16 +178,18 @@ export default function ContinuityQuality({ request, text, domain, principalId, 
       <form onSubmit={submitRetrospective}><fieldset className="operation-explainer-form" disabled={busy || !canWrite || !canManage}><legend>{text("创建结构化回顾作业", "Create a structured retrospective")}</legend>
         {taskChoices.length ? <label className="workbench-field"><span>{text("关联任务计划", "Linked Task Plan")}</span><select name="task_id" required>{taskChoices.map((item: Row) => <option key={item.entity_id} value={item.entity_id}>{item.entity_id}</option>)}</select></label> : <>{field("task_id", "任务计划标识", "Task Plan ID", { required: true, defaultValue: work?.task_id || "", maxLength: 128 })}<p>{text("需要选择当前主体有权访问的现有 Task Plan。", "Choose an existing Task Plan accessible to the current principal.")}</p></>}
         <label className="workbench-field"><span>{text("触发原因", "Trigger")}</span><select name="trigger"><option value="SUCCESS">{text("任务成功", "Task success")}</option><option value="FAILURE">{text("任务失败", "Task failure")}</option><option value="CORRECTION">{text("纠正", "Correction")}</option><option value="FEEDBACK">{text("反馈", "Feedback")}</option></select></label>
-        <label className="workbench-field"><span>{text("目标类型", "Target family")}</span><select name="target_family">{["MEMORY", "KNOWLEDGE", "EXPERIENCE", "SKILL"].map(item => <option key={item} value={item}>{statusLabel(item, text)}</option>)}</select></label>
-        <label className="workbench-field"><span>{text("来源证据", "Source evidence")}</span><select name="source_ref" multiple required size={Math.min(6, Math.max(3, sources.length))}>{sources.map(item => <option key={JSON.stringify(item)} value={JSON.stringify(item)}>{statusLabel(item.family, text)} · {item.entity_id} · {item.revision_id}</option>)}</select></label>
+        <label className="workbench-field"><span>{text("目标类型", "Target family")}</span><select aria-label={text("目标类型", "Target family")} name="target_family" value={targetFamily} onChange={e => { setTargetFamily(e.target.value); setOutputSelection(value => ({ mode: value.mode })); }}>{["MEMORY", "KNOWLEDGE", "EXPERIENCE", "SKILL"].map(item => <option key={item} value={item}>{statusLabel(item, text)}</option>)}</select></label>
+        <label className="workbench-field"><span>{text("来源证据", "Source evidence")}</span><select aria-label={text("来源证据", "Source evidence")} name="source_ref" multiple required size={Math.min(6, Math.max(3, sources.length))}>{sources.map(item => <option key={JSON.stringify(item)} value={JSON.stringify(item)}>{statusLabel(item.family, text)} · {item.entity_id} · {item.revision_id}</option>)}</select></label>
         {!sources.length && <p>{text("先完成来源同步、上下文组装或发布，再选择其精确来源引用。", "Complete source synchronization, a context assembly, or a publication first, then select its exact source reference.")}</p>}
-        <label className="workbench-field"><span>{text("健康模型配置", "Healthy model profile")}</span><select name="profile_id" required value={profileId} onChange={e => setProfileId(e.target.value)}><option value="">{text("选择已健康配置", "Select a healthy profile")}</option>{eligibleProfiles.map(item => <option key={item.profile_id} value={item.profile_id}>{item.profile_name || item.profile_id} · {item.model_id}</option>)}</select></label>
+        <label className="workbench-field"><span>{text("健康模型配置", "Healthy model profile")}</span><select aria-label={text("健康模型配置", "Healthy model profile")} name="profile_id" required value={profileId} onChange={e => { setProfileId(e.target.value); setOutputSelection(value => ({ mode: value.mode })); }}><option value="">{text("选择已健康配置", "Select a healthy profile")}</option>{eligibleProfiles.map(item => <option key={item.profile_id} value={item.profile_id}>{item.profile_name || item.profile_id} · {item.model_id}</option>)}</select></label>
         <input type="hidden" name="profile_version" value={eligibleProfiles.find(item => item.profile_id === profileId)?.version || ""} />{field("policy_revision", "策略修订", "Policy revision", { required: true, readOnly: true, value: policy?.version || "" })}
+        {modelRuntimeEnabled && canManage && <RetrospectiveOutputContract key={`${domain}:${principalId}`} request={request} text={text} profileId={profileId} profileVersion={Number(eligibleProfiles.find(item => item.profile_id === profileId)?.version || 0)} family={targetFamily} disabled={busy || !canWrite || !canManage} onChange={setOutputSelection} />}
         <label className="workbench-field"><span>{text("Token 预算", "Token budget")}</span><input type="number" name="token_budget" min={128} max={32768} defaultValue={8192} required /></label>{reason()}
         <p>{text("创建会登记 Task Continuity 步骤。后续执行会把选定证据发送给健康且获准的模型，并只产生待审核候选。", "Creation records a Task Continuity step. A later explicit run sends selected evidence to the approved healthy model and creates only a pending candidate.")}</p><button className="primary-button">{text("创建回顾作业", "Create retrospective")}</button>
       </fieldset></form>
-      <section className="continuity-extension-column"><h4>{text("当前回顾作业", "Current retrospective")}</h4>{retrospective ? <><p>{retrospective.job_id} · {statusLabel(retrospective.status, text)}</p>{retrospective.candidate_id && <p>{text("待审核候选", "Pending candidate")}: {retrospective.candidate_id}</p>}<label className="continuity-source-check"><input type="checkbox" checked={allowModelSend} onChange={e => setAllowModelSend(e.target.checked)} /><span>{text("我确认此次操作会向模型服务发送已选择的来源内容。", "I confirm this operation will send the selected source content to the model service.")}</span></label><button className="primary-button" type="button" disabled={busy || retrospective.status !== "PENDING" || !allowModelSend} onClick={runRetrospective}>{text("执行一次回顾", "Run retrospective once")}</button><p>{text("外部发送结果不确定时不会自动重试。", "Uncertain external sends are not retried automatically.")}</p></> : <p>{text("尚未创建回顾作业。", "No retrospective job has been created.")}</p>}</section>
+      <section className="continuity-extension-column"><h4>{text("当前回顾作业", "Current retrospective")}</h4>{retrospective ? <><p>{retrospective.job_id} · {statusLabel(retrospective.status, text)}</p>{modelRuntimeEnabled && <><p>{text("冻结输出方式", "Frozen output mode")}: <strong>{retrospective.output_mode || "LEGACY_TEXT_JSON"}</strong></p>{retrospective.schema_digest && <p>{text("Schema 摘要", "Schema digest")}: <code>{retrospective.schema_digest}</code></p>}{retrospective.parameter_digest && <p>{text("参数摘要", "Parameter digest")}: <code>{retrospective.parameter_digest}</code></p>}{retrospective.output_probe_id && <p>{text("精确探测证据", "Exact probe evidence")}: {retrospective.output_probe_id}</p>}</>}{retrospective.candidate_id && <p>{text("待审核候选", "Pending candidate")}: {retrospective.candidate_id}</p>}<label className="continuity-source-check"><input type="checkbox" disabled={busy || !canWrite || !canManage || retrospective.status !== "PENDING"} checked={allowModelSend} onChange={e => setAllowModelSend(e.target.checked)} /><span>{text("我确认此次操作会向模型服务发送已选择的来源内容。", "I confirm this operation will send the selected source content to the model service.")}</span></label><button className="primary-button" type="button" disabled={busy || !canWrite || !canManage || retrospective.status !== "PENDING" || !allowModelSend} onClick={runRetrospective}>{text("执行一次回顾", "Run retrospective once")}</button><button className="secondary-button" type="button" disabled={busy} onClick={refreshRetrospective}>{text("刷新回顾记录", "Refresh retrospective record")}</button><p>{text("外部发送结果不确定时不会自动重试。", "Uncertain external sends are not retried automatically.")}</p></> : <p>{text("尚未创建回顾作业。", "No retrospective job has been created.")}</p>}</section>
     </div>}
+    {view === "tools" && modelRuntimeEnabled && <ModelToolWorkflow key={`${domain}:${principalId}`} request={request} text={text} domain={domain} />}
     {view === "evaluation" && <div className="continuity-quality-grid">
       <section className="continuity-extension-column"><h4>{text("答案用例", "Answer cases")}</h4>
         <form onSubmit={createCase}><fieldset className="operation-explainer-form" disabled={busy || !canManage}><legend>{text("登记录入／检索用例", "Register a retrieval case")}</legend>{field("case_id", "用例标识", "Case ID", { required: true, maxLength: 128 })}<label className="workbench-field"><span>{text("问题", "Query")}</span><textarea name="query_text" required maxLength={2000} rows={2} /></label>

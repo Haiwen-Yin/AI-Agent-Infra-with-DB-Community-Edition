@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Agent API
+"""AI Agent Infra v5.0.2 - Community Edition - Agent API
 
 Agent registration, session management, access audit logging,
 collaboration tracking, pool management, and Admin/Agent separation support.
@@ -892,7 +892,11 @@ def _provision_agent_login(agent_id: str) -> Dict[str, Any]:
                               'cx101_reject_task_continuity_mutation',
                               'cx103_reject_history_mutation',
                               'cx104_reject_context_asset_mutation',
-                              'cx105_reject_answer_mutation'
+                              'cx105_reject_answer_mutation',
+                              'cx106_reject_runtime_mutation',
+                              'cx107_reject_runtime_mutation',
+                              'cx108_reject_runtime_mutation',
+                              'cx109_reject_runtime_mutation'
                           )
                           AND NOT g.tgisinternal
                     )

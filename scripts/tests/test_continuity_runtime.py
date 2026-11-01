@@ -10,6 +10,10 @@ from .test_continuity_assembly import context_db,assembly_request
 
 @pytest.fixture
 def runtime_db(context_db,monkeypatch):
+    from lib import edition_features
+    # This migration-95/96 fixture tests the original context/fencing contract.
+    # Native capacity/credential integration is covered with migration 106.
+    monkeypatch.setattr(edition_features,'MODEL_RUNTIME_CONTEXT_ENABLED',False,raising=False)
     db,wid=context_db
     db.executescript('''
         CREATE TABLE CX_AGENT_INSTANCES(INSTANCE_ID TEXT PRIMARY KEY,AGENT_ID TEXT,STATUS TEXT,

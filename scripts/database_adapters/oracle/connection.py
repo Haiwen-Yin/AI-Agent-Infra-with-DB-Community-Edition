@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.2 - Community Edition - Database Connection Pool Manager
 
 Unified oracledb connection pool with bind-variable support.
 Replaces all SQLcl subprocess calls with direct oracledb access.
@@ -9,6 +9,16 @@ Supports Admin/Agent separation modes (standalone, admin, agent).
 import json
 import oracledb
 DATABASE_DIALECT = "oracle"
+
+
+def utc_wall_clock_expression() -> str:
+    """A fresh UTC wall clock after row-lock waits."""
+    return "SYS_EXTRACT_UTC(SYSTIMESTAMP)"
+
+
+def session_timestamp_utc_expression(timestamp_sql: str) -> str:
+    """Attach the session timezone before projecting a naive TIMESTAMP."""
+    return "SYS_EXTRACT_UTC(FROM_TZ(CAST(" + timestamp_sql + " AS TIMESTAMP), SESSIONTIMEZONE))"
 
 
 def scalar_select_suffix() -> str:
@@ -390,16 +400,46 @@ def execute_insert_returning_id(sql: str, params: Optional[Dict[str, Any]] = Non
             return val[0] if isinstance(val, list) else val
 
 
-def execute_many(sql: str, params_list: List[Dict[str, Any]]) -> int:
+_BATCH_SIZE = 100
+
+
+def _execute_many_cursor(cur, sql, params_list) -> int:
+    """Use bounded array DML, retaining exact timestamps and large text binds."""
     sql = sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())")
+    total = 0
+    for start in range(0, len(params_list), _BATCH_SIZE):
+        chunk = params_list[start:start + _BATCH_SIZE]
+        sizes = {}
+        for params in chunk:
+            for name, value in params.items():
+                if isinstance(value, datetime) and value.tzinfo is None:
+                    sizes[name] = oracledb.DB_TYPE_TIMESTAMP
+                elif isinstance(value, str):
+                    if len(value.encode('utf-8')) > 32767:
+                        sizes[name] = oracledb.DB_TYPE_CLOB
+                    elif sizes.get(name) != oracledb.DB_TYPE_CLOB:
+                        sizes[name] = max(sizes.get(name, 1), len(value), 1)
+        if sizes:
+            cur.setinputsizes(**sizes)
+        # Default batcherrors=False makes a partial error fail the transaction.
+        cur.executemany(sql, chunk)
+        total += max(cur.rowcount, 0)
+        logger.debug("batch_dml method=oracle_array_dml rows=%d", len(chunk))
+    return total
+
+
+def execute_many(sql: str, params_list: List[Dict[str, Any]]) -> int:
+    if not params_list:
+        return 0
     with get_connection_for_agent() as conn:
-        with conn.cursor() as cur:
-            total = 0
-            for params in params_list:
-                cur.execute(sql, params)
-                total += cur.rowcount
+        try:
+            with conn.cursor() as cur:
+                total = _execute_many_cursor(cur, sql, params_list)
             conn.commit()
             return total
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def execute_transaction(statements: List[tuple[str, Optional[Dict[str, Any]]]]) -> int:
@@ -434,6 +474,13 @@ class _Transaction:
     def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> int:
         self.cursor.execute(sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())"), params or {})
         return max(self.cursor.rowcount, 0)
+
+    def execute_many(self, sql: str, params_list: List[Dict[str, Any]]) -> int:
+        if not params_list:
+            return 0
+        # Isolate explicit bind sizing from later reads on the transaction cursor.
+        with self.conn.cursor() as cur:
+            return _execute_many_cursor(cur, sql, params_list)
 
     def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         self.cursor.execute(sql.replace("AI_NEW_ID()", "RAWTOHEX(SYS_GUID())"), params or {})

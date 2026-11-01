@@ -1,4 +1,4 @@
-# 迁移指南 v5.0.1
+# 迁移指南 v5.0.2
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -44,7 +44,7 @@ Oracle、YashanDB 升级至 v5.0.1 前，需由 SYS 在原有的确切应用 PDB
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
@@ -90,10 +90,10 @@ PostgreSQL 在历史状态分区 Task Plan 表没有全局 PLAN_ID 键的情况�
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -103,7 +103,7 @@ bash scripts/install_platform.sh resume \
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config /absolute/path/config.json
 ```
 

@@ -98,11 +98,12 @@ def governance_installed() -> bool:
         return False
 
 
-def get_registration(agent_id: str) -> Optional[Dict[str, Any]]:
+def get_registration(agent_id: str, *, transaction=None) -> Optional[Dict[str, Any]]:
     if not _normalise(agent_id):
         return None
     try:
-        row = execute_query_one(
+        query = transaction.query_one if transaction is not None else execute_query_one
+        row = query(
             """SELECT AGENT_ID, OWNER_REF, RUNTIME, ENVIRONMENT, NODE_ID,
                       CAPABILITIES_JSON, CREDENTIAL_VERSION, STATUS,
                       EMBEDDING_MODE, EMBEDDING_MODEL_ID, EMBEDDING_FINGERPRINT,
@@ -144,6 +145,8 @@ def register_agent(
     agent_id = _normalise(agent_id)
     if not agent_id or len(agent_id) > 128:
         raise ValueError("agent_id is required and must be at most 128 characters")
+    from .processing_native import require_external_identity
+    require_external_identity(agent_id)
     if not _normalise(owner_ref):
         raise ValueError("owner_ref is required")
     embedding_mode = validate_embedding_declaration(
@@ -276,6 +279,8 @@ def adopt_legacy_agent(agent_id: str, created_by: str = "legacy-confirmation") -
     # already have been registered by the Admin API with a different
     # idempotency key; treating that valid identity as a duplicate makes the
     # Portal release the Agent it just claimed.
+    from .processing_native import require_external_identity
+    require_external_identity(agent_id)
     existing = get_registration(agent_id)
     if existing:
         return existing
@@ -303,6 +308,9 @@ def adopt_legacy_agent(agent_id: str, created_by: str = "legacy-confirmation") -
 
 def authenticate_agent(agent_id: str, credential: str) -> Optional[Dict[str, Any]]:
     """Verify a credential and return a safe registration row."""
+    from .processing_native import is_projection
+    if is_projection(agent_id):
+        return None
     row = get_registration(agent_id)
     if not row or row.get("status") not in ACTIVE_STATUSES:
         return None
@@ -342,6 +350,8 @@ def heartbeat(agent_id: str, credential: str) -> bool:
 
 
 def set_status(agent_id: str, status: str, actor: str = "administrator") -> bool:
+    from .processing_native import require_external_identity
+    require_external_identity(agent_id)
     status = _normalise(status).upper()
     if status not in ACTIVE_STATUSES | INACTIVE_STATUSES:
         raise ValueError("invalid registration status")

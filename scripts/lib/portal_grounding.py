@@ -4,6 +4,18 @@ from __future__ import annotations
 import json
 from typing import Any
 from . import connection, content_security, identity_api, knowledge_grounding, native_runtime, answer_planning
+from . import model_credentials
+from .agent_extension_contracts import digest, identifier, row
+
+
+def _recheck_profile(tx, profile):
+    current = row(tx.query_one('SELECT PROFILE_ID,VERSION,PROVIDER_URL,MODEL_ID,API_KEY_CIPHER,STATUS '
+        'FROM CX_LLM_PROVIDER_PROFILES WHERE PROFILE_ID=:profile', {'profile': profile.get('profile_id')}))
+    keys = ('profile_id', 'provider_url', 'model_id', 'api_key_cipher')
+    if (current.get('status') != 'ACTIVE' or int(current.get('version') or 0) != int(profile.get('version') or 0)
+            or any((current.get(key) or '') != (profile.get(key) or '') for key in keys)):
+        raise PermissionError('The original model Profile changed before disclosure')
+    return current
 
 
 def policy() -> dict[str, Any]:
@@ -63,8 +75,39 @@ def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, su
     planned = answer_planning.prepare(message, str(profile.get("profile_id") or ""), effective_policy, result)
     citations, source = planned["citations"], planned["answer_source"]
     reply = planned["knowledge_reply"]
+    model_request_id = None
     if reply is None:
-        reply = native_runtime._call_llm(profile, planned["messages"])["content"]
+        binding = model_credentials.capture(actor, session=session)
+        request_id = identifier('PMA')
+        frozen_policy = digest(configured)
+        def reauthorize(tx, admission):
+            _recheck_profile(tx, profile)
+            knowledge_grounding.require_reader(actor, agent)
+            from . import agent_registration
+            registration = agent_registration.get_registration(agent)
+            if not registration or str(registration.get('status') or '').upper() != 'ACTIVE':
+                raise PermissionError('The original Portal Agent admission is no longer current')
+            if session.get('portal_read_only'):
+                raise PermissionError('The original Portal page is no longer permitted to operate')
+            if session.get('portal_page_lease_id') and not tx.query_one(
+                    "SELECT LEASE_ID FROM CX_PORTAL_PAGE_LEASES WHERE LEASE_ID=:lease_id AND SESSION_DIGEST=:digest "
+                    "AND STATUS='ACTIVE' AND LEASE_EXPIRES_AT>:now_at",
+                    {'lease_id': session['portal_page_lease_id'], 'digest': binding.credential_digest, 'now_at': identity_api._now()}):
+                raise PermissionError('The original Portal page lease changed')
+            allowed = tx.query_one("SELECT PROFILE_ID FROM CX_PORTAL_LLM_ALLOWLIST WHERE POLICY_ID='DEFAULT' "
+                                   "AND PROFILE_ID=:profile AND STATUS='ACTIVE'", {'profile': profile.get('profile_id')})
+            if not allowed or digest(policy()) != frozen_policy:
+                raise PermissionError('The original Portal model or knowledge policy changed')
+            for item in citations:
+                knowledge_grounding.citation(actor, agent, item['entity_id'], item['digest'])
+        with model_credentials.dispatch_context(binding, 'PORTAL', request_id, request_id,
+                reauthorize=reauthorize, worker_key='portal:' + request_id, allow_wait=True,
+                lock_principals=(actor, agent)):
+            completion = native_runtime._call_llm(profile, planned["messages"])
+            reply = completion["content"]
+            model_request_id = completion.get("request_id")
+        if binding is not None:
+            connection.execute_transaction_callback(lambda tx: model_credentials.recheck(tx, binding))
     reply = answer_planning.render_reply(reply, planned)
     content_security.enforce(reply, "OUTPUT")
     knowledge_grounding.require_reader(actor, agent)
@@ -74,4 +117,5 @@ def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, su
         raise knowledge_grounding.GroundingError("Knowledge policy changed during answer generation")
     return {"reply": reply, "citations": citations, "answer_source": source,
             "retrieval_status": result["status"], "policy_version": configured["version"],
-            "answer_metadata": planned["answer_metadata"]}
+            "answer_metadata": planned["answer_metadata"],
+            **({"model_request_id": model_request_id} if model_request_id else {})}

@@ -1,0 +1,2747 @@
+{
+  "CX_MODEL_ADMISSIONS": {
+    "check_expressions": [
+      "PROFILE_VERSION>0",
+      "SOURCE_KIND IN ('NATIVE','GATEWAY','PORTAL','CHANNEL','PROBE','RETROSPECTIVE','EVALUATION','EXTERNAL')",
+      "QUEUE_SEQUENCE>0",
+      "STATUS IN ('QUEUED','RESERVED','DISPATCHING','UNKNOWN','COMPLETED','REJECTED','CANCELLED','EXPIRED')",
+      "VERSION>0",
+      "FENCING_TOKEN>=0",
+      "CANCEL_STATE IN ('NOT_REQUESTED','QUEUE_CANCELLED','LOCAL_CANCELLED','REMOTE_CONFIRMED')"
+    ],
+    "checks": 7,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ALIAS_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CANCEL_STATE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "CREDENTIAL_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "FENCING_TOKEN": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "FINISH_CODE": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "LEASE_UNTIL_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "MODEL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "ORIGIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "OVERALL_UNTIL_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "POLICY_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "QUEUE_SEQUENCE": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "QUEUE_UNTIL_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SOURCE_ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ADMISSION_ID",
+      "GROUP_ID",
+      "POLICY_REVISION",
+      "ORIGIN_ID",
+      "ACTOR_ID",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "MODEL_ID",
+      "ALIAS_KEY",
+      "INPUT_DIGEST",
+      "CREDENTIAL_DIGEST",
+      "REQUEST_DIGEST",
+      "SOURCE_KIND",
+      "SOURCE_ID",
+      "SOURCE_ATTEMPT_ID",
+      "QUEUE_SEQUENCE",
+      "QUEUE_UNTIL_MS",
+      "OVERALL_UNTIL_MS",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [
+      {
+        "columns": [
+          "GROUP_ID",
+          "STATUS",
+          "QUEUE_SEQUENCE"
+        ],
+        "name": "CX106_ADMISSION_GROUP",
+        "unique": false
+      },
+      {
+        "columns": [
+          "ORIGIN_ID",
+          "SOURCE_KIND",
+          "SOURCE_ID"
+        ],
+        "name": "CX106_ADMISSION_SOURCE",
+        "unique": false
+      }
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "ADMISSION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ALIAS_KEY"
+        ],
+        "CX_MODEL_CAP_ALIASES",
+        [
+          "ALIAS_KEY"
+        ]
+      ],
+      [
+        "U",
+        [
+          "GROUP_ID",
+          "QUEUE_SEQUENCE"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID",
+          "POLICY_REVISION"
+        ],
+        "CX_MODEL_CAP_REVISIONS",
+        [
+          "GROUP_ID",
+          "REVISION_NO"
+        ]
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID",
+          "ORIGIN_ID"
+        ],
+        "CX_MODEL_CAP_ORIGINS",
+        [
+          "GROUP_ID",
+          "ORIGIN_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_DD58B955C9E3BF85",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_ALIASES": {
+    "check_expressions": [],
+    "checks": 0,
+    "columns": {
+      "ALIAS_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "ENDPOINT_URL": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REGISTERED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ALIAS_KEY",
+      "ENDPOINT_URL",
+      "GROUP_ID",
+      "REGISTERED_BY",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "ALIAS_KEY"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID"
+        ],
+        "CX_MODEL_CAP_GROUPS",
+        [
+          "GROUP_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "REGISTERED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_7EB27F5645A4ADF1",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_ATTEMPTS": {
+    "check_expressions": [
+      "FENCING_TOKEN>0",
+      "STATUS IN ('DISPATCHING','UNKNOWN','COMPLETED','RECONCILED')"
+    ],
+    "checks": 2,
+    "columns": {
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "COMPLETED_AT_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "DISPATCH_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "FENCING_TOKEN": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "FINISH_CODE": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "WORKER_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ATTEMPT_ID",
+      "ADMISSION_ID",
+      "FENCING_TOKEN",
+      "WORKER_KEY",
+      "DISPATCH_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "ATTEMPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "ADMISSION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ADMISSION_ID"
+        ],
+        "CX_MODEL_ADMISSIONS",
+        [
+          "ADMISSION_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_03E7A1C8B876F519",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_BINDINGS": {
+    "check_expressions": [],
+    "checks": 0,
+    "columns": {
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REGISTERED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "PROFILE_ID",
+      "GROUP_ID",
+      "REGISTERED_BY",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "PROFILE_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID"
+        ],
+        "CX_MODEL_CAP_GROUPS",
+        [
+          "GROUP_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "REGISTERED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_FA5FD8EAE934A584",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_EVIDENCE": {
+    "check_expressions": [
+      "RESOURCE_VERSION>0",
+      "EVIDENCE_KIND IN ('COMPLETE_RESPONSE','REMOTE_TERMINATED','LOCAL_LIFECYCLE','OPERATOR_CONFIRMATION','TRANSPORT_UNKNOWN')"
+    ],
+    "checks": 2,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "EVIDENCE_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "EVIDENCE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "EVIDENCE_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "FINISH_CODE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "RESOURCE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "EVIDENCE_ID",
+      "ADMISSION_ID",
+      "ATTEMPT_ID",
+      "ACTOR_ID",
+      "RESOURCE_VERSION",
+      "EVIDENCE_KIND",
+      "EVIDENCE_DIGEST",
+      "FINISH_CODE",
+      "REASON",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "EVIDENCE_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ADMISSION_ID"
+        ],
+        "CX_MODEL_ADMISSIONS",
+        [
+          "ADMISSION_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_MODEL_CAP_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_DC5E8535BE1DD610",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_GROUPS": {
+    "check_expressions": [
+      "CURRENT_REVISION>0",
+      "NEXT_SEQUENCE>0",
+      "VERSION>0",
+      "STATUS IN ('ACTIVE','DRAINING')"
+    ],
+    "checks": 4,
+    "columns": {
+      "COORDINATOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "CREATED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CURRENT_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "NEXT_SEQUENCE": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "RESOURCE_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "GROUP_ID",
+      "RESOURCE_KEY",
+      "COORDINATOR_ID",
+      "CREATED_BY",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "GROUP_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "RESOURCE_KEY"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CREATED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_B2425661D384D4C0",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_ORIGINS": {
+    "check_expressions": [
+      "STATUS IN ('ACTIVE','REVOKED')",
+      "VERSION>0"
+    ],
+    "checks": 2,
+    "columns": {
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INSTALLATION_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ORIGIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PRINCIPAL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REGISTERED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "GROUP_ID",
+      "ORIGIN_ID",
+      "PRINCIPAL_ID",
+      "INSTALLATION_KEY",
+      "REGISTERED_BY",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [
+      {
+        "columns": [
+          "PRINCIPAL_ID",
+          "STATUS"
+        ],
+        "name": "CX106_ORIGIN_ACTOR",
+        "unique": false
+      }
+    ],
+    "keys": [
+      [
+        "R",
+        [
+          "GROUP_ID"
+        ],
+        "CX_MODEL_CAP_GROUPS",
+        [
+          "GROUP_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PRINCIPAL_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "REGISTERED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "GROUP_ID",
+          "ORIGIN_ID"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX106_824688B27CDB732D",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_REQUESTS": {
+    "check_expressions": [
+      "RESOURCE_VERSION>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "OPERATION": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RESOURCE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ACTOR_ID",
+      "OPERATION",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "GROUP_ID",
+      "ADMISSION_ID",
+      "RESOURCE_VERSION",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID"
+        ],
+        "CX_MODEL_CAP_GROUPS",
+        [
+          "GROUP_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ADMISSION_ID"
+        ],
+        "CX_MODEL_ADMISSIONS",
+        [
+          "ADMISSION_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "ACTOR_ID",
+          "OPERATION",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX106_0EA224127AC2E148",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_CAP_REVISIONS": {
+    "check_expressions": [
+      "REVISION_NO>0",
+      "CAPACITY BETWEEN 1 AND 16",
+      "QUEUE_MS BETWEEN 0 AND 3600000",
+      "SOCKET_MS BETWEEN 1000 AND 600000",
+      "IDLE_MS BETWEEN 1000 AND 600000",
+      "OVERALL_MS BETWEEN 1000 AND 7200000",
+      "RESERVATION_MS BETWEEN 1000 AND 120000",
+      "QUEUE_MS<OVERALL_MS",
+      "RESERVATION_MS<=OVERALL_MS"
+    ],
+    "checks": 9,
+    "columns": {
+      "CAPACITY": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "CREATED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "IDLE_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "OVERALL_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "QUEUE_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "RESERVATION_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REVISION_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "SOCKET_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "GROUP_ID",
+      "REVISION_NO",
+      "CAPACITY",
+      "QUEUE_MS",
+      "SOCKET_MS",
+      "IDLE_MS",
+      "OVERALL_MS",
+      "RESERVATION_MS",
+      "CREATED_BY",
+      "REASON",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "R",
+        [
+          "GROUP_ID"
+        ],
+        "CX_MODEL_CAP_GROUPS",
+        [
+          "GROUP_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "CREATED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "GROUP_ID",
+          "REVISION_NO"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX106_38027CB6028E333B",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_COORD_BINDINGS": {
+    "check_expressions": [
+      "PROFILE_VERSION>0",
+      "ORIGIN_PROFILE_VERSION>0",
+      "POLICY_REVISION>0",
+      "STATUS IN ('ACTIVE','REVOKED')",
+      "VERSION>0"
+    ],
+    "checks": 5,
+    "columns": {
+      "BINDING_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "CREDENTIAL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INSTALLATION_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ORIGIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ORIGIN_PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ORIGIN_PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "POLICY_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REGISTERED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "BINDING_ID",
+      "GROUP_ID",
+      "ORIGIN_ID",
+      "INSTALLATION_KEY",
+      "CREDENTIAL_ID",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "ORIGIN_PROFILE_ID",
+      "ORIGIN_PROFILE_VERSION",
+      "POLICY_REVISION",
+      "REGISTERED_BY",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "BINDING_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CREDENTIAL_ID"
+        ],
+        "CX_MODEL_GATEWAY_CREDENTIALS",
+        [
+          "CREDENTIAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "REGISTERED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "REGISTERED_BY",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID",
+          "ORIGIN_ID"
+        ],
+        "CX_MODEL_CAP_ORIGINS",
+        [
+          "GROUP_ID",
+          "ORIGIN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID",
+          "POLICY_REVISION"
+        ],
+        "CX_MODEL_CAP_REVISIONS",
+        [
+          "GROUP_ID",
+          "REVISION_NO"
+        ]
+      ]
+    ],
+    "trigger": "CX106_60F637D7EAF21C3D",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_COORD_REQUESTS": {
+    "check_expressions": [
+      "BINDING_VERSION>0",
+      "SOURCE_KIND IN ('NATIVE','GATEWAY','PORTAL','CHANNEL','PROBE','RETROSPECTIVE','EVALUATION','EXTERNAL')",
+      "ORIGIN_FENCING_TOKEN>0",
+      "ORIGIN_PROFILE_VERSION>0",
+      "PROFILE_VERSION>0",
+      "POLICY_REVISION>0",
+      "STATUS IN ('PREPARED','RESERVED','DISPATCHING','COMPLETED','KNOWN_NO_SEND','UNKNOWN')",
+      "VERSION>0"
+    ],
+    "checks": 8,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "AUTHORITY_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "BINDING_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "BINDING_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "COORDINATOR_REQUEST_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "CREDENTIAL_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CREDENTIAL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ENVELOPE_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "FINISH_CODE": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INSTALLATION_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "MODEL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "ORIGIN_ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ORIGIN_FENCING_TOKEN": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ORIGIN_LEASE_UNTIL_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "ORIGIN_PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ORIGIN_PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ORIGIN_RECEIPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PAYLOAD_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "POLICY_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROOF_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "PROOF_EXPIRES_AT_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "SOURCE_ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "WORKER_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "COORDINATOR_REQUEST_ID",
+      "BINDING_ID",
+      "BINDING_VERSION",
+      "ORIGIN_RECEIPT_ID",
+      "INSTALLATION_KEY",
+      "ACTOR_ID",
+      "CREDENTIAL_ID",
+      "CREDENTIAL_DIGEST",
+      "ORIGIN_ACTOR_ID",
+      "SOURCE_KIND",
+      "SOURCE_ID",
+      "SOURCE_ATTEMPT_ID",
+      "WORKER_KEY",
+      "ORIGIN_FENCING_TOKEN",
+      "ORIGIN_LEASE_UNTIL_MS",
+      "AUTHORITY_DIGEST",
+      "ORIGIN_PROFILE_ID",
+      "ORIGIN_PROFILE_VERSION",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "GROUP_ID",
+      "POLICY_REVISION",
+      "MODEL_ID",
+      "PAYLOAD_DIGEST",
+      "IDEMPOTENCY_KEY",
+      "ENVELOPE_DIGEST",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "COORDINATOR_REQUEST_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "BINDING_ID"
+        ],
+        "CX_MODEL_COORD_BINDINGS",
+        [
+          "BINDING_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "CREDENTIAL_ID"
+        ],
+        "CX_MODEL_GATEWAY_CREDENTIALS",
+        [
+          "CREDENTIAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "GROUP_ID"
+        ],
+        "CX_MODEL_CAP_GROUPS",
+        [
+          "GROUP_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ADMISSION_ID"
+        ],
+        "CX_MODEL_ADMISSIONS",
+        [
+          "ADMISSION_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "BINDING_ID",
+          "ORIGIN_RECEIPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "BINDING_ID",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX106_66D2FE9F62A201A8",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_COORD_ROUTES": {
+    "check_expressions": [
+      "PROFILE_VERSION>0",
+      "POLICY_REVISION>0",
+      "COORDINATOR_PROFILE_VERSION>0",
+      "STATUS IN ('ACTIVE','REVOKED')",
+      "VERSION>0"
+    ],
+    "checks": 5,
+    "columns": {
+      "BINDING_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "COORDINATOR_PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "COORDINATOR_PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "COORDINATOR_URL": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "CREDENTIAL_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "GROUP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INSTALLATION_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ORIGIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "POLICY_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REGISTERED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "ROUTE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ROUTE_ID",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "COORDINATOR_URL",
+      "BINDING_ID",
+      "GROUP_ID",
+      "POLICY_REVISION",
+      "ORIGIN_ID",
+      "INSTALLATION_KEY",
+      "COORDINATOR_PROFILE_ID",
+      "COORDINATOR_PROFILE_VERSION",
+      "CREDENTIAL_DIGEST",
+      "REGISTERED_BY",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "ROUTE_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "REGISTERED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "PROFILE_ID",
+          "PROFILE_VERSION"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "REGISTERED_BY",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX106_508BDEF7F2C0279D",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_ORIGIN_OBSERVATIONS": {
+    "check_expressions": [
+      "REQUEST_COMPLETE IN ('Y','N')",
+      "RESULT_STATE IN ('COMPLETED','REJECTED','UNKNOWN')",
+      "USAGE_PROVENANCE IN ('PROVIDER_REPORTED','DERIVED_TOTAL','PARTIAL','INCOMPLETE')",
+      "PROMPT_TOKENS>=0",
+      "COMPLETION_TOKENS>=0",
+      "TOTAL_TOKENS>=0",
+      "CACHED_TOKENS>=0",
+      "CACHE_WRITE_TOKENS>=0",
+      "REASONING_TOKENS>=0",
+      "QUEUE_MS>=0",
+      "FIRST_CONTENT_MS>=0",
+      "PROVIDER_MS>=0",
+      "TOTAL_MS>=0",
+      "(RESULT_STATE='UNKNOWN' AND REQUEST_COMPLETE='N') OR (RESULT_STATE IN ('COMPLETED','REJECTED') AND REQUEST_COMPLETE='Y')"
+    ],
+    "checks": 14,
+    "columns": {
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CACHED_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "CACHE_WRITE_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "COMPLETION_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "COORDINATOR_REQUEST_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "FINISH_CODE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "FIRST_CONTENT_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "OBSERVATION_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "OBSERVED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "ORIGIN_RECEIPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROMPT_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "PROVIDER_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "QUEUE_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "REASONING_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "REQUEST_COMPLETE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1)"
+      },
+      "RESULT_STATE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "TOTAL_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "TOTAL_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "USAGE_PROVENANCE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ORIGIN_RECEIPT_ID",
+      "COORDINATOR_REQUEST_ID",
+      "ADMISSION_ID",
+      "REQUEST_COMPLETE",
+      "RESULT_STATE",
+      "FINISH_CODE",
+      "USAGE_PROVENANCE",
+      "PROMPT_TOKENS",
+      "COMPLETION_TOKENS",
+      "TOTAL_TOKENS",
+      "CACHED_TOKENS",
+      "CACHE_WRITE_TOKENS",
+      "REASONING_TOKENS",
+      "QUEUE_MS",
+      "FIRST_CONTENT_MS",
+      "PROVIDER_MS",
+      "TOTAL_MS",
+      "OBSERVATION_DIGEST",
+      "OBSERVED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "ORIGIN_RECEIPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ORIGIN_RECEIPT_ID"
+        ],
+        "CX_MODEL_ORIGIN_RECEIPTS",
+        [
+          "ORIGIN_RECEIPT_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_5BCB77A54747D86A",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_ORIGIN_RECEIPTS": {
+    "check_expressions": [
+      "ROUTE_VERSION>0",
+      "SOURCE_KIND IN ('NATIVE','GATEWAY','PORTAL','CHANNEL','PROBE','RETROSPECTIVE','EVALUATION','EXTERNAL')",
+      "ORIGIN_FENCING_TOKEN>0",
+      "PROFILE_VERSION>0",
+      "STATUS IN ('PREPARED','RESERVED','DISPATCHING','COMPLETED','KNOWN_NO_SEND','UNKNOWN')",
+      "VERSION>0"
+    ],
+    "checks": 6,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "AUTHORITY_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "AUTHORIZED_AT_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "COORDINATOR_REQUEST_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "ENVELOPE_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "FINISH_CODE": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "MODEL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "ORIGINAL_CREDENTIAL_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "ORIGIN_FENCING_TOKEN": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ORIGIN_LEASE_UNTIL_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "ORIGIN_RECEIPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PAYLOAD_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROOF_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "PROOF_EXPIRES_AT_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "REMOTE_FENCING_TOKEN": {
+        "default": null,
+        "not_null": false,
+        "type": "INTEGER"
+      },
+      "REMOTE_RESERVATION_VERSION": {
+        "default": null,
+        "not_null": false,
+        "type": "INTEGER"
+      },
+      "ROUTE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ROUTE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "SOURCE_ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "WORKER_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ORIGIN_RECEIPT_ID",
+      "ROUTE_ID",
+      "ROUTE_VERSION",
+      "ACTOR_ID",
+      "ORIGINAL_CREDENTIAL_DIGEST",
+      "SOURCE_KIND",
+      "SOURCE_ID",
+      "SOURCE_ATTEMPT_ID",
+      "WORKER_KEY",
+      "ORIGIN_FENCING_TOKEN",
+      "ORIGIN_LEASE_UNTIL_MS",
+      "AUTHORITY_DIGEST",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "MODEL_ID",
+      "PAYLOAD_DIGEST",
+      "IDEMPOTENCY_KEY",
+      "ENVELOPE_DIGEST",
+      "CREATED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "ORIGIN_RECEIPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ROUTE_ID"
+        ],
+        "CX_MODEL_COORD_ROUTES",
+        [
+          "ROUTE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "ACTOR_ID",
+          "SOURCE_KIND",
+          "SOURCE_ID",
+          "SOURCE_ATTEMPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "ROUTE_ID",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX106_CB7CD5D08F6901CB",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_ORIGIN_RESOLUTIONS": {
+    "check_expressions": [
+      "ROUTE_VERSION>0",
+      "ADMISSION_VERSION>0",
+      "FENCING_TOKEN>=0",
+      "CENTRAL_STATUS IN ('PREPARED','RESERVED','DISPATCHING','COMPLETED','KNOWN_NO_SEND','UNKNOWN')",
+      "ADMISSION_STATUS IN ('COMPLETED','CANCELLED','EXPIRED','REJECTED')",
+      "OBSERVATION_METHOD='REGISTERED_COORDINATOR_GET'",
+      "RESOLUTION_KIND IN ('KNOWN_NO_SEND','TRANSPORT_TERMINATED')",
+      "EVIDENCE_KIND IN ('NO_SEND_STATE','COMPLETE_RESPONSE','REMOTE_TERMINATED','LOCAL_LIFECYCLE','OPERATOR_CONFIRMATION')",
+      "REQUEST_COMPLETE IN ('Y','N')",
+      "(RESOLUTION_KIND='KNOWN_NO_SEND' AND ATTEMPT_ID IS NULL) OR (RESOLUTION_KIND='TRANSPORT_TERMINATED' AND ATTEMPT_ID IS NOT NULL AND FENCING_TOKEN>0)"
+    ],
+    "checks": 10,
+    "columns": {
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ADMISSION_STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "ADMISSION_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "CENTRAL_STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "COORDINATOR_REQUEST_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "EVIDENCE_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "EVIDENCE_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "EVIDENCE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "EVIDENCE_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "FENCING_TOKEN": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "OBSERVATION_METHOD": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(40)"
+      },
+      "OBSERVED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "ORIGIN_RECEIPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PEER_RECEIPT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "REQUESTED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REQUEST_COMPLETE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RESOLUTION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "RESOLUTION_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "ROUTE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ROUTE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "RESOLUTION_ID",
+      "ORIGIN_RECEIPT_ID",
+      "ROUTE_ID",
+      "ROUTE_VERSION",
+      "COORDINATOR_REQUEST_ID",
+      "ADMISSION_ID",
+      "ADMISSION_VERSION",
+      "ATTEMPT_ID",
+      "FENCING_TOKEN",
+      "CENTRAL_STATUS",
+      "ADMISSION_STATUS",
+      "OBSERVATION_METHOD",
+      "RESOLUTION_KIND",
+      "EVIDENCE_ID",
+      "EVIDENCE_KIND",
+      "EVIDENCE_DIGEST",
+      "EVIDENCE_AT_MS",
+      "REQUEST_COMPLETE",
+      "PEER_RECEIPT_DIGEST",
+      "REQUESTED_BY",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "REASON",
+      "OBSERVED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "RESOLUTION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "ORIGIN_RECEIPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ORIGIN_RECEIPT_ID"
+        ],
+        "CX_MODEL_ORIGIN_RECEIPTS",
+        [
+          "ORIGIN_RECEIPT_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ROUTE_ID"
+        ],
+        "CX_MODEL_COORD_ROUTES",
+        [
+          "ROUTE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "REQUESTED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "REQUESTED_BY",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX106_519D8839C31A79FA",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_RUNTIME_OBSERVATIONS": {
+    "check_expressions": [
+      "API_DIALECT='CHAT_COMPLETIONS'",
+      "REQUEST_COMPLETE IN ('Y','N')",
+      "RESULT_STATE IN ('COMPLETED','REJECTED','UNKNOWN')",
+      "USAGE_PROVENANCE IN ('PROVIDER_REPORTED','DERIVED_TOTAL','PARTIAL','INCOMPLETE')",
+      "PROMPT_TOKENS>=0",
+      "COMPLETION_TOKENS>=0",
+      "TOTAL_TOKENS>=0",
+      "CACHED_TOKENS>=0",
+      "CACHE_WRITE_TOKENS>=0",
+      "REASONING_TOKENS>=0",
+      "QUEUE_MS>=0",
+      "FIRST_CONTENT_MS>=0",
+      "PROVIDER_MS>=0",
+      "TOTAL_MS>=0",
+      "(RESULT_STATE='UNKNOWN' AND REQUEST_COMPLETE='N') OR (RESULT_STATE IN ('COMPLETED','REJECTED') AND REQUEST_COMPLETE='Y')"
+    ],
+    "checks": 15,
+    "columns": {
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "API_DIALECT": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CACHED_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "CACHE_WRITE_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "COMPLETION_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "FINISH_CODE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "FIRST_CONTENT_MS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "OBSERVATION_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "OBSERVED_AT_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "PROMPT_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "PROVIDER_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "QUEUE_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "REASONING_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "REQUEST_COMPLETE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1)"
+      },
+      "RESULT_STATE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "TOTAL_MS": {
+        "default": null,
+        "not_null": true,
+        "type": "DECIMAL(19,0)"
+      },
+      "TOTAL_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "USAGE_PROVENANCE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ADMISSION_ID",
+      "ATTEMPT_ID",
+      "API_DIALECT",
+      "REQUEST_COMPLETE",
+      "RESULT_STATE",
+      "FINISH_CODE",
+      "USAGE_PROVENANCE",
+      "PROMPT_TOKENS",
+      "COMPLETION_TOKENS",
+      "TOTAL_TOKENS",
+      "CACHED_TOKENS",
+      "CACHE_WRITE_TOKENS",
+      "REASONING_TOKENS",
+      "QUEUE_MS",
+      "FIRST_CONTENT_MS",
+      "PROVIDER_MS",
+      "TOTAL_MS",
+      "OBSERVATION_DIGEST",
+      "OBSERVED_AT_MS"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "ADMISSION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ADMISSION_ID"
+        ],
+        "CX_MODEL_ADMISSIONS",
+        [
+          "ADMISSION_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "ATTEMPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_MODEL_CAP_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_8E7DFB4EAC9C216B",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_MODEL_USAGE_DETAILS": {
+    "check_expressions": [
+      "CACHE_WRITE_TOKENS>=0",
+      "USAGE_PROVENANCE IN ('PROVIDER_REPORTED','DERIVED_TOTAL','PARTIAL','INCOMPLETE')"
+    ],
+    "checks": 2,
+    "columns": {
+      "CACHE_WRITE_TOKENS": {
+        "default": null,
+        "not_null": false,
+        "type": "DECIMAL(19,0)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "USAGE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "USAGE_PROVENANCE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "USAGE_ID",
+      "CACHE_WRITE_TOKENS",
+      "USAGE_PROVENANCE",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "USAGE_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "USAGE_ID"
+        ],
+        "CX_MODEL_USAGE",
+        [
+          "USAGE_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_173E718FBB00D01B",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  },
+  "CX_RUNTIME_MODEL_CREDENTIALS": {
+    "check_expressions": [
+      "CREDENTIAL_KIND IN ('WEB','AGENT')",
+      "FENCING_TOKEN>=0",
+      "PERMISSION_VERSION>=0",
+      "PROFILE_VERSION>0",
+      "(CREDENTIAL_KIND='WEB' AND AUTH_METHOD IS NOT NULL AND PERMISSION_VERSION>0 AND SESSION_CREATED_AT IS NOT NULL) OR (CREDENTIAL_KIND='AGENT' AND INSTANCE_ID IS NOT NULL AND FENCING_TOKEN>0)"
+    ],
+    "checks": 5,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "AUTH_METHOD": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "CREDENTIAL_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CREDENTIAL_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(8)"
+      },
+      "EXECUTION_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "EXECUTION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "FENCING_TOKEN": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "INSTANCE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "MFA_LEVEL": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(32)"
+      },
+      "NODE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "PERMISSION_VERSION": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": false,
+        "type": "INTEGER"
+      },
+      "REQUIRED_SCOPE": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "SESSION_CREATED_AT": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "SOURCE_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "EXECUTION_ID",
+      "ACTOR_ID",
+      "CREDENTIAL_KIND",
+      "CREDENTIAL_DIGEST",
+      "REQUIRED_SCOPE",
+      "INSTANCE_ID",
+      "FENCING_TOKEN",
+      "AUTH_METHOD",
+      "PERMISSION_VERSION",
+      "MFA_LEVEL",
+      "NODE_ID",
+      "SESSION_CREATED_AT",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "INPUT_DIGEST",
+      "EXECUTION_DIGEST",
+      "SOURCE_DIGEST",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "EXECUTION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "EXECUTION_ID"
+        ],
+        "CX_RUNTIME_EXECUTIONS",
+        [
+          "EXECUTION_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX106_436050AB3D052451",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx106_reject_runtime_mutation"
+  }
+}

@@ -1,4 +1,4 @@
-"""FastAPI/Uvicorn entrypoint for the v5.0.1 Chuanxu Web application.
+"""FastAPI/Uvicorn entrypoint for the v5.0.2 Chuanxu Web application.
 
 The database-backed services are the authoritative implementation.  This
 entrypoint intentionally contains only HTTP concerns and exposes the same
@@ -47,7 +47,7 @@ except ModuleNotFoundError as exc:
     from shared.lib import identity_api, external_identity_api, agent_gateway_api, compliance_api, connection, governed_contracts, security_lifecycle, organization_api, security_domain_api, platform_capabilities, native_agent_api, native_runtime, model_usage_api, model_governance_api, model_capability_api, deployment_adapters, runtime_isolation, db4a2a, embedding_governance, admin_management, cursor_pagination, task_plan_api, knowledge_api, memory_lifecycle, skill_api, tool_registry, spec_api, graph_production_profile, platform_agent_pool, host_provisioning, platform_governance_graph as governance_graph_module
 
 
-VERSION = "5.0.1"
+VERSION = "5.0.2"
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 if not WEB_ROOT.is_dir():
@@ -2667,6 +2667,7 @@ def capabilities(session: Dict[str, Any] = Depends(principal)) -> Dict[str, Any]
         "pages": allowed, "actions": access_by_action,
         "maturity": {"core": "stable", "graph": "experimental", "channel": "active"},
         "features": sorted(getattr(features, "FEATURES", set()) if features else set()),
+        "model_runtime_context_enabled": bool(getattr(features, "MODEL_RUNTIME_CONTEXT_ENABLED", False)) if features else False,
         "platform_capabilities": platform_page_states,
         "session_timeout_seconds": _session_timeout_seconds(),
         "read_only": read_only,
@@ -3550,9 +3551,11 @@ def native_agent_execute(
     session: Dict[str, Any] = Depends(require_action("agents.operate")),
 ) -> Dict[str, Any]:
     try:
-        return native_agent_api.create_execution(
-            str(session["principal_id"]), agent_id, body.messages, body.reason,
-        )
+        from lib.model_credentials import server_session
+        with server_session(session):
+            return native_agent_api.create_execution(
+                str(session["principal_id"]), agent_id, body.messages, body.reason,
+            )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
@@ -3597,15 +3600,20 @@ def model_forward_authorization(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail="Authorization service unavailable") from exc
     if access.get("decision") != "ALLOW":
         raise HTTPException(status_code=403, detail="Model gateway forwarding permission is required")
-    return {"actor": str(session["principal_id"]), "gateway_token": ""}
+    return {"actor": str(session["principal_id"]), "gateway_token": "", "server_session": session}
 
 
 @app.post("/api/model-gateway/completions")
 def model_gateway_completion(request: Request, body: ModelForwardBody, authorization: Dict[str, Any] = Depends(model_forward_authorization)) -> Dict[str, Any]:
     try:
+        from lib.model_credentials import server_session
         if body.stream:
-            return StreamingResponse(model_usage_api.stream_forward(str(authorization["actor"]), body.provider_profile_id, body.messages, agent_id=body.agent_id, idempotency_key=body.idempotency_key, gateway_token=str(authorization["gateway_token"]), correlation_id=_correlation_id(request)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Correlation-ID": _correlation_id(request)})
-        return model_usage_api.forward(str(authorization["actor"]), body.provider_profile_id, body.messages, agent_id=body.agent_id, stream=body.stream, idempotency_key=body.idempotency_key, gateway_token=str(authorization["gateway_token"]), correlation_id=_correlation_id(request))
+            def events():
+                with _schema_owner_context(), server_session(authorization.get("server_session")):
+                    yield from model_usage_api.stream_forward(str(authorization["actor"]), body.provider_profile_id, body.messages, agent_id=body.agent_id, idempotency_key=body.idempotency_key, gateway_token=str(authorization["gateway_token"]), correlation_id=_correlation_id(request))
+            return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Correlation-ID": _correlation_id(request)})
+        with _schema_owner_context(), server_session(authorization.get("server_session")):
+            return model_usage_api.forward(str(authorization["actor"]), body.provider_profile_id, body.messages, agent_id=body.agent_id, stream=body.stream, idempotency_key=body.idempotency_key, gateway_token=str(authorization["gateway_token"]), correlation_id=_correlation_id(request))
     except PermissionError as exc:
         raise HTTPException(status_code=401 if authorization.get("gateway_token") else 403, detail=str(exc)) from exc
     except model_usage_api.ModelUsageConflict as exc:
@@ -3874,7 +3882,9 @@ def llm_provider_profile_saved_probe(
     session: Dict[str, Any] = Depends(require_action("platform.manage")),
 ) -> Dict[str, Any]:
     try:
-        return native_agent_api.probe_saved_llm_profile(str(session["principal_id"]), profile_id)
+        from lib.model_credentials import server_session
+        with server_session(session):
+            return native_agent_api.probe_saved_llm_profile(str(session["principal_id"]), profile_id)
     except native_agent_api.NativeAgentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -6115,7 +6125,9 @@ def channel_thread_create(channel_id: str, body: ThreadBody, session: Dict[str, 
 @app.post("/api/channels/{channel_id}/messages")
 def message(channel_id: str, body: MessageBody, session: Dict[str, Any] = Depends(require_action_cached("channels.write"))) -> Dict[str, Any]:
     try:
-        return identity_api.post_channel_message(str(session["principal_id"]), channel_id, body.body, thread_type=body.thread_type, thread_id=body.thread_id, message_type=body.message_type, references=body.references, response_language=body.response_language)
+        from lib.model_credentials import server_session
+        with server_session(session):
+            return identity_api.post_channel_message(str(session["principal_id"]), channel_id, body.body, thread_type=body.thread_type, thread_id=body.thread_id, message_type=body.message_type, references=body.references, response_language=body.response_language)
     except Exception as exc:
         raise _identity_http_error(exc, "Channel message was not accepted") from exc
 
@@ -7011,7 +7023,11 @@ _install_continuity_routes(app, _portal_continuity_action, _schema_owner_context
                            prefix='/portal/api/continuity')
 
 from lib.agent_extension_http import install as _install_agent_extension_routes
+from lib.model_coordinator_http import install as _install_model_coordinator_routes
+_install_model_coordinator_routes(app, schema_owner_context=_schema_owner_context, require_action=require_action)
 _install_agent_extension_routes(app, require_action, _schema_owner_context)
+from lib.observed_answer_review_http import install as _install_observed_answer_review_routes
+_install_observed_answer_review_routes(app, require_action, _schema_owner_context)
 _install_agent_extension_routes(app, _continuity_gateway_action, _schema_owner_context,
                                 prefix='/api/agent-gateway/extensions')
 from lib.a2a_http_routes import install as _install_standard_a2a

@@ -441,6 +441,8 @@ def run(actor, job_id, *, get=None):
             return {'replayed': True, 'job': job}
         if job['status'] in {'BLOCKED', 'FAILED'} or int(job['attempt_count']) >= int(source['max_attempts']):
             raise ContinuityConflict('SYNC_CLOSED', 'Source sync is blocked or its retry budget is exhausted')
+        from .processing_runtime import source_credential
+        source_credential(tx,job,source,capture=True)
         attempt = task_continuity.claim_attempt(tx, continuity_id=job['continuity_id'], worker_id=worker, business_key=job_id,
                                                request_digest=job['request_digest'], lease_seconds=300)
         if attempt.get('replayed') or attempt.get('reconciliation_required'):
@@ -460,6 +462,8 @@ def run(actor, job_id, *, get=None):
                 _assert_lease(tx, current_job, attempt, worker)
                 if current['config_digest'] != source['config_digest']:
                     raise PermissionError('Source configuration changed')
+                from .processing_runtime import source_credential
+                source_credential(tx,current_job,current)
             connection.execute_transaction_callback(check)
             return (get or https_get)(*args, **kwargs)
         documents = _fetch(source, checked_get)
@@ -467,6 +471,8 @@ def run(actor, job_id, *, get=None):
             from . import continuity_candidates
             current_job, current = _job(tx, actor, job_id, write=True)
             _assert_lease(tx, current_job, attempt, worker)
+            from .processing_runtime import source_credential
+            source_credential(tx,current_job,current)
             checkpoint_items, last_revision = [], None
             for document in documents:
                 # The bounded candidate DTO stores a full fact. Split source
@@ -534,6 +540,8 @@ def run(actor, job_id, *, get=None):
             tx.execute("UPDATE CX_AGENT_SYNC_JOBS SET STATUS=:status,ERROR_CODE=:code WHERE JOB_ID=:job",
                        {'status': status, 'code': 'SOURCE_AUTHORITY_CHANGED' if blocked else 'SOURCE_SYNC_FAILED', 'job': job_id})
             if status=='PENDING':
+                from .processing_runtime import account_source_read_failure
+                account_source_read_failure(tx,job,attempt)
                 changed=tx.execute("UPDATE CX_TASK_CONTINUITY_ATTEMPTS SET STATUS='FAILED',COMPLETED_AT=CURRENT_TIMESTAMP,ERROR_CODE='SOURCE_READ_FAILED',ERROR_MESSAGE='Read-only source fetch failed before import' "
                                    "WHERE ATTEMPT_ID=:attempt AND STATUS='SENDING' AND FENCING_TOKEN=:token", {'attempt':attempt['attempt_id'],'token':attempt['fencing_token']})
                 if changed!=1:

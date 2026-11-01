@@ -502,8 +502,9 @@ def test_model_usage_contract_does_not_log_payloads_or_float_costs():
     assert "Decimal(" in source
     assert "PROVIDER_REPORTED" in source
     assert "INCOMPLETE" in source
-    assert "Authorization" in source
-    assert "decrypt_section" in source
+    transport = (ROOT / "shared" / "lib" / "native_runtime.py").read_text(encoding="utf-8")
+    assert "native_runtime._call_llm" in source and 'headers["Authorization"]' in transport
+    assert "decrypt_section" in transport
 
 
 @pytest.mark.skipif(GENERATED, reason="route source inspection is a unified-source gate")

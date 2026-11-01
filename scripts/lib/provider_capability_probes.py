@@ -13,6 +13,9 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from . import connection, identity_api, native_agent_api
 from .agent_extension_contracts import canonical, digest, identifier, opener, registered_url, row, validate_schema
 from .effective_capabilities import authorize
+from . import model_credentials, model_dispatch
+from .model_results import (ChatCompletionStream, ModelResultError, decode_json,
+                            normalize_usage, parse_completion, sse_events)
 
 CAPABILITIES = frozenset({"TEXT", "STREAM", "STRUCTURED_OUTPUT", "TOOL_PROPOSAL", "REASONING_PARAMETERS", "CLIENT_CANCELLATION", "USAGE", "IMAGE_INPUT"})
 PARAMETER_KEYS = frozenset({"reasoning_effort", "preserve_thinking"})
@@ -73,43 +76,44 @@ def payload(capability, model_id, parameter_values):
 
 
 def _usage(value):
-    if not isinstance(value, dict):
-        return {}
-    return {key: int(value[key]) for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            if isinstance(value.get(key), int) and not isinstance(value[key], bool) and value[key] >= 0}
+    return normalize_usage(value)
 
 
-def observe_json(capability, profile, value):
-    if not isinstance(value, dict) or not native_agent_api._llm_model_matches(profile["model_id"], str(value.get("model") or "")):
-        raise ValueError("MODEL_MISMATCH")
-    choices = value.get("choices") or []
-    if not choices or not isinstance(choices[0], dict):
-        raise ValueError("EMPTY_COMPLETION")
-    message = choices[0].get("message") or {}
-    if not isinstance(message, dict):
-        raise ValueError("INVALID_COMPLETION")
-    if message.get("refusal"):
-        raise ValueError("PROVIDER_REFUSAL")
-    finish = choices[0].get("finish_reason")
-    allowed_finish = {"stop", "tool_calls"} if capability == "TOOL_PROPOSAL" else {"stop"}
-    if finish not in allowed_finish:
-        raise ValueError("INCOMPLETE_COMPLETION")
-    content = message.get("content") or ""
-    observation = {"observed_model": str(value["model"]), "finish_reason": str(choices[0].get("finish_reason") or "unknown"),
-                   "reasoning_present": bool(message.get("reasoning_content")), "usage": _usage(value.get("usage")),
-                   "output_digest": digest({"content": content, "tool_calls": message.get("tool_calls") or []})}
+def observe_json(capability, profile, value, *, on_complete=None, on_result=None):
+    kind = "tool" if capability == "TOOL_PROPOSAL" else ("structured" if capability == "STRUCTURED_OUTPUT" else "text")
+    try:
+        parsed = parse_completion(value, profile["model_id"], output_kind=kind,
+                                  model_matches=native_agent_api._llm_model_matches,
+                                  require_tool_ids=False, max_content_bytes=MAX_RESPONSE_BYTES)
+    except ModelResultError as exc:
+        # Retain established probe categories while business paths expose the
+        # more precise shared result classification.
+        if exc.code in {"OUTPUT_TRUNCATED", "PROVIDER_REFUSAL"} and exc.finish_reason in {"length", "content_filter"}:
+            raise ModelResultError("INCOMPLETE_COMPLETION", request_complete=exc.request_complete,
+                                   finish_reason=exc.finish_reason) from None
+        raise
+    if on_complete is not None:
+        on_complete()
+    if on_result is not None:
+        on_result(parsed)
+    content = parsed["content"]
+    observation = {"observed_model": parsed["model"], "finish_reason": parsed["finish_reason"],
+                   "reasoning_present": parsed["reasoning_present"], "usage": parsed["usage"],
+                   "usage_observation": parsed["usage_observation"],
+                   "usage_field_provenance": parsed["usage_field_provenance"],
+                   "output_digest": digest({"content": content, "tool_calls": parsed["tool_calls"]})}
     if capability == "STRUCTURED_OUTPUT":
-        validate_schema(PROBE_SCHEMA, json.loads(content))
+        validate_schema(PROBE_SCHEMA, parsed["structured"])
         observation["schema_valid"] = True
     elif capability == "TOOL_PROPOSAL":
-        calls = message.get("tool_calls") or []
+        calls = parsed["tool_calls"]
         if len(calls) != 1 or calls[0].get("type") != "function" or (calls[0].get("function") or {}).get("name") != "cx_probe":
             raise ValueError("TOOL_PROPOSAL_MISMATCH")
-        validate_schema(PROBE_SCHEMA, json.loads(calls[0]["function"]["arguments"]))
+        validate_schema(PROBE_SCHEMA, decode_json(calls[0]["function"]["arguments"]))
         observation["tool_proposal_valid"] = True
     elif not isinstance(content, str) or content.strip() != ("RED" if capability == "IMAGE_INPUT" else "CX_OK"):
         raise ValueError("PROBE_ANSWER_MISMATCH")
-    if capability == "USAGE" and not {"prompt_tokens", "completion_tokens", "total_tokens"} <= set(observation["usage"]):
+    if capability == "USAGE" and any(observation["usage"].get(key) is None for key in ("prompt_tokens", "completion_tokens", "total_tokens")):
         raise ValueError("USAGE_UNAVAILABLE")
     return observation
 
@@ -124,70 +128,47 @@ def _send(profile, request_payload, timeout, capability):
     request = urllib.request.Request(registered_url(profile["provider_url"]) + "/chat/completions",
                                      data=canonical(request_payload).encode("utf-8"), headers=headers, method="POST")
     started = time.monotonic()
-    with opener().open(request, timeout=timeout) as response:
-        if not request_payload["stream"]:
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise ValueError("RESPONSE_TOO_LARGE")
-            return observe_json(capability, profile, json.loads(raw))
-        pieces, usage, seen_model = [], {}, ""
-        total, first_token_ms, finished, reasoning_present = 0, None, False, False
-        terminal = False
-        while True:
-            if time.monotonic() - started > timeout:
-                raise TimeoutError("PROBE_DEADLINE")
-            raw_line = response.readline(65537)
-            if not raw_line:
-                break
-            total += len(raw_line)
-            if len(raw_line) > 65536 or total > MAX_RESPONSE_BYTES:
-                raise ValueError("STREAM_TOO_LARGE")
-            line = raw_line.decode("utf-8").strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
-                finished = True
-                break
-            item = json.loads(data)
-            if not isinstance(item, dict) or item.get("error"):
-                raise ValueError("INVALID_COMPLETION")
-            if item.get("model") and not native_agent_api._llm_model_matches(profile["model_id"], str(item["model"])):
-                raise ValueError("MODEL_MISMATCH")
-            seen_model = str(item.get("model") or seen_model)
-            usage.update(_usage(item.get("usage")))
-            for choice in item.get("choices") or []:
-                if not isinstance(choice, dict) or choice.get("index", 0) != 0:
-                    raise ValueError("INVALID_COMPLETION")
-                delta = choice.get("delta") or {}
-                if not isinstance(delta, dict):
-                    raise ValueError("INVALID_COMPLETION")
-                if delta.get("refusal"):
-                    raise ValueError("PROVIDER_REFUSAL")
-                if terminal and (delta.get("content") or delta.get("reasoning_content")):
-                    raise ValueError("INVALID_STREAM_CONTENT")
-                reasoning_present = reasoning_present or bool(delta.get("reasoning_content"))
-                if choice.get("finish_reason"):
-                    if choice["finish_reason"] != "stop" or terminal:
-                        raise ValueError("INCOMPLETE_COMPLETION")
-                    terminal = True
-                piece = delta.get("content") or ""
+    with model_dispatch.dispatch(profile, request_payload) as ticket:
+        with ticket.open(request, timeout=ticket.timeout_seconds(timeout, stream=request_payload["stream"]), default_open=opener().open) as response:
+            if not request_payload["stream"]:
+                raw = ticket.read_response(response, MAX_RESPONSE_BYTES)
+                return observe_json(capability, profile, decode_json(raw, max_bytes=MAX_RESPONSE_BYTES),
+                                    on_complete=ticket.response_complete, on_result=ticket.observe_result)
+            parser = ChatCompletionStream(profile["model_id"], model_matches=native_agent_api._llm_model_matches,
+                                          max_content_bytes=MAX_RESPONSE_BYTES)
+            first_token_ms = None
+            for event in sse_events(ticket.stream_response(response), max_bytes=MAX_RESPONSE_BYTES, max_event_bytes=65536):
+                ticket.check_deadline()
+                if time.monotonic() - started > timeout:
+                    raise TimeoutError("PROBE_DEADLINE")
+                piece = parser.feed(event)
+                if parser.done:
+                    break
                 if piece:
-                    if not isinstance(piece, str):
-                        raise ValueError("INVALID_STREAM_CONTENT")
+                    ticket.first_token()
                     if first_token_ms is None:
                         first_token_ms = round((time.monotonic() - started) * 1000)
-                    pieces.append(piece)
                     if capability == "CLIENT_CANCELLATION":
-                        if not native_agent_api._llm_model_matches(profile["model_id"], seen_model):
-                            raise ValueError("MODEL_MISMATCH")
-                        return {"observed_model": seen_model, "first_token_ms": first_token_ms,
+                        if parser.model is None:
+                            raise ModelResultError("MODEL_MISMATCH")
+                        return {"observed_model": parser.model, "first_token_ms": first_token_ms,
                                 "client_stream_closed": True, "provider_cancellation_confirmed": False,
-                                "reasoning_present": reasoning_present}
-        if not finished or not terminal or not native_agent_api._llm_model_matches(profile["model_id"], seen_model) or "".join(pieces).strip() != "CX_OK":
-            raise ValueError("STREAM_COMPLETION_MISMATCH")
-        return {"observed_model": seen_model, "first_token_ms": first_token_ms, "stream_completed": True,
-                "reasoning_present": reasoning_present, "usage": usage, "output_digest": digest("".join(pieces))}
+                                "reasoning_present": parser.reasoning_present, "request_id": ticket.request_id}
+            try:
+                parsed = parser.finish()
+            except ModelResultError as exc:
+                if exc.code in {"OUTPUT_TRUNCATED", "PROVIDER_REFUSAL"} and exc.finish_reason in {"length", "content_filter"}:
+                    raise ModelResultError("INCOMPLETE_COMPLETION", request_complete=exc.request_complete,
+                                           finish_reason=exc.finish_reason) from None
+                raise
+            ticket.response_complete()
+            ticket.observe_result(parsed)
+            if parsed["content"].strip() != "CX_OK":
+                raise ValueError("STREAM_COMPLETION_MISMATCH")
+            return {"observed_model": parsed["model"], "first_token_ms": first_token_ms, "stream_completed": True,
+                    "reasoning_present": parsed["reasoning_present"], "usage": parsed["usage"], "request_id": ticket.request_id,
+                    "usage_observation": parsed["usage_observation"],
+                    "usage_field_provenance": parsed["usage_field_provenance"], "output_digest": digest(parsed["content"])}
 
 
 def probe(actor, profile_id, capability, parameter_values=None, *, timeout=30):
@@ -214,7 +195,15 @@ def probe(actor, profile_id, capability, parameter_values=None, *, timeout=30):
         fresh = _profile(actor, profile_id)
         if fresh["version"] != profile["version"]:
             raise ValueError("PROFILE_CHANGED")
-        observation = _send(fresh, request_payload, timeout, capability)
+        credential = model_credentials.capture(actor, required_scope="platform.manage")
+        def reauthorize(tx, admission):
+            authorize(actor)
+            current = row(tx.query_one("SELECT VERSION,STATUS FROM CX_LLM_PROVIDER_PROFILES WHERE PROFILE_ID=:profile", {"profile": profile_id}))
+            if current.get("status") != "ACTIVE" or int(current.get("version") or 0) != int(profile["version"]):
+                raise PermissionError("Original Provider Profile changed while queued")
+        with model_credentials.dispatch_context(credential, "PROBE", probe_id, probe_id, reauthorize=reauthorize,
+                                                worker_key="probe:" + probe_id, lock_principals=(actor,)):
+            observation = _send(fresh, request_payload, timeout, capability)
         status = "CLIENT_CANCELLED" if capability == "CLIENT_CANCELLATION" else "VERIFIED"
     except Exception as exc:
         code = "PROVIDER_UNAVAILABLE"
@@ -227,12 +216,14 @@ def probe(actor, profile_id, capability, parameter_values=None, *, timeout=30):
             known = {"MODEL_MISMATCH", "EMPTY_COMPLETION", "INVALID_COMPLETION", "TOOL_PROPOSAL_MISMATCH",
                      "PROBE_ANSWER_MISMATCH", "USAGE_UNAVAILABLE", "STREAM_COMPLETION_MISMATCH",
                      "RESPONSE_TOO_LARGE", "STREAM_TOO_LARGE", "INVALID_STREAM_CONTENT",
-                     "PROVIDER_REFUSAL", "INCOMPLETE_COMPLETION"}
+                     "PROVIDER_REFUSAL", "INCOMPLETE_COMPLETION", "INVALID_STRUCTURED_OUTPUT",
+                     "INVALID_TOOL_ARGUMENTS", "UNEXPECTED_TOOL_PROPOSAL", "CONFLICTING_USAGE"}
             code = str(exc) if str(exc) in known else "INVALID_PROBE_RESULT"
         validation_failure = code in {"INVALID_PROBE_RESULT", "MODEL_MISMATCH", "EMPTY_COMPLETION", "INVALID_COMPLETION",
                                      "TOOL_PROPOSAL_MISMATCH", "PROBE_ANSWER_MISMATCH", "USAGE_UNAVAILABLE",
                                      "STREAM_COMPLETION_MISMATCH", "RESPONSE_TOO_LARGE", "STREAM_TOO_LARGE", "INVALID_STREAM_CONTENT",
-                                     "PROVIDER_REFUSAL", "INCOMPLETE_COMPLETION"}
+                                     "PROVIDER_REFUSAL", "INCOMPLETE_COMPLETION", "INVALID_STRUCTURED_OUTPUT",
+                                     "INVALID_TOOL_ARGUMENTS", "UNEXPECTED_TOOL_PROPOSAL", "CONFLICTING_USAGE"}
         observation, status = {"error_code": code}, "UNSUPPORTED" if code.startswith("HTTP_4") or validation_failure else "FAILED"
     observation["latency_ms"] = round((time.monotonic() - started) * 1000)
     def finish(tx):

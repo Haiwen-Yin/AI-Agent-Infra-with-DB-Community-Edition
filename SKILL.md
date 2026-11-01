@@ -1,6 +1,6 @@
 # Chuanxu Community Edition / 川序社区版
 
-Version: 5.0.1. Package: `AI-Agent-Infra-with-DB-Community-Edition`.
+Version: 5.0.2. Package: `AI-Agent-Infra-with-DB-Community-Edition`.
 Edition: Community. License: Apache-2.0.
 Supported database keys / 支持的数据库标识: `oracle, pg, yashandb`.
 
@@ -41,13 +41,23 @@ PDB for both fresh deployment and existing-database upgrade. Its narrow
 the application does not create it or repair grants. A missing or incompatible
 view blocks preflight; PostgreSQL does not use it. Follow
 [native identity prerequisites](docs/native-identity.md) before proceeding.
+
+For the v5.0.2 runtime contract, install and verify the complete migration chain
+through 110 on PostgreSQL or 109 on Oracle/YashanDB. Keep every model request bound to its original credential, source,
+Profile revision and Worker fence. Reading diagnostics never authorizes a
+generation. Reconcile unknown effects first, retain consumed budgets and use
+explicit bounded Human recovery. A replay key cannot grant response access.
+See [model capacity](docs/model-endpoint-capacity.md),
+[governed model workflows](docs/model-workflows.md),
+[processing recovery](docs/processing-recovery.md) and
+[MCP interaction boundaries](docs/mcp-versioned-interoperability.md).
 From the package root, run:
 
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_offline.sh --database pg
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ./start_web_server.sh start
@@ -198,11 +208,17 @@ DBA 先准备专用空 PDB/数据库及最小前置权限。v5.0.1 的 Oracle、
 [原生身份前置](docs/native-identity_zh.md)核验，再按实际包替换以下命令中的
 数据库和社区版/企业版参数：
 
+v5.0.2 运行契约需安装并验证完整迁移链：PostgreSQL 至 110，Oracle/YashanDB 至 109。每次模型请求保留原凭据、
+来源、Profile 修订和 Worker 栅栏。读取诊断不授权生成；先核对未知结果，保留
+已用预算，再由 Human 显式批准有限恢复。重放键不授予旧响应读取权限。详见
+[模型容量](docs/model-endpoint-capacity_zh.md)、[受控模型工作流](docs/model-workflows_zh.md)、
+[处理恢复](docs/processing-recovery_zh.md)及[MCP 边界](docs/mcp-versioned-interoperability_zh.md)。
+
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_offline.sh --database pg
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.1 \
+  --database pg --edition community --version 5.0.2 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ./start_web_server.sh start

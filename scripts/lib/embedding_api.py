@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.1 - Community Edition - Embedding API
+"""AI Agent Infra v5.0.2 - Community Edition - Embedding API
 
 Generate, store, and search vector embeddings for entities.
 Uses external Embedding API (OpenAI-compatible) + Oracle TO_VECTOR() for storage.
@@ -724,8 +724,8 @@ def search_authorized_knowledge(query: str, *, channel: str, actor: str, agent: 
             ordering = "ASC"
         else:
             # Plain tokens only: user text is never a native query language.
-            tokens = re.findall(r"[\w\u4e00-\u9fff]+", query, flags=re.UNICODE)[:32]
-            if not tokens:
+            tokens = knowledge_grounding._search_terms(query)
+            if not tokens or len(tokens) > 24:
                 return []
             if pg:
                 params["fulltext_query"] = " ".join(tokens)

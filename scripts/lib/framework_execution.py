@@ -96,6 +96,8 @@ def enqueue(actor, domain, agent_id, messages, idempotency_key, reason):
         tx.execute('INSERT INTO CX_FRAMEWORK_EXECUTIONS(EXECUTION_ID,ACTOR_ID,SECURITY_DOMAIN_ID,FRAMEWORK_KEY,FRAMEWORK_VERSION,ADAPTER_DIGEST,ROOTFS_DIGEST,INPUT_DIGEST) VALUES(:execution,:actor,:domain,\'langgraph\',:version,:adapter,:rootfs,:input_digest)', {'execution': execution_id, 'actor': actor, 'domain': domain, 'version': FRAMEWORK_VERSION, 'adapter': adapter_digest(), 'rootfs': rootfs_digest, 'input_digest': digest(payload)})
         tx.execute('INSERT INTO CX_FRAMEWORK_BINDINGS(EXECUTION_ID,PROFILE_ID,PROFILE_VERSION,PERMISSION_VERSION,TARGET_ID) VALUES(:execution,:profile,:profile_version,:permission_version,:target)', {'execution': execution_id, 'profile': profile['profile_id'], 'profile_version': int(profile['version']), 'permission_version': int(principal['permission_version']), 'target': target['target_id']})
         tx.execute('INSERT INTO CX_FRAMEWORK_REQUESTS(ACTOR_ID,IDEMPOTENCY_KEY,REQUEST_DIGEST,EXECUTION_ID) VALUES(:actor,:request_key,:digest,:execution)', {'actor': actor, 'request_key': idempotency_key, 'digest': request_digest, 'execution': execution_id})
+        from . import native_runtime
+        native_runtime.bind_model_credential(tx, actor, execution_id, payload, required_scope='platform.manage')
         identity_api._audit_tx(tx, actor, 'FRAMEWORK_EXECUTION_QUEUED', 'RUNTIME_EXECUTION', execution_id, 'ALLOW', reason)
         return {'execution_id': execution_id, 'agent_id': agent_id, 'status': 'PENDING', 'replayed': False}
     return connection.execute_transaction_callback(perform)

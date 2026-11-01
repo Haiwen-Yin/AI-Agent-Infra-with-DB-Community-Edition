@@ -289,12 +289,18 @@ def test_external_worker_rejects_stale_fence_before_writing(monkeypatch):
 
 
 def test_representation_selection_deduplicates_families_and_respects_budget(monkeypatch):
-    values = iter([
+    values = [
         {"version_id": "MV-1", "family_id": "MF-1", "lifecycle_state": "ACTIVE"},
         {"version_id": "MV-2", "family_id": "MF-1", "lifecycle_state": "ACTIVE"},
-    ])
-    monkeypatch.setattr(lifecycle, "_authorized_version", lambda *_args, **_kwargs: next(values))
-    monkeypatch.setattr(lifecycle, "execute_query", lambda *_args, **_kwargs: [{"representation_id": "MR-1", "representation_type": "SHORT_SUMMARY", "body_text": "brief", "token_count": 8, "content_digest": "same"}])
+    ]
+    representation={"representation_id": "MR-1", "version_id":"MV-1", "representation_type": "SHORT_SUMMARY", "body_text": "brief", "token_count": 8, "content_digest": "same"}
+    class Tx:
+        def query(self, sql, params):
+            return values if 'FROM CX_MEMORY_VERSIONS' in sql else [representation]
+        def query_one(self, sql, params):return {'status':'ACTIVE'}
+    monkeypatch.setattr(lifecycle, 'execute_transaction_callback', lambda callback:callback(Tx()))
+    monkeypatch.setattr(lifecycle, "_authorized_version", lambda _actor,_identifier,**kwargs:kwargs['_version'])
+    monkeypatch.setattr(lifecycle, '_require_memory_access', lambda *args,**kwargs:None)
     result = lifecycle.select_representations("HP-1", ["MV-1", "MV-2"], token_budget=10)
     assert len(result) == 1 and result[0]["representation_id"] == "MR-1"
 

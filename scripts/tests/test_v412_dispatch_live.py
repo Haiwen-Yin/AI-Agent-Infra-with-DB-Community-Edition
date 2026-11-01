@@ -20,6 +20,14 @@ class RollbackProbe(Exception):
 
 @pytest.mark.parametrize("failure", ["none", "link", "audit", "stale"])
 def test_real_branch_transaction_rolls_back(monkeypatch, failure):
+    # This retained v4.1.2 fixture inserts a raw dispatch without a canonical
+    # Task admission. It verifies only the original branch/audit transaction.
+    # Current processing admission/recovery is covered by the v5.0.2 cases.
+    try:
+        from shared.lib import processing_recovery
+    except ModuleNotFoundError:
+        from lib import processing_recovery
+    monkeypatch.setattr(processing_recovery, 'schema_enabled', lambda: False)
     dispatch_id = "DBA2A_TEST_" + secrets.token_hex(12)
     branch_name = "v412-rollback-" + secrets.token_hex(10)
     original_transaction = connection.execute_transaction_callback

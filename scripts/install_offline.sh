@@ -83,6 +83,21 @@ if ! "$VENV_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >
     echo "[ERROR] package virtual environment does not use Python 3.14+" >&2
     exit 1
 fi
+# The first file-only wheel gate uses the bootstrap interpreter which already
+# decrypted and validated the original selection. A new isolated environment
+# does not yet have cryptography. Require the same runtime/ABI so that this
+# gate assesses the wheel compatibility of the environment being installed.
+BOOTSTRAP_RUNTIME="$("$PYTHON_BIN" -c 'import json, platform, sys, sysconfig; print(json.dumps([list(sys.version_info[:2]), sys.implementation.name, sysconfig.get_config_var("SOABI"), platform.machine()]))')"
+"$VENV_PYTHON" - "$BOOTSTRAP_RUNTIME" <<'PY'
+import json
+import platform
+import sys
+import sysconfig
+current = [list(sys.version_info[:2]), sys.implementation.name,
+           sysconfig.get_config_var("SOABI"), platform.machine()]
+if current != json.loads(sys.argv[1]):
+    raise SystemExit("[ERROR] bootstrap Python and package virtual environment must use the same Python version, ABI and architecture")
+PY
 # Never silently reuse another backend's environment. No driver is imported
 # and no package/native-client installation occurs before this check.
 "$VENV_PYTHON" - "$DB_KEY" <<'PY'
@@ -97,7 +112,7 @@ if other:
 PY
 # Validate the complete selected wheel/native payload before installing a
 # database driver or copying client libraries into the environment.
-"$VENV_PYTHON" "$SCRIPT_DIR/verify_deps.py"
+"$PYTHON_BIN" "$SCRIPT_DIR/verify_deps.py"
 # YashanDB ships a CPython-native driver rather than a wheel. Install it into
 # the same package-local virtual environment before checking or starting the
 # Web service; no user-site or global Python path is modified.

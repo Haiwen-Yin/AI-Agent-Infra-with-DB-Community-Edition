@@ -11,8 +11,9 @@ from . import continuity_work as work
 from .continuity_bindings import _transport
 from .connection_crypto import encrypt_section, decrypt_section
 from .agent_extension_contracts import bounded_json, canonical, digest, identifier, opener, registered_url, row, safe_key, validate_schema
+from . import mcp_2026
 
-MCP_VERSIONS = frozenset({"2025-06-18", "2025-11-25"})
+MCP_VERSIONS = frozenset({"2025-06-18", "2025-11-25", mcp_2026.VERSION})
 TRANSPORTS = {"MCP": "STREAMABLE_HTTP", "A2A": "HTTP_JSON", "OTLP": "HTTP_PROTO_JSON"}
 
 
@@ -51,7 +52,7 @@ def register(actor, value):
     endpoint_id = str(value.get("endpoint_id") or identifier("PE"))
     contract = {"endpoint_url": url, "protocol_kind": kind, "protocol_version": version,
                 "transport_kind": TRANSPORTS[kind], "issuer_url": issuer, "resource_url": resource,
-                "sdk_version": "mcp==1.28.1" if kind == "MCP" else "chuanxu-bounded-http/1",
+                "sdk_version": (mcp_2026.SDK_IDENTITY if version == mcp_2026.VERSION else "mcp==1.28.1") if kind == "MCP" else "chuanxu-bounded-http/1",
                 "timeout_seconds": int(value.get("timeout_seconds", 30)), "max_response_bytes": int(value.get("max_response_bytes", 1048576))}
     def perform(tx):
         _human_admin(actor)
@@ -166,15 +167,28 @@ def post(record, payload, extra_headers=None, *, return_status=False):
 
 
 class MCPSession:
-    def __init__(self, record):
-        self.record, self.session_id, self.counter = record, "", 0
+    def __init__(self, record, *, authorize):
+        self.record, self.session_id, self.counter = dict(record), "", 0
+        self._authorize = authorize
+
+    def _fresh(self):
+        current = self._authorize()
+        # A legacy session belongs to its original registration and transport
+        # identity. A refreshed credential needs a new handshake; never attach
+        # another identity to an existing server session.
+        for key in ("endpoint_id", "version", "current_revision", "protocol_version",
+                    "endpoint_url", "contract_digest", "issuer_url", "resource_url",
+                    "security_domain_id", "auth_cipher"):
+            if current.get(key) != self.record.get(key):
+                raise PermissionError("MCP endpoint registration or session identity changed")
+        return current
 
     def rpc(self, method, params):
         self.counter += 1
         extra = {"MCP-Protocol-Version": self.record["protocol_version"]}
         if self.session_id:
             extra["Mcp-Session-Id"] = self.session_id
-        result, response_headers = post(self.record, {"jsonrpc": "2.0", "id": self.counter, "method": method, "params": params}, extra)
+        result, response_headers = post(self._fresh(), {"jsonrpc": "2.0", "id": self.counter, "method": method, "params": params}, extra)
         observed = next((value for key, value in response_headers.items() if key.lower() == "mcp-session-id"), "")
         if observed:
             if len(observed) > 256 or any(ord(char) < 32 for char in observed) or self.session_id and observed != self.session_id:
@@ -185,20 +199,34 @@ class MCPSession:
         return result.get("result")
 
     def initialize(self):
-        result = self.rpc("initialize", {"protocolVersion": self.record["protocol_version"], "capabilities": {}, "clientInfo": {"name": "chuanxu", "version": "5.0.1"}})
+        result = self.rpc("initialize", {"protocolVersion": self.record["protocol_version"], "capabilities": {}, "clientInfo": {"name": "chuanxu", "version": "5.0.2"}})
         if not isinstance(result, dict) or result.get("protocolVersion") != self.record["protocol_version"] or "tools" not in result.get("capabilities", {}):
             raise ValueError("Registered MCP version or tools capability is unavailable")
         extra = {"MCP-Protocol-Version": self.record["protocol_version"], **({"Mcp-Session-Id": self.session_id} if self.session_id else {})}
-        post(self.record, {"jsonrpc": "2.0", "method": "notifications/initialized"}, extra)
+        post(self._fresh(), {"jsonrpc": "2.0", "method": "notifications/initialized"}, extra)
 
 
-def tool_contract(tool):
+def mcp_session(record, *, authorize):
+    if record["protocol_version"] == mcp_2026.VERSION:
+        return mcp_2026.MCP2026Session(record, post, authorize=authorize)
+    return MCPSession(record, authorize=authorize)
+
+
+def _schema(record, schema, value=None, *, check_value=True):
+    validator = mcp_2026.validate_schema if record["protocol_version"] == mcp_2026.VERSION else validate_schema
+    return validator(schema, value, check_value=check_value)
+
+
+def tool_contract(tool, *, protocol_version=None):
     if not isinstance(tool, dict):
         raise ValueError("MCP Tool must be an object")
     safe_key(tool.get("name"), maximum=256)
-    validate_schema(tool.get("inputSchema"), check_value=False)
+    validator = mcp_2026.validate_schema if protocol_version == mcp_2026.VERSION else validate_schema
+    if not isinstance(tool.get("inputSchema"), dict):
+        raise ValueError("MCP tool input schema must be an object")
+    validator(tool.get("inputSchema"), check_value=False)
     if tool.get("outputSchema") is not None:
-        validate_schema(tool["outputSchema"], check_value=False)
+        validator(tool["outputSchema"], check_value=False)
     return {"name": tool["name"], "title": str(tool.get("title") or tool["name"])[:256],
             "description": str(tool.get("description") or "")[:2000], "inputSchema": tool["inputSchema"],
             "outputSchema": tool.get("outputSchema"), "readOnly": (tool.get("annotations") or {}).get("readOnlyHint") is True}
@@ -210,7 +238,7 @@ def remote_contracts(session):
         page = session.rpc("tools/list", {"cursor": cursor} if cursor else {})
         if not isinstance(page, dict) or not isinstance(page.get("tools"), list):
             raise ValueError("Invalid MCP discovery response")
-        contracts.extend(tool_contract(item) for item in page["tools"])
+        contracts.extend(tool_contract(item, protocol_version=session.record["protocol_version"]) for item in page["tools"])
         if len(contracts) > 200 or len({item["name"] for item in contracts}) != len(contracts):
             raise ValueError("MCP directory exceeds limits or duplicates names")
         cursor = page.get("nextCursor")
@@ -221,13 +249,16 @@ def remote_contracts(session):
         seen.add(cursor)
     else:
         raise ValueError("MCP discovery exceeds its page limit")
-    return contracts
+    return sorted(contracts, key=lambda contract: contract["name"])
 
 
 def discover(actor, endpoint_id):
     effective_capabilities.require(actor, model="mcp_discovery", action="tools.read")
     record = endpoint(actor, endpoint_id, kind="MCP")
-    session = MCPSession(record)
+    def authorize_request():
+        effective_capabilities.require(actor, model="mcp_discovery", action="tools.read")
+        return endpoint(actor, endpoint_id, kind="MCP")
+    session = mcp_session(record, authorize=authorize_request)
     session.initialize()
     contracts = remote_contracts(session)
     def perform(tx):
@@ -246,7 +277,8 @@ def discover(actor, endpoint_id):
                     {"endpoint": endpoint_id, "revision": int(record["current_revision"]), "tool": contract["name"], "digest": tool_digest, "name": contract["title"], "description": contract["description"] or None,
                      "input_schema": canonical(contract["inputSchema"]), "output_schema": canonical(contract["outputSchema"]) if contract["outputSchema"] is not None else None, "readonly": int(contract["readOnly"])})
         identity_api._audit_tx(tx, actor, "MCP_SERVICE_DISCOVERED", "PROTOCOL_ENDPOINT", endpoint_id, "ALLOW", "Scoped version-bound metadata discovery")
-        return {"endpoint_id": endpoint_id, "revision_no": int(record["current_revision"]), "items": [{"name": item["name"], "title": item["title"], "description": item["description"], "read_only": item["readOnly"], "tool_digest": digest(item)} for item in contracts]}
+        return {"endpoint_id": endpoint_id, "revision_no": int(record["current_revision"]), "items": [{"name": item["name"], "title": item["title"], "description": item["description"], "read_only": item["readOnly"], "tool_digest": digest(item)} for item in contracts],
+                **({"interoperability": session.discovery, "cache_observation": session.cache_observation} if isinstance(session, mcp_2026.MCP2026Session) else {})}
     return connection.execute_transaction_callback(perform)
 
 
@@ -317,7 +349,7 @@ def call_tool(actor, endpoint_id, tool_name, tool_digest, arguments, idempotency
                 raise ValueError("MCP idempotency key has different content")
             fresh, tool = _call_authority(tx, prior)
             if prior["status"] == "PENDING" and not tx.query_one("SELECT ATTEMPT_ID FROM CX_PROTOCOL_ATTEMPTS WHERE CALL_ID=:call", {"call": prior["call_id"]}):
-                validate_schema(json.loads(tool["input_schema_json"]), arguments)
+                _schema(fresh, json.loads(tool["input_schema_json"]), arguments)
                 return prior, fresh, tool
             return prior, None, None
         call = {"call_id": identifier("PC"), "endpoint_id": endpoint_id, "revision_no": int(record["current_revision"]),
@@ -328,7 +360,7 @@ def call_tool(actor, endpoint_id, tool_name, tool_digest, arguments, idempotency
         if transport:
             tx.execute("INSERT INTO CX_PROTOCOL_CREDENTIALS(CALL_ID,INSTANCE_ID,TOKEN_DIGEST,FENCING_TOKEN) VALUES(:call,:instance,:token,:fence)", {"call": call["call_id"], "instance": transport["instance_id"], "token": transport["token_digest"], "fence": transport["fencing_token"]})
         fresh, tool = _call_authority(tx, call)
-        validate_schema(json.loads(tool["input_schema_json"]), arguments)
+        _schema(fresh, json.loads(tool["input_schema_json"]), arguments)
         identity_api._audit_tx(tx, actor, "MCP_CALL_QUEUED", "PROTOCOL_CALL", call["call_id"], "ALLOW", "Exact approved read-only tool")
         return call, fresh, tool
     call, record, tool = connection.execute_transaction_callback(reserve)
@@ -346,7 +378,15 @@ def call_tool(actor, endpoint_id, tool_name, tool_digest, arguments, idempotency
     record, tool = connection.execute_transaction_callback(claim)
     status, result, error, sent = "UNOBSERVED", None, None, False
     try:
-        session = MCPSession(record)
+        def authorize_request():
+            def check(tx):
+                current = row(tx.query_one("SELECT * FROM CX_PROTOCOL_CALLS WHERE CALL_ID=:call FOR UPDATE", {"call": call["call_id"]}))
+                if (current["status"] != "SENDING" or current["cancel_requested"] or not tx.query_one(
+                        "SELECT ATTEMPT_ID FROM CX_PROTOCOL_ATTEMPTS WHERE ATTEMPT_ID=:attempt AND FENCING_TOKEN=1 AND STATUS='SENDING' AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP", {"attempt": attempt_id})):
+                    raise PermissionError("MCP Call was cancelled or its dispatch lease expired")
+                return _call_authority(tx, current)[0]
+            return connection.execute_transaction_callback(check)
+        session = mcp_session(record, authorize=authorize_request)
         session.initialize()
         contracts = remote_contracts(session)
         if not any(item["name"] == tool_name and digest(item) == tool_digest and item["readOnly"] for item in contracts):
@@ -363,8 +403,12 @@ def call_tool(actor, endpoint_id, tool_name, tool_digest, arguments, idempotency
         if not isinstance(result, dict) or result.get("isError"):
             raise ValueError("MCP Tool reported a failed result")
         if tool.get("output_schema_json"):
-            validate_schema(json.loads(tool["output_schema_json"]), result.get("structuredContent"))
+            if record["protocol_version"] == mcp_2026.VERSION and "structuredContent" not in result:
+                raise mcp_2026.MCPContractError("MCP_STRUCTURED_CONTENT_MISSING")
+            _schema(record, json.loads(tool["output_schema_json"]), result.get("structuredContent"))
         status = "SUCCEEDED"
+    except mcp_2026.MCPContractError as exc:
+        status, error = ("UNOBSERVED" if sent else "FAILED"), exc.code
     except urllib.error.HTTPError as exc:
         status, error = ("FAILED" if 400 <= exc.code < 500 else "UNOBSERVED"), "HTTP_" + str(int(exc.code))
     except Exception as exc:

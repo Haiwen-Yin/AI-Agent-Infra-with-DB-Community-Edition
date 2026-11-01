@@ -17,6 +17,9 @@ from .test_continuity_work import database
 
 @pytest.fixture
 def store(candidate_db, monkeypatch):
+    from lib import edition_features
+    # This harness intentionally installs the v5.0.1 migration-104 contract.
+    monkeypatch.setattr(edition_features, 'MODEL_RUNTIME_CONTEXT_ENABLED', False, raising=False)
     db, source = candidate_db
     db.execute("ALTER TABLE CX_PRINCIPALS ADD COLUMN PERMISSION_VERSION INTEGER DEFAULT 1")
     db.execute("UPDATE CX_PRINCIPALS SET PRINCIPAL_TYPE='AGENT' WHERE PRINCIPAL_ID='agent'")

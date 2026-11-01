@@ -13,7 +13,7 @@ def test_usage_reads_nested_details_without_adding_to_total():
         "completion_tokens_details": {"reasoning_tokens": 20},
     }})
     assert usage == dict(prompt_tokens=100, completion_tokens=50, cached_tokens=40,
-                         reasoning_tokens=20, total_tokens=150)
+                         reasoning_tokens=20, total_tokens=150, cache_write_tokens=None)
 
 
 def pricing(monkeypatch, **overrides):
@@ -38,7 +38,8 @@ def test_missing_detail_tariff_uses_regular_rate(monkeypatch):
 
 
 @pytest.mark.parametrize("changes", [dict(prompt_tokens=None), dict(cached_tokens=101),
-                                      dict(completion_tokens=None), dict(reasoning_tokens=51)])
+                                      dict(completion_tokens=None), dict(reasoning_tokens=51),
+                                      dict(cached_tokens=None), dict(reasoning_tokens=None)])
 def test_incomplete_or_inconsistent_usage_is_not_zero_cost(monkeypatch, changes):
     pricing(monkeypatch)
     usage = dict(prompt_tokens=100, completion_tokens=50, cached_tokens=40, reasoning_tokens=20)

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased - v5.0.2
+
+- Use one bounded model-result contract for complete answers, structured tool
+  proposals, refusals, truncation and interrupted streams across supported
+  native, business and Gateway routes.
+- Add database-authoritative shared model capacity, fixed cross-installation
+  coordinator enrollment, exact dispatch proofs, cancellation distinctions and
+  explicit evidence-bound recovery. Preserve the original business credentials,
+  source authorization, Worker leases and fencing.
+- Record input/output, cache and reasoning usage with provenance and client
+  timing, preserving unavailable values and exactly-once Gateway settlement.
+- Reuse candidate review and Task continuity for structured retrospective
+  proposals, bounded approved read-only tool turns and processing diagnostics.
+  Unknown effects require reconciliation before a separate retry decision.
+- Batch supported database reads and writes, retain atomic rollback, and budget
+  selected context and tool schemas without dropping mandatory constraints.
+- Add the bounded MCP 2026-07-28 discovery/read-only subset while retaining
+  the 2025 adapters. Keep unsupported interactions and capability defaults
+  outside the selected contract.
+- Add bilingual model workflow, capacity and recovery guidance and responsive
+  controls for runtime observations and explicit processing recovery.
+
 ## v5.0.1 - 2026-10-23
 
 - Improve governed Agent continuity, answer-quality handling, memory context,

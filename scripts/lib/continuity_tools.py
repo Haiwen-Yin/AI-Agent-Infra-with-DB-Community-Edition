@@ -78,7 +78,7 @@ def _authorize(tx,actor,domain,context):
         raise PermissionError('Tool proposal authority expired or was revoked')
 
 
-def propose(actor,tool_id,value):
+def propose(actor,tool_id,value,*,transaction=None):
     request=value if isinstance(value,ToolInvocation) else ToolInvocation.model_validate(value)
     context=bindings._transport.get()
     def perform(tx):
@@ -115,7 +115,7 @@ def propose(actor,tool_id,value):
                    {'audit_id':work._id('MA'),'job':job_id,'actor':actor,'detail':_json({'status':'WAITING_APPROVAL','request_id':request_id})})
         identity_api._audit_tx(tx,actor,'MCP_TOOL_PROPOSE','TOOL',str(tool_id),'ALLOW',request.reason)
         return dict(success=True,status='QUEUED',job_id=job_id,request_id=request_id,replayed=False)
-    return connection.execute_transaction_callback(perform)
+    return perform(transaction) if transaction is not None else connection.execute_transaction_callback(perform)
 
 
 def validate_execution(job, *, require_claim=True):
@@ -126,10 +126,14 @@ def validate_execution(job, *, require_claim=True):
             return
         if binding['principal_id']!=job['agent_id']:
             raise PermissionError('Tool execution identity changed')
+        from .edition_features import MODEL_RUNTIME_CONTEXT_ENABLED
+        if MODEL_RUNTIME_CONTEXT_ENABLED:
+            from .governed_model_turns import validate_worker
+            validate_worker(tx,job)
         if require_claim:
             claimed=tx.query_one("SELECT JOB_ID FROM EXECUTION_JOBS WHERE JOB_ID=:job "
                 "AND STATUS='RUNNING' AND CANCEL_REQUESTED='N' AND LEASE_TOKEN=:lease "
-                "AND LEASE_UNTIL>CURRENT_TIMESTAMP",
+                f"AND LEASE_UNTIL>{connection.utc_wall_clock_expression()}",
                 {'job':job['job_id'],'lease':job.get('lease_token')})
             if not claimed:
                 raise PermissionError('Tool worker lease is no longer current')

@@ -1,0 +1,1678 @@
+{
+  "CX_AGENT_SYNC_CREDENTIALS": {
+    "check_expressions": [],
+    "checks": 0,
+    "columns": {
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "CREDENTIAL_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CREDENTIAL_REF": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(100)"
+      },
+      "JOB_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "JOB_ID",
+      "CREDENTIAL_REF",
+      "CREDENTIAL_DIGEST",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "JOB_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "JOB_ID"
+        ],
+        "CX_AGENT_SYNC_JOBS",
+        [
+          "JOB_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_48B2F1325FE98E37",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('JOB_ID') OR UPDATING('CREDENTIAL_REF') OR UPDATING('CREDENTIAL_DIGEST') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_ANSWER_QUALITY_CREDENTIALS": {
+    "check_expressions": [
+      "CREDENTIAL_KIND IN ('WEB','AGENT')",
+      "FENCING_TOKEN>=0",
+      "PERMISSION_VERSION>=0",
+      "(CREDENTIAL_KIND='WEB' AND AUTH_METHOD IS NOT NULL AND PERMISSION_VERSION>0 AND SESSION_CREATED_AT IS NOT NULL) OR (CREDENTIAL_KIND='AGENT' AND INSTANCE_ID IS NOT NULL AND FENCING_TOKEN>0)"
+    ],
+    "checks": 4,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "AUTH_METHOD": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "CREDENTIAL_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CREDENTIAL_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(8)"
+      },
+      "FENCING_TOKEN": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "INSTANCE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "MFA_LEVEL": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(32)"
+      },
+      "NODE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "PERMISSION_VERSION": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REQUIRED_SCOPE": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "RUN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SESSION_CREATED_AT": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "RUN_ID",
+      "ACTOR_ID",
+      "CREDENTIAL_KIND",
+      "CREDENTIAL_DIGEST",
+      "REQUIRED_SCOPE",
+      "INSTANCE_ID",
+      "FENCING_TOKEN",
+      "AUTH_METHOD",
+      "PERMISSION_VERSION",
+      "MFA_LEVEL",
+      "NODE_ID",
+      "SESSION_CREATED_AT",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "RUN_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "RUN_ID"
+        ],
+        "CX_ANSWER_QUALITY_RUNS",
+        [
+          "RUN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_400AF6EEBAAA26A2",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('RUN_ID') OR UPDATING('ACTOR_ID') OR UPDATING('CREDENTIAL_KIND') OR UPDATING('CREDENTIAL_DIGEST') OR UPDATING('REQUIRED_SCOPE') OR UPDATING('INSTANCE_ID') OR UPDATING('FENCING_TOKEN') OR UPDATING('AUTH_METHOD') OR UPDATING('PERMISSION_VERSION') OR UPDATING('MFA_LEVEL') OR UPDATING('NODE_ID') OR UPDATING('SESSION_CREATED_AT') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_ANSWER_QUALITY_RETRY_INPUTS": {
+    "check_expressions": [],
+    "checks": 0,
+    "columns": {
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "INPUT_CIPHER": {
+        "default": null,
+        "not_null": true,
+        "type": "CLOB"
+      },
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RUN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ATTEMPT_ID",
+      "RUN_ID",
+      "CONTINUITY_ID",
+      "INPUT_CIPHER",
+      "INPUT_DIGEST",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "ATTEMPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "RUN_ID"
+        ],
+        "CX_ANSWER_QUALITY_RUNS",
+        [
+          "RUN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_TASK_CONTINUITY_LINKS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_B566747D37902303",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('ATTEMPT_ID') OR UPDATING('RUN_ID') OR UPDATING('CONTINUITY_ID') OR UPDATING('INPUT_CIPHER') OR UPDATING('INPUT_DIGEST') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_ACTIONS": {
+    "check_expressions": [
+      "ACTION_KIND IN ('TOOL_PROPOSAL','TOOL_CALL','ITERATION','MODEL_REQUEST')",
+      "ACTION_NO>0",
+      "REQUEST_COUNT BETWEEN 0 AND 1000000",
+      "STEP_COUNT BETWEEN 0 AND 1000000",
+      "TOKEN_COUNT BETWEEN 0 AND 1000000000"
+    ],
+    "checks": 5,
+    "columns": {
+      "ACTION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ACTION_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ACTION_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "ACTION_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ACTION_SIGNATURE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "BUDGET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "EVENT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "PROGRESS_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "REQUEST_COUNT": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "STEP_COUNT": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "TOKEN_COUNT": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "ACTION_ID",
+      "BUDGET_ID",
+      "CONTINUITY_ID",
+      "ATTEMPT_ID",
+      "ACTION_KEY",
+      "ACTION_KIND",
+      "ACTION_NO",
+      "ACTION_SIGNATURE",
+      "REQUEST_DIGEST",
+      "EVENT_DIGEST",
+      "REQUEST_COUNT",
+      "STEP_COUNT",
+      "TOKEN_COUNT",
+      "PROGRESS_DIGEST",
+      "CREATED_AT"
+    ],
+    "indexes": [
+      {
+        "columns": [
+          "BUDGET_ID",
+          "ACTION_SIGNATURE"
+        ],
+        "name": "CX_PROCESSING_ACTION_SIG",
+        "unique": false
+      }
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "ACTION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "BUDGET_ID"
+        ],
+        "CX_PROCESSING_BUDGETS",
+        [
+          "BUDGET_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_PROCESSING_CHAINS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "BUDGET_ID",
+          "ACTION_KEY"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "BUDGET_ID",
+          "ACTION_NO"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX107_02E254AA611AD5D4",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('ACTION_ID') OR UPDATING('BUDGET_ID') OR UPDATING('CONTINUITY_ID') OR UPDATING('ATTEMPT_ID') OR UPDATING('ACTION_KEY') OR UPDATING('ACTION_KIND') OR UPDATING('ACTION_NO') OR UPDATING('ACTION_SIGNATURE') OR UPDATING('REQUEST_DIGEST') OR UPDATING('EVENT_DIGEST') OR UPDATING('REQUEST_COUNT') OR UPDATING('STEP_COUNT') OR UPDATING('TOKEN_COUNT') OR UPDATING('PROGRESS_DIGEST') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_BLOCKS": {
+    "check_expressions": [
+      "TARGET_KIND IN ('RUNTIME','GRAPH','LOOP','TASK_STEP','PROTOCOL')",
+      "CATEGORY IN ('BLOCKED','DEGRADED','UNKNOWN')",
+      "RETRIEVAL_PATH IN ('NOT_APPLICABLE','SEMANTIC','TEXTUAL','HYBRID','UNAVAILABLE')",
+      "MATCH_STATE IN ('NOT_APPLICABLE','MATCHED','EMPTY','UNKNOWN')",
+      "REQUESTS_USED>=0",
+      "STEPS_USED>=0",
+      "TOKENS_USED>=0",
+      "STATUS IN ('OPEN','RECOVERY_ACCEPTED','RESOLVED')",
+      "VERSION>0",
+      "(SOURCE_FAMILY IS NULL AND SOURCE_ID IS NULL AND SOURCE_REVISION_ID IS NULL AND SOURCE_DIGEST IS NULL) OR (SOURCE_FAMILY IS NOT NULL AND SOURCE_ID IS NOT NULL AND SOURCE_REVISION_ID IS NOT NULL AND SOURCE_DIGEST IS NOT NULL)"
+    ],
+    "checks": 10,
+    "columns": {
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "BLOCK_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "BUDGET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "BUSINESS_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "CATEGORY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "MATCH_STATE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "OBSERVATION_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "OBSERVATION_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "POLICY_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REASON_CODE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REQUESTS_USED": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "RETRIEVAL_PATH": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "SOURCE_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "SOURCE_FAMILY": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(24)"
+      },
+      "SOURCE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_REVISION_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "STEPS_USED": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "TARGET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "TARGET_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "TARGET_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "TOKENS_USED": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "BLOCK_ID",
+      "BUDGET_ID",
+      "CONTINUITY_ID",
+      "ATTEMPT_ID",
+      "OBSERVATION_KEY",
+      "OBSERVATION_DIGEST",
+      "TARGET_KIND",
+      "TARGET_ID",
+      "TARGET_REVISION",
+      "INPUT_DIGEST",
+      "SOURCE_FAMILY",
+      "SOURCE_ID",
+      "SOURCE_REVISION_ID",
+      "SOURCE_DIGEST",
+      "BUSINESS_KEY",
+      "REASON_CODE",
+      "CATEGORY",
+      "RETRIEVAL_PATH",
+      "MATCH_STATE",
+      "POLICY_DIGEST",
+      "REQUESTS_USED",
+      "STEPS_USED",
+      "TOKENS_USED",
+      "CREATED_AT"
+    ],
+    "indexes": [
+      {
+        "columns": [
+          "CONTINUITY_ID",
+          "STATUS"
+        ],
+        "name": "CX_PROCESSING_BLOCK_CHAIN",
+        "unique": false
+      }
+    ],
+    "keys": [
+      [
+        "P",
+        [
+          "BLOCK_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "BUDGET_ID"
+        ],
+        "CX_PROCESSING_BUDGETS",
+        [
+          "BUDGET_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_PROCESSING_CHAINS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "CONTINUITY_ID",
+          "OBSERVATION_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX107_E466ED3BEE94193A",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('BLOCK_ID') OR UPDATING('BUDGET_ID') OR UPDATING('CONTINUITY_ID') OR UPDATING('ATTEMPT_ID') OR UPDATING('OBSERVATION_KEY') OR UPDATING('OBSERVATION_DIGEST') OR UPDATING('TARGET_KIND') OR UPDATING('TARGET_ID') OR UPDATING('TARGET_REVISION') OR UPDATING('INPUT_DIGEST') OR UPDATING('SOURCE_FAMILY') OR UPDATING('SOURCE_ID') OR UPDATING('SOURCE_REVISION_ID') OR UPDATING('SOURCE_DIGEST') OR UPDATING('BUSINESS_KEY') OR UPDATING('REASON_CODE') OR UPDATING('CATEGORY') OR UPDATING('RETRIEVAL_PATH') OR UPDATING('MATCH_STATE') OR UPDATING('POLICY_DIGEST') OR UPDATING('REQUESTS_USED') OR UPDATING('STEPS_USED') OR UPDATING('TOKENS_USED') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_BUDGETS": {
+    "check_expressions": [
+      "MAX_REQUESTS BETWEEN 1 AND 1000000",
+      "MAX_STEPS BETWEEN 1 AND 1000000",
+      "MAX_TOKENS BETWEEN 1 AND 1000000000",
+      "MAX_REPEATS BETWEEN 1 AND 1000",
+      "MAX_NO_PROGRESS BETWEEN 1 AND 1000",
+      "REQUESTS_USED>=0",
+      "STEPS_USED>=0",
+      "TOKENS_USED>=0",
+      "NO_PROGRESS_COUNT>=0",
+      "VERSION>0"
+    ],
+    "checks": 10,
+    "columns": {
+      "BUDGET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "LAST_PROGRESS_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "MAX_NO_PROGRESS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "MAX_REPEATS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "MAX_REQUESTS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "MAX_STEPS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "MAX_TOKENS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "NO_PROGRESS_COUNT": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "POLICY_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REQUESTS_USED": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ROOT_CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STEPS_USED": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "TOKENS_USED": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "BUDGET_ID",
+      "ROOT_CONTINUITY_ID",
+      "POLICY_DIGEST",
+      "MAX_REQUESTS",
+      "MAX_STEPS",
+      "MAX_TOKENS",
+      "MAX_REPEATS",
+      "MAX_NO_PROGRESS",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "BUDGET_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "ROOT_CONTINUITY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ROOT_CONTINUITY_ID"
+        ],
+        "CX_TASK_CONTINUITY_LINKS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_C3CB498840CE8564",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('BUDGET_ID') OR UPDATING('ROOT_CONTINUITY_ID') OR UPDATING('POLICY_DIGEST') OR UPDATING('MAX_REQUESTS') OR UPDATING('MAX_STEPS') OR UPDATING('MAX_TOKENS') OR UPDATING('MAX_REPEATS') OR UPDATING('MAX_NO_PROGRESS') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_CHAINS": {
+    "check_expressions": [],
+    "checks": 0,
+    "columns": {
+      "BUDGET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "ORIGINAL_CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "CONTINUITY_ID",
+      "BUDGET_ID",
+      "ORIGINAL_CONTINUITY_ID",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "CONTINUITY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_TASK_CONTINUITY_LINKS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "BUDGET_ID"
+        ],
+        "CX_PROCESSING_BUDGETS",
+        [
+          "BUDGET_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ORIGINAL_CONTINUITY_ID"
+        ],
+        "CX_TASK_CONTINUITY_LINKS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_007672CC31378FFF",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('CONTINUITY_ID') OR UPDATING('BUDGET_ID') OR UPDATING('ORIGINAL_CONTINUITY_ID') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_NATIVE_AGENTS": {
+    "check_expressions": [
+      "AGENT_ID=NATIVE_AGENT_ID"
+    ],
+    "checks": 1,
+    "columns": {
+      "AGENT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "NATIVE_AGENT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REGISTRY_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "AGENT_ID",
+      "NATIVE_AGENT_ID",
+      "REGISTRY_DIGEST"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "AGENT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "AGENT_ID"
+        ],
+        "AGENT_REGISTRY",
+        [
+          "AGENT_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "NATIVE_AGENT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "NATIVE_AGENT_ID"
+        ],
+        "CX_NATIVE_AGENTS",
+        [
+          "AGENT_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_1A7E0A4F3A43D120",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('AGENT_ID') OR UPDATING('NATIVE_AGENT_ID') OR UPDATING('REGISTRY_DIGEST') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_NATIVE_ANCHORS": {
+    "check_expressions": [
+      "ANCHOR_KIND='UNSCOPED_RUNTIME'",
+      "SECURITY_DOMAIN_ID='CX_NATIVE_RUNTIME_ANCHOR'"
+    ],
+    "checks": 2,
+    "columns": {
+      "ANCHOR_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "DOMAIN_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SECURITY_DOMAIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "SECURITY_DOMAIN_ID",
+      "ANCHOR_KIND",
+      "DOMAIN_DIGEST"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "SECURITY_DOMAIN_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "SECURITY_DOMAIN_ID"
+        ],
+        "CX_SECURITY_DOMAINS",
+        [
+          "SECURITY_DOMAIN_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "ANCHOR_KIND"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX107_0AAD19B1EB00DEB9",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('SECURITY_DOMAIN_ID') OR UPDATING('ANCHOR_KIND') OR UPDATING('DOMAIN_DIGEST') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_NATIVE_ATTEMPTS": {
+    "check_expressions": [
+      "NATIVE_FENCING_TOKEN>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "EXECUTION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "NATIVE_FENCING_TOKEN": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "NODE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "TASK_ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "WORKER_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "EXECUTION_ID",
+      "NATIVE_FENCING_TOKEN",
+      "CONTINUITY_ID",
+      "TASK_ATTEMPT_ID",
+      "WORKER_ID",
+      "NODE_ID"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "R",
+        [
+          "EXECUTION_ID"
+        ],
+        "CX_RUNTIME_EXECUTIONS",
+        [
+          "EXECUTION_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_PROCESSING_CHAINS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "TASK_ATTEMPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "TASK_ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "EXECUTION_ID",
+          "NATIVE_FENCING_TOKEN"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX107_EC6DDB01C0C78EC1",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('EXECUTION_ID') OR UPDATING('NATIVE_FENCING_TOKEN') OR UPDATING('CONTINUITY_ID') OR UPDATING('TASK_ATTEMPT_ID') OR UPDATING('WORKER_ID') OR UPDATING('NODE_ID') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_NATIVE_CALLS": {
+    "check_expressions": [
+      "PROVIDER_NO BETWEEN 1 AND 1000000",
+      "SOURCE_KIND IN ('NATIVE','CHANNEL')"
+    ],
+    "checks": 2,
+    "columns": {
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "PROVIDER_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "SOURCE_ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "TASK_ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "SOURCE_ATTEMPT_ID",
+      "TASK_ATTEMPT_ID",
+      "PROVIDER_NO",
+      "SOURCE_KIND",
+      "INPUT_DIGEST"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "SOURCE_ATTEMPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "TASK_ATTEMPT_ID"
+        ],
+        "CX_PROCESSING_NATIVE_ATTEMPTS",
+        [
+          "TASK_ATTEMPT_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "TASK_ATTEMPT_ID",
+          "PROVIDER_NO"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX107_B8D7750BA5E237B6",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('SOURCE_ATTEMPT_ID') OR UPDATING('TASK_ATTEMPT_ID') OR UPDATING('PROVIDER_NO') OR UPDATING('SOURCE_KIND') OR UPDATING('INPUT_DIGEST') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_RECOVERIES": {
+    "check_expressions": [
+      "BLOCK_VERSION>0",
+      "ADD_REQUESTS BETWEEN 1 AND 10000",
+      "ADD_STEPS BETWEEN 1 AND 10000",
+      "ADD_TOKENS BETWEEN 1 AND 10000000",
+      "ACTION_NO_BASELINE>=0",
+      "NO_PROGRESS_BASELINE>=0"
+    ],
+    "checks": 6,
+    "columns": {
+      "ACTION_NO_BASELINE": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ADD_REQUESTS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ADD_STEPS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ADD_TOKENS": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "BLOCK_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "BLOCK_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "DECISION_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "NO_PROGRESS_BASELINE": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "ORIGINAL_ATTEMPT_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "PROGRESS_BASELINE_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "REASON_CODE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RECOVERY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SUCCESSOR_CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "RECOVERY_ID",
+      "BLOCK_ID",
+      "BLOCK_VERSION",
+      "ORIGINAL_ATTEMPT_ID",
+      "SUCCESSOR_CONTINUITY_ID",
+      "ACTOR_ID",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "REASON_CODE",
+      "ADD_REQUESTS",
+      "ADD_STEPS",
+      "ADD_TOKENS",
+      "ACTION_NO_BASELINE",
+      "NO_PROGRESS_BASELINE",
+      "PROGRESS_BASELINE_DIGEST",
+      "DECISION_DIGEST",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "RECOVERY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "U",
+        [
+          "BLOCK_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "BLOCK_ID"
+        ],
+        "CX_PROCESSING_BLOCKS",
+        [
+          "BLOCK_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ORIGINAL_ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "SUCCESSOR_CONTINUITY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "SUCCESSOR_CONTINUITY_ID"
+        ],
+        "CX_PROCESSING_CHAINS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "ACTOR_ID",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX107_88E8B65443BFEBB4",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('RECOVERY_ID') OR UPDATING('BLOCK_ID') OR UPDATING('BLOCK_VERSION') OR UPDATING('ORIGINAL_ATTEMPT_ID') OR UPDATING('SUCCESSOR_CONTINUITY_ID') OR UPDATING('ACTOR_ID') OR UPDATING('IDEMPOTENCY_KEY') OR UPDATING('REQUEST_DIGEST') OR UPDATING('REASON_CODE') OR UPDATING('ADD_REQUESTS') OR UPDATING('ADD_STEPS') OR UPDATING('ADD_TOKENS') OR UPDATING('ACTION_NO_BASELINE') OR UPDATING('NO_PROGRESS_BASELINE') OR UPDATING('PROGRESS_BASELINE_DIGEST') OR UPDATING('DECISION_DIGEST') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_RECOVERY_STATES": {
+    "check_expressions": [
+      "STATUS IN ('ACCEPTED','QUEUED','DISPATCHED','COMPLETED','UNKNOWN','REJECTED')",
+      "VERSION>0"
+    ],
+    "checks": 2,
+    "columns": {
+      "ADMISSION_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "RECOVERY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "VERSION": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "RECOVERY_ID"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "RECOVERY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "RECOVERY_ID"
+        ],
+        "CX_PROCESSING_RECOVERIES",
+        [
+          "RECOVERY_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ADMISSION_ID"
+        ],
+        "CX_MODEL_ADMISSIONS",
+        [
+          "ADMISSION_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_18C55E068A8FBA80",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('RECOVERY_ID') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_RESOLUTIONS": {
+    "check_expressions": [
+      "EVIDENCE_KIND IN ('TERMINAL_RESPONSE','LOCAL_LIFECYCLE','OPERATOR_RESOLUTION')",
+      "OUTCOME IN ('SUCCEEDED','FAILED','CANCELLED','UNOBSERVED')"
+    ],
+    "checks": 2,
+    "columns": {
+      "ACTOR_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "BLOCK_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "BUSINESS_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "EVIDENCE_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "EVIDENCE_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(32)"
+      },
+      "OUTCOME": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RESOLUTION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "RESOLUTION_ID",
+      "BLOCK_ID",
+      "ATTEMPT_ID",
+      "ACTOR_ID",
+      "BUSINESS_KEY",
+      "REQUEST_DIGEST",
+      "EVIDENCE_KIND",
+      "EVIDENCE_DIGEST",
+      "OUTCOME",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "RESOLUTION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "BLOCK_ID"
+        ],
+        "CX_PROCESSING_BLOCKS",
+        [
+          "BLOCK_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTOR_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "BLOCK_ID",
+          "EVIDENCE_KIND",
+          "EVIDENCE_DIGEST"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX107_A5AF31366F92544D",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('RESOLUTION_ID') OR UPDATING('BLOCK_ID') OR UPDATING('ATTEMPT_ID') OR UPDATING('ACTOR_ID') OR UPDATING('BUSINESS_KEY') OR UPDATING('REQUEST_DIGEST') OR UPDATING('EVIDENCE_KIND') OR UPDATING('EVIDENCE_DIGEST') OR UPDATING('OUTCOME') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_PROCESSING_TARGETS": {
+    "check_expressions": [
+      "TARGET_KIND IN ('RUNTIME','GRAPH','LOOP','TASK_STEP','PROTOCOL')",
+      "(SOURCE_FAMILY IS NULL AND SOURCE_ID IS NULL AND SOURCE_REVISION_ID IS NULL AND SOURCE_DIGEST IS NULL) OR (SOURCE_FAMILY IS NOT NULL AND SOURCE_ID IS NOT NULL AND SOURCE_REVISION_ID IS NOT NULL AND SOURCE_DIGEST IS NOT NULL)"
+    ],
+    "checks": 2,
+    "columns": {
+      "BUSINESS_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SOURCE_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "SOURCE_FAMILY": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(24)"
+      },
+      "SOURCE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_REVISION_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "TARGET_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "TARGET_KIND": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "TARGET_REVISION": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "CONTINUITY_ID",
+      "TARGET_KIND",
+      "TARGET_ID",
+      "TARGET_REVISION",
+      "INPUT_DIGEST",
+      "BUSINESS_KEY",
+      "SOURCE_FAMILY",
+      "SOURCE_ID",
+      "SOURCE_REVISION_ID",
+      "SOURCE_DIGEST"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "CONTINUITY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_PROCESSING_CHAINS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX107_66E6C00C37E815BE",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('CONTINUITY_ID') OR UPDATING('TARGET_KIND') OR UPDATING('TARGET_ID') OR UPDATING('TARGET_REVISION') OR UPDATING('INPUT_DIGEST') OR UPDATING('BUSINESS_KEY') OR UPDATING('SOURCE_FAMILY') OR UPDATING('SOURCE_ID') OR UPDATING('SOURCE_REVISION_ID') OR UPDATING('SOURCE_DIGEST') THEN RAISE immutable_runtime; END IF; END;"
+  }
+}

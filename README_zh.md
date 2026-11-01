@@ -1,4 +1,4 @@
-# 川序社区版 v5.0.1
+# 川序社区版 v5.0.2
 
 [English](README.md)
 
@@ -11,6 +11,12 @@ Portal 对话分配平台托管的本地 Agent。
 共享问答将授权检索、独立证据评估和来源标注结合。工作便签、时态记忆、Agent 资产
 绑定、配置化来源同步和最终回答验收继续使用已有 Task/Step、Work/Handoff 与候选/
 审核实体，保留权限、精确修订及显式发布边界。
+
+v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观测。结构化回顾继续
+进入独立候选审核；受控只读工具轮沿用 Action Card 与 Worker。处理诊断呈现已用
+预算与显式恢复回执，MCP 按确切版本选择有界适配器。详见
+[模型容量](docs/model-endpoint-capacity_zh.md)、[模型工作流](docs/model-workflows_zh.md)、
+[处理恢复](docs/processing-recovery_zh.md)和[MCP 兼容范围](docs/mcp-versioned-interoperability_zh.md)。
 
 本包名称为 **AI-Agent-Infra-with-DB-Community-Edition**，版本类型为 **Community**，许可证为
 **Apache-2.0**。支持的数据库标识：**oracle, pg, yashandb**。整合社区版的每个运行
@@ -37,7 +43,7 @@ Portal 对话分配平台托管的本地 Agent。
    [最小权限](docs/minimum-privileges_zh.md)完成核验。
 4. 将初始管理员密码存入权限为 `0600` 的文件。执行
    `bash scripts/install_platform.sh initialize --database DB --edition EDITION
-   --version 5.0.1 --config /绝对路径/config.json --admin-password-file
+   --version 5.0.2 --config /绝对路径/config.json --admin-password-file
    /绝对路径/password-file`。将 `DB` 替换为支持的数据库标识，将 `EDITION`
    替换为 `community` 或 `enterprise`。
 5. 执行 `./start_web_server.sh start`。Dashboard 入口为 `/app/`，Portal 入口
@@ -78,7 +84,7 @@ Portal 对话分配平台托管的本地 Agent。
 - [安全说明](docs/security_zh.md)与[交付验证](docs/release-signing_zh.md)
 - [原生 Agent 退役与账户状态前置](docs/native-identity_zh.md)
 - [访问 IP 配置与本机恢复](docs/source-ip-access_zh.md)
-- [版本说明](RELEASE_NOTES_v5.0.1.md)
+- [版本说明](RELEASE_NOTES_v5.0.2.md)
 
 模型能力按供应商与模型逐项验证。受控集成继续执行授权、隔离、运行限额及数据库
 审计检查。社区包不包含企业版专属代码和 SQL。人用户自助注册与外部 Agent 注册

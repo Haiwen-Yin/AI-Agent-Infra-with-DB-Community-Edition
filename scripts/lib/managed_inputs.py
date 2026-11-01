@@ -8,6 +8,7 @@ import sys
 from . import connection, identity_api, continuity_work as work, native_runtime, provider_capability_probes as probes
 from .connection_crypto import encrypt_section, decrypt_section
 from .agent_extension_contracts import identifier, digest, row, canonical
+from . import model_credentials
 
 
 def upload(actor, domain, filename, media_type, content_base64):
@@ -79,6 +80,7 @@ def query(actor, asset_id, profile_id, question):
     profile = native_runtime._llm_profile(profile_id)
     if not profile:
         raise ValueError("Active model profile is required")
+    binding = model_credentials.capture(actor, required_scope='model_gateway.forward')
     def reserve(tx):
         asset, binary = _read(tx, actor, asset_id)
         image = asset["media_type"].startswith("image/")
@@ -94,26 +96,58 @@ def query(actor, asset_id, profile_id, question):
         tx.execute("INSERT INTO CX_MANAGED_ASSET_USES(USE_ID,ASSET_ID,ASSET_VERSION,ACTOR_ID,PROFILE_ID,PROFILE_VERSION,STATUS,INPUT_DIGEST) VALUES(:use_id,:asset,:asset_version,:actor,:profile,:profile_version,'SENDING',:digest)", {"use_id": use, "asset": asset_id, "asset_version": int(asset["version"]), "actor": actor, "profile": profile_id, "profile_version": int(profile["version"]), "digest": digest(messages)})
         return use, asset, messages
     use, asset, messages = connection.execute_transaction_callback(reserve)
-    status, result = "UNOBSERVED", None
+    status, result, sent = "UNOBSERVED", None, False
     try:
         connection.execute_transaction_callback(lambda tx: _read(tx, actor, asset_id))
         if identity_api.effective_access(actor, "model_gateway.forward").get("decision") != "ALLOW":
             raise PermissionError("Model invocation permission was revoked")
-        result = native_runtime._call_llm(profile, messages, managed_input=True)
+        def reauthorize(tx, admission):
+            from .portal_grounding import _recheck_profile
+            _recheck_profile(tx, profile)
+            current, _ = _read(tx, actor, asset_id)
+            if (int(current['version']) != int(asset['version'])
+                    or any(current.get(key) != asset.get(key) for key in
+                           ('content_digest', 'security_domain_id', 'media_type', 'byte_count', 'extracted_cipher'))):
+                raise PermissionError('The original managed input changed before dispatch')
+            use_record = row(tx.query_one('SELECT * FROM CX_MANAGED_ASSET_USES WHERE USE_ID=:use_id', {'use_id': use}))
+            if (use_record.get('status') != 'SENDING' or use_record.get('actor_id') != actor
+                    or use_record.get('asset_id') != asset_id or use_record.get('profile_id') != profile_id
+                    or int(use_record.get('profile_version') or 0) != int(profile['version'])
+                    or int(use_record.get('asset_version') or 0) != int(asset['version'])
+                    or use_record.get('input_digest') != digest(messages)):
+                raise PermissionError('The original managed-input use is no longer current')
+            if identity_api.effective_access(actor, 'model_gateway.forward').get('decision') != 'ALLOW':
+                raise PermissionError('Managed-input model permission was revoked')
+            if asset['media_type'].startswith('image/') and not tx.query_one(
+                    "SELECT PROBE_ID FROM CX_PROVIDER_CAP_PROBES WHERE PROFILE_ID=:profile AND PROFILE_VERSION=:version "
+                    "AND CAPABILITY_KEY='IMAGE_INPUT' AND STATUS='VERIFIED' AND EXPIRES_AT>CURRENT_TIMESTAMP",
+                    {'profile': profile_id, 'version': int(profile['version'])}):
+                raise PermissionError('The original image-input evidence is no longer current')
+        with model_credentials.dispatch_context(binding, 'EXTERNAL', use, use, reauthorize=reauthorize,
+                worker_key='managed:' + use, allow_wait=True, lock_principals=(actor,)):
+            sent = True
+            result = native_runtime._call_llm(profile, messages, managed_input=True)
         status = "SUCCEEDED"
-    except Exception:
-        pass
+    except Exception as exc:
+        if getattr(exc, 'model_not_dispatched', False):
+            sent = False
+        status = 'UNOBSERVED' if sent else 'FAILED'
     def finish(tx):
         final = status
         try:
-            current, _ = _read(tx, actor, asset_id)
-            if int(current["version"]) != int(asset["version"]):
-                final = "UNOBSERVED"
-            probes.request_parameters(profile_id, profile["version"])
-            if identity_api.effective_access(actor, "model_gateway.forward").get("decision") != "ALLOW":
-                final = "UNOBSERVED"
+            if final != 'FAILED':
+                if binding is not None and final == 'SUCCEEDED':
+                    model_credentials.recheck(tx, binding)
+                current, _ = _read(tx, actor, asset_id)
+                if (int(current["version"]) != int(asset["version"])
+                        or any(current.get(key) != asset.get(key) for key in
+                               ('content_digest', 'security_domain_id', 'media_type', 'byte_count', 'extracted_cipher'))):
+                    final = "UNOBSERVED"
+                probes.request_parameters(profile_id, profile["version"])
+                if identity_api.effective_access(actor, "model_gateway.forward").get("decision") != "ALLOW":
+                    final = "UNOBSERVED"
         except (PermissionError, ValueError):
-            final = "UNOBSERVED"
+            final = 'FAILED' if status == 'FAILED' else "UNOBSERVED"
         tx.execute("UPDATE CX_MANAGED_ASSET_USES SET STATUS=:state,OUTPUT_DIGEST=:digest,COMPLETED_AT=CURRENT_TIMESTAMP WHERE USE_ID=:use_id AND STATUS='SENDING'", {"state": final, "digest": digest(result) if final == "SUCCEEDED" else None, "use_id": use})
         identity_api._audit_tx(tx, actor, "MANAGED_INPUT_OBSERVED", "MANAGED_INPUT_ASSET", asset_id, "ALLOW" if final == "SUCCEEDED" else "DENY", final)
         return {"use_id": use, "asset_id": asset_id, "status": final, "result": result if final == "SUCCEEDED" else None}

@@ -27,12 +27,13 @@ def _audience(dispatch):
     return readers
 
 
-def _check_sources(agent_id, dispatch, citations, readers):
+def _check_sources(agent_id, dispatch, citations, readers, *, transaction=None):
+    options = {"transaction": transaction} if transaction is not None else {}
     for item in citations:
         knowledge_grounding.citation(dispatch['requester_principal_id'], agent_id,
-                                     item['entity_id'], item['digest'])
+                                     item['entity_id'], item['digest'], **options)
         for reader in readers:
-            knowledge_grounding.citation(reader, agent_id, item['entity_id'], item['digest'])
+            knowledge_grounding.citation(reader, agent_id, item['entity_id'], item['digest'], **options)
 
 
 def validate_grounding(agent_id, payload):
@@ -62,9 +63,11 @@ def validate_grounding(agent_id, payload):
     _check_sources(agent_id, dispatch, citations, _audience(dispatch) if citations else set())
 
 
-def require_result_reader(principal, agent_id, execution_id):
+def require_result_reader(principal, agent_id, execution_id, *, transaction=None):
     """Historical replies never turn Channel membership into a Knowledge grant."""
-    row = native_agent_api._row(connection.execute_query_one(
+    query = transaction.query_one if transaction is not None else connection.execute_query_one
+    options = {"transaction": transaction} if transaction is not None else {}
+    row = native_agent_api._row(query(
         'SELECT INPUT_JSON,STATUS FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution AND AGENT_ID=:agent',
         {'execution': execution_id, 'agent': agent_id}))
     if not row:
@@ -73,12 +76,12 @@ def require_result_reader(principal, agent_id, execution_id):
     dispatch = payload.get('channel_dispatch') or {}
     if dispatch.get('kind') != 'BUSINESS_MENTION':
         return
-    identity_api._assert_channel_member(principal, dispatch['channel_id'])
+    identity_api._assert_channel_member(principal, dispatch['channel_id'], **options)
     if dispatch.get('thread_id'):
-        identity_api._assert_thread_member(principal, dispatch['thread_id'])
+        identity_api._assert_thread_member(principal, dispatch['thread_id'], **options)
     if 'knowledge_contract' not in payload:
         raise PermissionError('Legacy Channel answer requires renewed verification')
-    _check_sources(agent_id, dispatch, payload.get('knowledge_citations') or [], {principal})
+    _check_sources(agent_id, dispatch, payload.get('knowledge_citations') or [], {principal}, **options)
     source = payload.get('answer_source')
     # Pre-notice executions already persisted the mutually exclusive knowledge
     # branches. Recover provenance only from that server-owned contract, never
@@ -226,6 +229,8 @@ def enqueue(actor: str, channel_id: str, message_id: str, agent_id: str,
             "VALUES(:execution,:agent,:target,:isolation,'PENDING',:payload,:digest)",
             {'execution': execution_id, 'agent': agent_id, 'target': agent['deployment_target_id'],
              'isolation': level, 'payload': native_agent_api._json(payload), 'digest': digest})
+        from . import native_runtime
+        native_runtime.bind_model_credential(tx, actor, execution_id, payload, required_scope='channels.write')
         native_agent_api._audit(tx, actor, 'CHANNEL_BUSINESS_AGENT_DISPATCH', 'CHANNEL_MESSAGE', message_id,
                                 'ALLOW', 'explicit business Agent mention queued')
         return {'execution_id': execution_id, 'agent_id': agent_id, 'status': 'PENDING', 'idempotent': False}

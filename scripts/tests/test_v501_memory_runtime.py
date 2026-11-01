@@ -26,6 +26,9 @@ def test_work_note_list_normalises_database_identifier_case():
 
 @pytest.fixture
 def runtime(candidate_db,monkeypatch):
+    from lib import edition_features
+    # Keep this historical migration-103 harness on its selected release contract.
+    monkeypatch.setattr(edition_features,'MODEL_RUNTIME_CONTEXT_ENABLED',False,raising=False)
     db,source=candidate_db
     db.executescript('''
         CREATE TABLE CX_LLM_PROVIDER_PROFILES(PROFILE_ID TEXT PRIMARY KEY,VERSION INTEGER,STATUS TEXT,HEALTH_STATE TEXT,
@@ -39,13 +42,15 @@ def runtime(candidate_db,monkeypatch):
             DESCRIPTION TEXT,TOOL_NAME TEXT,STATUS TEXT);
         INSERT INTO TASK_PLANS VALUES('501','owner','RUNNING','validation',5,NULL);
     ''')
-    for statement in tasks.schema_statements('pg')+quality.schema_statements('pg')+notes.schema_statements('pg')+retros.schema_statements('pg'):
+    for statement in tasks.schema_statements('pg')+quality.schema_statements('pg')+notes.schema_statements('pg')+retros.schema_statements('pg')+retros.output_schema_statements('pg'):
         db.execute(statement.replace('CREATE TABLE ','CREATE TABLE IF NOT EXISTS ',1))
     from lib import continuity_publications
     for statement in continuity_publications.schema_statements('pg'):
         db.execute(statement)
     monkeypatch.setattr(notes.connection,'DATABASE_DIALECT','sqlite')
     monkeypatch.setattr(memory,'execute_transaction_callback',notes.connection.execute_transaction_callback)
+    from lib import provider_capability_probes
+    monkeypatch.setattr(provider_capability_probes,'request_parameters',lambda *_:{})
     db.commit()
     wid=db.execute('SELECT WORK_CONTRACT_ID FROM CX_WORK_CONTRACTS').fetchone()[0]
     return db,source,wid
@@ -327,7 +332,7 @@ def test_stale_model_and_candidate_audit_failure_rollback(runtime,monkeypatch):
 
 def test_default_model_worker_is_executable_and_enforces_disclosure_budget(runtime,monkeypatch):
     db,source,_=runtime
-    from lib import provider_capability_probes, agent_extension_contracts
+    from lib import provider_capability_probes,native_runtime
     monkeypatch.setattr(provider_capability_probes,'apply_parameters',lambda profile,payload:payload)
     calls=[]
     class Response:
@@ -340,9 +345,10 @@ def test_default_model_worker_is_executable_and_enforces_disclosure_budget(runti
     class Opener:
         def open(self,request,timeout):
             calls.append(json.loads(request.data))
-            assert request.full_url=='http://model.test/v1/chat/completions' and timeout==120
+            from lib.llm_transport import request_timeout_seconds
+            assert request.full_url=='http://model.test/v1/chat/completions' and timeout==request_timeout_seconds()
             return Response()
-    monkeypatch.setattr(agent_extension_contracts,'opener',lambda:Opener())
+    monkeypatch.setattr(native_runtime.urllib.request,'urlopen',lambda request,timeout:Opener().open(request,timeout))
     created=retros.create_job('owner',retrospective(source))
     assert retros.run_once('owner',created['job_id'],'worker')['status']=='PROPOSED'
     assert len(calls)==1 and calls[0]['max_tokens']<=8192//3 and not calls[0]['stream']
@@ -353,6 +359,35 @@ def test_default_model_worker_is_executable_and_enforces_disclosure_budget(runti
     db.commit()
     assert retros.run_once('owner',created['job_id'],'worker')['status']=='FAILED'
     assert len(calls)==1
+
+
+@pytest.mark.parametrize('finish,content',[
+    ('length','{"family":"EXPERIENCE"}'),
+    ('content_filter','{"family":"EXPERIENCE"}'),
+    ('stop','{"family":'),
+])
+def test_complete_invalid_retrospective_result_is_failed_and_never_resent(runtime,monkeypatch,finish,content):
+    db,source,_=runtime
+    from lib import provider_capability_probes,native_runtime
+    monkeypatch.setattr(provider_capability_probes,'apply_parameters',lambda profile,payload:payload)
+    calls=[]
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def read(self,limit):
+            return json.dumps(dict(model='test-model',choices=[dict(finish_reason=finish,
+                message=dict(content=content))])).encode()
+    class Opener:
+        def open(self,request,timeout):
+            calls.append(request)
+            return Response()
+    monkeypatch.setattr(native_runtime.urllib.request,'urlopen',lambda request,timeout:Opener().open(request,timeout))
+    created=retros.create_job('owner',retrospective(source))
+    assert retros.run_once('owner',created['job_id'],'worker')['status']=='FAILED'
+    assert retros.run_once('owner',created['job_id'],'worker')['status']=='FAILED'
+    assert len(calls)==1
+    assert db.execute('SELECT COUNT(*) FROM CX_ARTIFACT_CANDIDATES').fetchone()[0]==0
+    assert db.execute('SELECT STATUS FROM CX_TASK_CONTINUITY_ATTEMPTS').fetchone()[0]=='FAILED'
 
 
 def test_note_cannot_turn_handoff_source_into_an_unauthorized_read(runtime):

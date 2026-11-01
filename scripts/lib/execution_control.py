@@ -307,6 +307,12 @@ def _run_http(payload: Dict[str, Any]) -> Dict[str, Any]:
     data = body.encode("utf-8") if isinstance(body, str) else (_json(body).encode("utf-8") if body is not None else None)
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     opener = urllib.request.build_opener(_ValidatedRedirectHandler())
+    from .product_identity import identity
+    product = identity()
+    client_name = "OpenTenBase-AgentX" if product["brand_key"] == "agentx" else "Chuanxu"
+    # urllib applies defaults only when the approved request has no explicit
+    # header. Identify this product honestly to the remote HTTP service.
+    opener.addheaders = [("User-Agent", f"{client_name}/{product['version']}")]
     with opener.open(request, timeout=max(1, min(int(payload.get("timeout", 30)), 120))) as response:
         content = response.read(MAX_HTTP_BYTES + 1)
         if len(content) > MAX_HTTP_BYTES:

@@ -1,0 +1,864 @@
+{
+  "CX_MODEL_READ_TOOLS": {
+    "check_expressions": [
+      "STATUS IN ('ACTIVE','REVOKED')"
+    ],
+    "checks": 1,
+    "columns": {
+      "ACTION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "CONTRACT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "CREATED_BY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REGISTRATION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "RESOURCE_PARAMETER": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SECURITY_DOMAIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SOURCE_ENTITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "SOURCE_FAMILY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "SOURCE_REVISION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "TOOL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "REGISTRATION_ID",
+      "TOOL_ID",
+      "SECURITY_DOMAIN_ID",
+      "SOURCE_FAMILY",
+      "SOURCE_ENTITY_ID",
+      "SOURCE_REVISION_ID",
+      "SOURCE_DIGEST",
+      "RESOURCE_PARAMETER",
+      "CONTRACT_DIGEST",
+      "ACTION_ID",
+      "CREATED_BY",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "REGISTRATION_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "TOOL_ID"
+        ],
+        "TOOL_REGISTRY",
+        [
+          "TOOL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "SECURITY_DOMAIN_ID"
+        ],
+        "CX_SECURITY_DOMAINS",
+        [
+          "SECURITY_DOMAIN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTION_ID"
+        ],
+        "CX_ACTION_CARDS",
+        [
+          "ACTION_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "CREATED_BY"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "CREATED_BY",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX108_644D2EDBFE1F0473",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('REGISTRATION_ID') OR UPDATING('TOOL_ID') OR UPDATING('SECURITY_DOMAIN_ID') OR UPDATING('SOURCE_FAMILY') OR UPDATING('SOURCE_ENTITY_ID') OR UPDATING('SOURCE_REVISION_ID') OR UPDATING('SOURCE_DIGEST') OR UPDATING('RESOURCE_PARAMETER') OR UPDATING('CONTRACT_DIGEST') OR UPDATING('ACTION_ID') OR UPDATING('CREATED_BY') OR UPDATING('IDEMPOTENCY_KEY') OR UPDATING('REQUEST_DIGEST') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_MODEL_TOOL_CALLS": {
+    "check_expressions": [],
+    "checks": 0,
+    "columns": {
+      "ACTION_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "ARGUMENT_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "CALL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(256)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "JOB_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "RESULT_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "TOOL_REQUEST_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "TURN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "TURN_ID",
+      "CALL_ID",
+      "ARGUMENT_DIGEST",
+      "TOOL_REQUEST_ID",
+      "JOB_ID",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "TURN_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "TURN_ID"
+        ],
+        "CX_MODEL_TOOL_TURNS",
+        [
+          "TURN_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "TOOL_REQUEST_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "TOOL_REQUEST_ID"
+        ],
+        "CX_MCP_TOOL_REQUESTS",
+        [
+          "REQUEST_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "JOB_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "JOB_ID"
+        ],
+        "EXECUTION_JOBS",
+        [
+          "JOB_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "ACTION_ID"
+        ],
+        "CX_ACTION_CARDS",
+        [
+          "ACTION_ID"
+        ]
+      ]
+    ],
+    "trigger": "CX108_A1F35892E0E9B692",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('TURN_ID') OR UPDATING('CALL_ID') OR UPDATING('ARGUMENT_DIGEST') OR UPDATING('TOOL_REQUEST_ID') OR UPDATING('JOB_ID') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_MODEL_TOOL_STAGES": {
+    "check_expressions": [
+      "PHASE IN ('PROPOSAL','FINAL')"
+    ],
+    "checks": 1,
+    "columns": {
+      "ATTEMPT_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "CONTINUITY_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INPUT_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "MODEL_REQUEST_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "OUTPUT_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "PHASE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(16)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "TURN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "WIRE_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "TURN_ID",
+      "PHASE",
+      "CONTINUITY_ID",
+      "REQUEST_DIGEST"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "R",
+        [
+          "TURN_ID"
+        ],
+        "CX_MODEL_TOOL_TURNS",
+        [
+          "TURN_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "CONTINUITY_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CONTINUITY_ID"
+        ],
+        "CX_TASK_CONTINUITY_LINKS",
+        [
+          "CONTINUITY_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "ATTEMPT_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "ATTEMPT_ID"
+        ],
+        "CX_TASK_CONTINUITY_ATTEMPTS",
+        [
+          "ATTEMPT_ID"
+        ]
+      ],
+      [
+        "P",
+        [
+          "TURN_ID",
+          "PHASE"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX108_02EB18B5EB76B470",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('TURN_ID') OR UPDATING('PHASE') OR UPDATING('CONTINUITY_ID') OR UPDATING('REQUEST_DIGEST') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_MODEL_TOOL_TURNS": {
+    "check_expressions": [
+      "FENCING_TOKEN>0",
+      "PROFILE_VERSION>0",
+      "DISCLOSURE_VERSION>0",
+      "TOKEN_BUDGET BETWEEN 128 AND 32768",
+      "OUTPUT_BUDGET BETWEEN 1 AND 2048",
+      "MAX_MODEL_REQUESTS=2",
+      "MAX_TOOL_CALLS=1",
+      "MAX_REPAIRS=0",
+      "STATUS IN ('PENDING','PROPOSING','WAITING_APPROVAL','TOOL_PENDING','FINALIZING','SUCCEEDED','FAILED','UNOBSERVED')"
+    ],
+    "checks": 9,
+    "columns": {
+      "ANSWER_CIPHER": {
+        "default": null,
+        "not_null": false,
+        "type": "CLOB"
+      },
+      "ANSWER_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "DEADLINE_AT": {
+        "default": null,
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "DISCLOSURE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "FENCING_TOKEN": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "IDEMPOTENCY_KEY": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "INSTANCE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "MAX_MODEL_REQUESTS": {
+        "default": "2",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "MAX_REPAIRS": {
+        "default": "0",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "MAX_TOOL_CALLS": {
+        "default": "1",
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "OUTPUT_BUDGET": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "PARAMETER_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "PRINCIPAL_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROBE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "PROFILE_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "QUESTION_CIPHER": {
+        "default": null,
+        "not_null": true,
+        "type": "CLOB"
+      },
+      "REASON": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(1000)"
+      },
+      "REGISTRATION_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "REQUEST_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SCHEMA_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SECURITY_DOMAIN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "STATUS": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "STEP_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "TASK_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "TOKEN_BUDGET": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      },
+      "TOKEN_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "TURN_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "TURN_ID",
+      "REGISTRATION_ID",
+      "PRINCIPAL_ID",
+      "SECURITY_DOMAIN_ID",
+      "TASK_ID",
+      "STEP_ID",
+      "INSTANCE_ID",
+      "TOKEN_DIGEST",
+      "FENCING_TOKEN",
+      "PROFILE_ID",
+      "PROFILE_VERSION",
+      "PROBE_ID",
+      "PARAMETER_DIGEST",
+      "SCHEMA_DIGEST",
+      "DISCLOSURE_VERSION",
+      "TOKEN_BUDGET",
+      "OUTPUT_BUDGET",
+      "MAX_MODEL_REQUESTS",
+      "MAX_TOOL_CALLS",
+      "MAX_REPAIRS",
+      "DEADLINE_AT",
+      "QUESTION_CIPHER",
+      "REASON",
+      "IDEMPOTENCY_KEY",
+      "REQUEST_DIGEST",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "TURN_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "REGISTRATION_ID"
+        ],
+        "CX_MODEL_READ_TOOLS",
+        [
+          "REGISTRATION_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PRINCIPAL_ID"
+        ],
+        "CX_PRINCIPALS",
+        [
+          "PRINCIPAL_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "SECURITY_DOMAIN_ID"
+        ],
+        "CX_SECURITY_DOMAINS",
+        [
+          "SECURITY_DOMAIN_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "INSTANCE_ID"
+        ],
+        "CX_AGENT_INSTANCES",
+        [
+          "INSTANCE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "TOKEN_DIGEST"
+        ],
+        "CX_AGENT_ACCESS_TOKENS",
+        [
+          "TOKEN_DIGEST"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROFILE_ID"
+        ],
+        "CX_LLM_PROVIDER_PROFILES",
+        [
+          "PROFILE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROBE_ID"
+        ],
+        "CX_PROVIDER_CAP_PROBES",
+        [
+          "PROBE_ID"
+        ]
+      ],
+      [
+        "U",
+        [
+          "PRINCIPAL_ID",
+          "IDEMPOTENCY_KEY"
+        ],
+        "",
+        []
+      ]
+    ],
+    "trigger": "CX108_4680539011FA0F40",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('TURN_ID') OR UPDATING('REGISTRATION_ID') OR UPDATING('PRINCIPAL_ID') OR UPDATING('SECURITY_DOMAIN_ID') OR UPDATING('TASK_ID') OR UPDATING('STEP_ID') OR UPDATING('INSTANCE_ID') OR UPDATING('TOKEN_DIGEST') OR UPDATING('FENCING_TOKEN') OR UPDATING('PROFILE_ID') OR UPDATING('PROFILE_VERSION') OR UPDATING('PROBE_ID') OR UPDATING('PARAMETER_DIGEST') OR UPDATING('SCHEMA_DIGEST') OR UPDATING('DISCLOSURE_VERSION') OR UPDATING('TOKEN_BUDGET') OR UPDATING('OUTPUT_BUDGET') OR UPDATING('MAX_MODEL_REQUESTS') OR UPDATING('MAX_TOOL_CALLS') OR UPDATING('MAX_REPAIRS') OR UPDATING('DEADLINE_AT') OR UPDATING('QUESTION_CIPHER') OR UPDATING('REASON') OR UPDATING('IDEMPOTENCY_KEY') OR UPDATING('REQUEST_DIGEST') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  },
+  "CX_RETROSPECTIVE_OUTPUTS": {
+    "check_expressions": [
+      "OUTPUT_MODE IN ('TEXT_JSON','NATIVE_STRICT')",
+      "CREDENTIAL_KIND IN ('WEB','AGENT')",
+      "(TOKEN_DIGEST IS NULL AND INSTANCE_ID IS NULL AND FENCING_TOKEN IS NULL) OR (TOKEN_DIGEST IS NOT NULL AND INSTANCE_ID IS NOT NULL AND FENCING_TOKEN>0)",
+      "(CREDENTIAL_KIND IS NULL AND TOKEN_DIGEST IS NULL AND SESSION_DIGEST IS NULL) OR (CREDENTIAL_KIND='AGENT' AND TOKEN_DIGEST IS NOT NULL AND SESSION_DIGEST IS NULL) OR (CREDENTIAL_KIND='WEB' AND TOKEN_DIGEST IS NULL AND SESSION_DIGEST IS NOT NULL AND AUTH_METHOD IS NOT NULL AND PERMISSION_VERSION>0 AND MFA_LEVEL IS NOT NULL AND SESSION_CREATED_AT IS NOT NULL)",
+      "(OUTPUT_MODE='NATIVE_STRICT' AND PROBE_ID IS NOT NULL) OR (OUTPUT_MODE='TEXT_JSON' AND PROBE_ID IS NULL)"
+    ],
+    "checks": 5,
+    "columns": {
+      "AUTH_METHOD": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "CREATED_AT": {
+        "default": "CURRENT_TIMESTAMP",
+        "not_null": true,
+        "type": "TIMESTAMP"
+      },
+      "CREDENTIAL_KIND": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(8)"
+      },
+      "FENCING_TOKEN": {
+        "default": null,
+        "not_null": false,
+        "type": "INTEGER"
+      },
+      "INSTANCE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "JOB_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "MFA_LEVEL": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(16)"
+      },
+      "NODE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "OUTPUT_MODE": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(24)"
+      },
+      "PARAMETER_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "PERMISSION_VERSION": {
+        "default": null,
+        "not_null": false,
+        "type": "INTEGER"
+      },
+      "PROBE_ID": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(128)"
+      },
+      "SCHEMA_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "SESSION_CREATED_AT": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "SESSION_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      },
+      "TOKEN_DIGEST": {
+        "default": null,
+        "not_null": false,
+        "type": "VARCHAR(64)"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "JOB_ID",
+      "OUTPUT_MODE",
+      "SCHEMA_DIGEST",
+      "PARAMETER_DIGEST",
+      "PROBE_ID",
+      "INSTANCE_ID",
+      "TOKEN_DIGEST",
+      "FENCING_TOKEN",
+      "CREDENTIAL_KIND",
+      "SESSION_DIGEST",
+      "AUTH_METHOD",
+      "PERMISSION_VERSION",
+      "MFA_LEVEL",
+      "NODE_ID",
+      "SESSION_CREATED_AT",
+      "CREATED_AT"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "JOB_ID"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "JOB_ID"
+        ],
+        "CX_RETROSPECTIVE_JOBS",
+        [
+          "JOB_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "PROBE_ID"
+        ],
+        "CX_PROVIDER_CAP_PROBES",
+        [
+          "PROBE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "INSTANCE_ID"
+        ],
+        "CX_AGENT_INSTANCES",
+        [
+          "INSTANCE_ID"
+        ]
+      ],
+      [
+        "R",
+        [
+          "TOKEN_DIGEST"
+        ],
+        "CX_AGENT_ACCESS_TOKENS",
+        [
+          "TOKEN_DIGEST"
+        ]
+      ],
+      [
+        "R",
+        [
+          "SESSION_DIGEST"
+        ],
+        "CX_WEB_SESSIONS",
+        [
+          "SESSION_DIGEST"
+        ]
+      ]
+    ],
+    "trigger": "CX108_C77B553F411148BD",
+    "trigger_body": "DECLARE immutable_runtime EXCEPTION; BEGIN IF DELETING OR UPDATING('JOB_ID') OR UPDATING('OUTPUT_MODE') OR UPDATING('SCHEMA_DIGEST') OR UPDATING('PARAMETER_DIGEST') OR UPDATING('PROBE_ID') OR UPDATING('INSTANCE_ID') OR UPDATING('TOKEN_DIGEST') OR UPDATING('FENCING_TOKEN') OR UPDATING('CREDENTIAL_KIND') OR UPDATING('SESSION_DIGEST') OR UPDATING('AUTH_METHOD') OR UPDATING('PERMISSION_VERSION') OR UPDATING('MFA_LEVEL') OR UPDATING('NODE_ID') OR UPDATING('SESSION_CREATED_AT') OR UPDATING('CREATED_AT') THEN RAISE immutable_runtime; END IF; END;"
+  }
+}

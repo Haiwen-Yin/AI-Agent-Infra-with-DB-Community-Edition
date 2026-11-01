@@ -1,4 +1,4 @@
-# 川序 v5.0.1 运维与技术说明（中文）
+# 川序 v5.0.2 运维与技术说明（中文）
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -26,10 +26,10 @@ DBA 负责创建并打开目标 PDB/数据库、表空间和独立 Owner，准�
 | PostgreSQL 18 | 已授权环境当前实测 18.6；核对 `0_pg_database_prerequisites.sql` 中的角色管理、AGE、向量和作业扩展前置。Owner 与每个 Agent 的 LOGIN 角色分开，强制行级安全不能由普通 Agent 绕过。 |
 | YashanDB 23.5.4+ | DSN 指向正确 PDB，确认独立用户、对象授权、字符集、表空间和包内前置脚本；使用匹配服务端的原生客户端与 yaspy。不能复制 Oracle 专用语法或错误码处理。 |
 
-在可信目录解压安装包，并核验取得的 SHA-256；需要签名验证时按[中文发布签名说明](release-signing_zh.md)使用独立取得的公钥。安装 Python 3.14+，从包根目录执行：
+在可信目录解压安装包，并核验取得的 SHA-256；需要签名验证时按[中文发布签名说明](release-signing_zh.md)使用独立取得的公钥。安装 Python 3.14+，从包根目录执行。以下示例选择 PostgreSQL；只有所选包支持相应底座时，才将 `pg` 替换为 `oracle` 或 `yashandb`。配置向导提示时保持同一底座：
 
 ```bash
-bash scripts/install_offline.sh
+bash scripts/install_offline.sh --database pg
 bash scripts/config_wizard.sh
 ```
 
@@ -38,7 +38,7 @@ bash scripts/config_wizard.sh
 首次初始化不需要外部 Agent 或真实模型，由确定性的 Bootstrap Deployment Agent 执行。以下以 PostgreSQL Community 为例；其他版本将两个参数改为对应的 `oracle` / `yashandb` 和 `community` / `enterprise`：
 
 ```bash
-bash scripts/install_platform.sh initialize --version 5.0.1 \
+bash scripts/install_platform.sh initialize --version 5.0.2 \
   --database pg --edition community --config config.json
 bash start_web_server.sh start
 ```
@@ -54,7 +54,7 @@ Oracle、YashanDB v5.0.1 新部署和升级前，还需由 SYS 在确切应用 P
 启动后核对 `/api/health` 的进程与版本、`/api/ready` 的数据库就绪状态，以及管理页面中的数据库治理配置。健康响应、启动模式为 production、功能配置正常是不同检查，任何单项都不代表完成发布验收。需要再次核验部署时运行：
 
 ```bash
-bash scripts/install_platform.sh verify --version 5.0.1 \
+bash scripts/install_platform.sh verify --version 5.0.2 \
   --database pg --edition community --config config.json
 ```
 

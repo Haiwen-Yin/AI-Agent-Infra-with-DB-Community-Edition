@@ -101,10 +101,11 @@ def send(actor, endpoint_id, value):
         if message.get("taskId"):
             raise ValueError("Continuation messages are unavailable; reconnect subscriptions or submit a new task")
         task, context = identifier("A2A"), message.get("contextId") or identifier("CTX")
+        canonical_task = task_continuity.ensure_task_root(tx, actor, goal="A2A: " + text[:1900])
         run_id = runtime.create_run(bound["graph_version_id"], bound["plan_id"], actor,
             {"message": text}, {"max_nodes": 64, "max_retries": 2, "max_external_calls": 0, "max_concurrency": 1, "max_duration_seconds": 60},
-            "a2a:" + actor + ":" + message["messageId"], transaction=tx)
-        canonical_task = task_continuity.ensure_task_root(tx, actor, goal="A2A: " + text[:1900])
+            "a2a:" + actor + ":" + message["messageId"], transaction=tx,
+            processing_domain_id=record["security_domain_id"], canonical_task_id=canonical_task)
         tx.execute("INSERT INTO GRAPH_PROTOCOL_TASKS(PROTOCOL_TASK_ID,PROTOCOL_VERSION,RUN_ID,PRINCIPAL_ID,STATUS,CURSOR_SEQ) VALUES(:task,'1.0.1',:run,:actor,'SUBMITTED',0)", {"task": task, "run": run_id, "actor": actor})
         tx.execute("INSERT INTO CX_A2A_REQUESTS(PROTOCOL_TASK_ID,SECURITY_DOMAIN_ID,ACTOR_ID,CONTEXT_ID,MESSAGE_ID,REQUEST_DIGEST) VALUES(:task,:domain,:actor,:context,:message,:digest)", {"task": task, "domain": record["security_domain_id"], "actor": actor, "context": context, "message": message["messageId"], "digest": request_hash})
         tx.execute("INSERT INTO CX_A2A_TASK_BINDINGS(PROTOCOL_TASK_ID,ENDPOINT_ID,REVISION_NO) VALUES(:task,:endpoint,:revision)", {"task": task, "endpoint": endpoint_id, "revision": int(record["current_revision"])})
@@ -249,7 +250,7 @@ def list_tasks(actor, endpoint_id, *, context_id="", status="", page_size=50,
 def card(actor, endpoint_id):
     record, bound = connection.execute_transaction_callback(lambda tx: authority(tx, actor, endpoint_id))
     return {"name": record["endpoint_name"], "description": "Authorized bounded pure Graph tasks; reconnectable status streams, no push notifications or task continuation messages.",
-            "version": "5.0.1", "supportedInterfaces": [{"url": record["endpoint_url"], "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0", "tenant": endpoint_id}],
+            "version": "5.0.2", "supportedInterfaces": [{"url": record["endpoint_url"], "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0", "tenant": endpoint_id}],
             "capabilities": {"streaming": True, "pushNotifications": False}, "defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"],
             "securitySchemes": {"gateway": {"httpAuthSecurityScheme": {"scheme": "bearer"}}}, "securityRequirements": [{"schemes": {"gateway": {"list": ["agents.operate"]}}}],
             "skills": [{"id": bound["graph_version_id"], "name": "Published pure Graph", "description": "Independently approved exact Graph version", "tags": ["graph", "read-only"]}]}

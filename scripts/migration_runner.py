@@ -58,6 +58,15 @@ from live_db_validator import (
     V452_MIGRATION_SCRIPTS,
     V500_MIGRATION_SCRIPTS,
     V501_MIGRATION_SCRIPTS,
+    V502_MIGRATION_SCRIPTS,
+    V502_RUNTIME_MIGRATION_SCRIPTS,
+    V502_NATIVE_MIGRATION_SCRIPTS,
+    V502_PG_APPROVAL_REPAIR_SCRIPT,
+    v502_migration_scripts,
+    v502_runtime_migration_scripts,
+    v502_native_migration_scripts,
+    validate_v502_approval_repair_manifest,
+    v502_pg_approval_boundary_errors,
     migration_scripts_for_edition,
     V410_MODEL_TABLES,
     V448_PLATFORM_AGENT_ISOLATION_TABLES,
@@ -86,6 +95,8 @@ from live_db_validator import (
     validate_v452_static_contract,
     validate_v500_static_contract,
     validate_v501_static_contract,
+    validate_v502_static_contract,
+    validate_v502_schema_manifest,
 )
 
 
@@ -111,6 +122,7 @@ class MigrationResult:
 
 MIGRATION_VERSION = "4.1.0"
 MIGRATION_EDITION = "community"
+MIGRATION_FROM_VERSION: str | None = None
 GRAPH_MIGRATION_VERSIONS = frozenset({"4.2.0", "4.2.1"})
 CHANNEL_MIGRATION_VERSIONS = frozenset({"4.3.0"})
 ORGANIZATION_MIGRATION_VERSIONS = frozenset({"4.3.1"})
@@ -130,11 +142,12 @@ IDENTITY_PORTAL_GRAPH_MIGRATION_VERSIONS = frozenset({"4.4.6"})
 PLATFORM_AGENT_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.8"})
 RELEASE_SECURITY_REPAIR_MIGRATION_VERSIONS = frozenset({"4.4.9"})
 MODEL_USAGE_WALLBOARD_MIGRATION_VERSIONS = frozenset({"4.4.10"})
-RUNTIME_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1"})
+RUNTIME_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1", "5.0.2"})
 # Only these retained releases share migration 94's checksum-bound successor
 # contract. Never infer a trusted predecessor from a version string alone.
 HANDOFF_POLICY_RELEASE_CHAIN = (
     "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1",
+    "5.0.2",
 )
 SUPPORTED_V449_BASELINE_VERSION = "4.4.7"
 WITHDRAWN_SCHEMA_VERSION = "4.4.8"
@@ -152,6 +165,8 @@ NATIVE_SCHEMA_VERIFIED_MIGRATIONS = frozenset({
     "98_v4_5_1_agent_extensions.sql", "99_v4_5_1_integration_bindings.sql",
     "101_v4_5_2_task_continuity.sql", "102_v5_0_0_network_access.sql",
     *V501_MIGRATION_SCRIPTS[-3:],
+    *V502_RUNTIME_MIGRATION_SCRIPTS,
+    V502_PG_APPROVAL_REPAIR_SCRIPT,
 })
 
 # v4.4.1 was exercised against the retained PostgreSQL and YashanDB test
@@ -712,7 +727,9 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
             )
         elif MIGRATION_VERSION in {"4.4.10"} | RUNTIME_ISOLATION_MIGRATION_VERSIONS:
             deploy_dir = scripts[0].parent if scripts else _deployment_script(database, "55_v4_4_10_model_usage_wallboard.sql").parent
-            if MIGRATION_VERSION == "5.0.1":
+            if MIGRATION_VERSION == "5.0.2":
+                release_scripts = v502_migration_scripts(database)
+            elif MIGRATION_VERSION == "5.0.1":
                 release_scripts = V501_MIGRATION_SCRIPTS
             elif MIGRATION_VERSION == "5.0.0":
                 release_scripts = V500_MIGRATION_SCRIPTS
@@ -731,7 +748,9 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
                 missing = [str(path.name) for path in full_scripts if not path.is_file()]
                 if missing:
                     raise RuntimeError("v4.4.11 migration contract is incomplete: " + ",".join(missing))
-                if MIGRATION_VERSION == "5.0.1":
+                if MIGRATION_VERSION == "5.0.2":
+                    v43_static_contract = validate_v502_static_contract(database, full_scripts, MIGRATION_EDITION)
+                elif MIGRATION_VERSION == "5.0.1":
                     v43_static_contract = validate_v501_static_contract(database, full_scripts, MIGRATION_EDITION)
                 elif MIGRATION_VERSION == "5.0.0":
                     v43_static_contract = validate_v500_static_contract(database, full_scripts, MIGRATION_EDITION)
@@ -743,20 +762,29 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
                 v43_static_contract = validate_v410_static_contract(
                     database, full_scripts, MIGRATION_EDITION
                 )
+        predecessor_contract = None
+        if MIGRATION_VERSION == "5.0.2" and MIGRATION_FROM_VERSION == "5.0.1":
+            predecessor_contract = _v502_predecessor_contract(cursor, database, scripts)
     passed = bool(identity) and capabilities.get("apache_age_available", True)
+    if predecessor_contract is not None and not predecessor_contract["passed"]:
+        passed = False
     if withdrawn_schema_detected:
         passed = False
     return {"database": database, "identity_present": bool(identity),
+            "predecessor_contract": predecessor_contract,
             "objects_complete_before": objects_complete,
             "scripts": [{"name": path.name, "checksum": _checksum(path)} for path in scripts],
             "capacity": capacity, "capabilities": capabilities,
             "v43_static_contract": v43_static_contract,
             "withdrawn_schema_detected": withdrawn_schema_detected,
-            "error_type": "WithdrawnSchemaDetected" if withdrawn_schema_detected else "",
+            "error_type": ("WithdrawnSchemaDetected" if withdrawn_schema_detected else
+                           "PredecessorEvidenceIncomplete" if predecessor_contract is not None and not predecessor_contract["passed"] else ""),
             "error_message": (
                 "v4.4.8 schema detected; restore an approved pre-v4.4.8 backup "
                 "or reinitialize before deploying v4.4.9"
-                if withdrawn_schema_detected else ""
+                if withdrawn_schema_detected else
+                "Declared v5.0.1 predecessor requires actual objects, APPLIED steps and exact checksums"
+                if predecessor_contract is not None and not predecessor_contract["passed"] else ""
             ),
             "passed": passed and (not v43_static_contract or v43_static_contract.get("passed") is True)}
 
@@ -1426,20 +1454,124 @@ def _execution_queue_complete(cursor: Any, database: str) -> bool:
         columns <= _schema_columns(cursor, database, table) for table, columns in required.items())
 
 
+def _v502_native_boundary_errors(cursor: Any, database: str, facts: dict[str, Any]) -> list[str]:
+    """Verify required indexes and executable guards, beyond their object names."""
+    failures = validate_v502_schema_manifest(facts)
+    if failures:
+        return failures
+
+    def compact(value: Any) -> str:
+        value = value.read() if hasattr(value, "read") else str(value)
+        # Preserve literals exactly; whitespace and identifier casing outside
+        # them are immaterial in these generated SQL bodies.
+        return "".join(part if part.startswith("'") else re.sub(r"\s+", "", part).upper()
+                       for part in re.findall(r"'(?:[^']|'')*'|[^']+", value)).rstrip(";")
+
+    for table, expected in facts.items():
+        if database in {"pg", "postgresql"}:
+            cursor.execute(
+                "SELECT t.tgname,t.tgtype,ARRAY(SELECT upper(a.attname) "
+                "FROM unnest(t.tgattr::smallint[]) WITH ORDINALITY k(num,ord) "
+                "JOIN pg_attribute a ON a.attrelid=t.tgrelid AND a.attnum=k.num ORDER BY k.ord),"
+                "p.proname,p.prosrc,p.prosecdef,t.tgqual IS NULL,NOT EXISTS ("
+                "SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl "
+                "WHERE acl.grantee<>p.proowner AND acl.privilege_type='EXECUTE') "
+                "FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid "
+                "WHERE t.tgrelid=to_regclass(%s) AND NOT t.tgisinternal",
+                (table.lower(),))
+            guards = [row for row in cursor.fetchall() if row[0] == expected["trigger"].lower()]
+            if (len(guards) != 1 or guards[0][1] != 26
+                    or list(guards[0][2]) != expected["immutable_columns"]
+                    or guards[0][3] != expected.get("trigger_function")
+                    or compact(guards[0][4]) != compact(expected["trigger_body"])
+                    or guards[0][5] or not guards[0][6] or not guards[0][7]):
+                failures.append(table + ":IMMUTABILITY_DEFINITION")
+            cursor.execute(
+                "SELECT upper(c.relname),ARRAY(SELECT upper(a.attname) "
+                "FROM unnest(i.indkey::smallint[]) WITH ORDINALITY k(num,ord) "
+                "JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.num ORDER BY k.ord),"
+                "i.indisunique,i.indisvalid AND i.indisready,i.indpred IS NULL AND i.indexprs IS NULL "
+                "AND i.indnkeyatts=i.indnatts AND am.amname='btree' AND NOT EXISTS ("
+                "SELECT 1 FROM unnest(i.indoption::smallint[]) idxopt(flag) WHERE flag<>0) "
+                "FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid "
+                "JOIN pg_am am ON am.oid=c.relam WHERE i.indrelid=to_regclass(%s)",
+                (table.lower(),))
+            indexes = {name: (list(columns), bool(unique), bool(valid), bool(plain))
+                       for name, columns, unique, valid, plain in cursor.fetchall()}
+        else:
+            cursor.execute(
+                "SELECT TRIGGER_NAME,TRIGGER_TYPE,TRIGGERING_EVENT,WHEN_CLAUSE,TRIGGER_BODY "
+                "FROM USER_TRIGGERS WHERE TABLE_NAME=:table_name", {"table_name": table})
+            guards = [row for row in cursor.fetchall() if row[0] == expected["trigger"]]
+            if (len(guards) != 1 or str(guards[0][1]).upper() != "BEFORE STATEMENT"
+                    or set(re.split(r"\s+OR\s+", str(guards[0][2]).upper())) != {"DELETE", "UPDATE"}
+                    or guards[0][3] is not None
+                    or compact(guards[0][4]) != compact(expected["trigger_body"])):
+                failures.append(table + ":IMMUTABILITY_DEFINITION")
+            cursor.execute(
+                "SELECT i.INDEX_NAME,i.UNIQUENESS,i.STATUS,c.COLUMN_NAME,c.COLUMN_POSITION,c.DESCEND "
+                "FROM USER_INDEXES i JOIN USER_IND_COLUMNS c ON c.INDEX_NAME=i.INDEX_NAME "
+                "AND c.TABLE_NAME=i.TABLE_NAME WHERE i.TABLE_NAME=:table_name ORDER BY i.INDEX_NAME,c.COLUMN_POSITION",
+                {"table_name": table})
+            indexes = {}
+            for name, unique, status, column, position, direction in cursor.fetchall():
+                # YashanDB's native catalog uses Y/N and zero-based positions;
+                # Oracle uses UNIQUE/NONUNIQUE and one-based positions.  Keep
+                # each contract exact so malformed/foreign values fail closed.
+                unique_value = "Y" if database == "yashandb" else "UNIQUE"
+                nonunique_value = "N" if database == "yashandb" else "NONUNIQUE"
+                position_base = 0 if database == "yashandb" else 1
+                columns, is_unique, valid, plain = indexes.setdefault(
+                    name, ([], unique == unique_value, status == "VALID", True))
+                columns.append(column)
+                indexes[name] = (columns, is_unique, valid and status == "VALID",
+                                 plain and unique in {unique_value, nonunique_value}
+                                 and (unique == unique_value) == is_unique
+                                 and direction == "ASC" and position == len(columns) - 1 + position_base)
+        for index in expected["indexes"]:
+            if indexes.get(index["name"]) != (index["columns"], index["unique"], True, True):
+                failures.append(table + ":INDEX:" + index["name"])
+    return failures
+
+
+def _v502_predecessor_contract(cursor: Any, database: str, scripts: list[Path]) -> dict[str, Any]:
+    """A declared v5.0.1 transition must prove all three predecessor steps."""
+    selected = {path.name: path for path in scripts}
+    steps = {}
+    for name in V501_MIGRATION_SCRIPTS[-3:]:
+        path = selected.get(name)
+        row = _step_row(cursor, database, path, version="5.0.1") if path and path.is_file() else None
+        ledger_complete = bool(row and row["status"] == "APPLIED" and row["checksum"] == _checksum(path))
+        objects_complete = bool(path and path.is_file() and _step_objects_complete(cursor, database, path, version="5.0.1"))
+        steps[name] = {"ledger_status": row["status"] if row else "MISSING",
+                       "checksum_matches": bool(row and path and row["checksum"] == _checksum(path)),
+                       "objects_complete": objects_complete, "passed": ledger_complete and objects_complete}
+    return {"version": "5.0.1", "steps": steps, "passed": all(item["passed"] for item in steps.values())}
+
+
 def _step_objects_complete(cursor: Any, database: str, script: Path, *, version: str | None = None) -> bool:
     """Verify live objects rather than trusting migration ledger status."""
     # Upgrade callers use the runner's active release without passing version.
     # Resolve it before checking historical successor evidence as well as the
     # ledger; otherwise an existing v4.4.15 handoff shape is replayed/rejected.
     version = MIGRATION_VERSION if version is None else version
-    if script.name in V501_MIGRATION_SCRIPTS[-3:]:
+    if script.name == V502_PG_APPROVAL_REPAIR_SCRIPT:
+        try:
+            facts = json.loads(script.with_suffix('.schema.json').read_text(encoding='utf-8'))
+            return database in {'pg', 'postgresql'} and not v502_pg_approval_boundary_errors(cursor, facts)
+        except Exception:
+            return False
+    if script.name in v502_native_migration_scripts(database):
         try:
             try:
                 from lib.continuity_schema_validation import errors
             except ModuleNotFoundError:
                 from shared.lib.continuity_schema_validation import errors
             facts = json.loads(script.with_suffix(".schema.json").read_text(encoding="utf-8"))
-            return bool(facts) and not errors(cursor, database, facts)
+            if not facts or errors(cursor, database, facts):
+                return False
+            return (script.name not in V502_RUNTIME_MIGRATION_SCRIPTS
+                    or not _v502_native_boundary_errors(cursor, database, facts))
         except Exception:
             return False
     if script.name == "102_v5_0_0_network_access.sql":
@@ -1582,10 +1714,13 @@ def _step_objects_complete(cursor: Any, database: str, script: Path, *, version:
             return False
     if script.name == "80_v4_4_13_portal_builtin_knowledge.sql":
         try:
+            # Current product publication archives exact untouched historical
+            # seeds. That supported lifecycle preserves this migration's data;
+            # requiring ACTIVE here would invalidate a completed deployment.
             cursor.execute(
                 "SELECT COUNT(*) FROM ENTITIES e JOIN KNOWLEDGE_META km "
                 "ON km.ENTITY_ID=e.ENTITY_ID AND km.ENTITY_TYPE=e.ENTITY_TYPE "
-                "WHERE e.ENTITY_TYPE='KNOWLEDGE' AND e.STATUS='ACTIVE' "
+                "WHERE e.ENTITY_TYPE='KNOWLEDGE' AND e.STATUS IN ('ACTIVE','ARCHIVED') "
                 "AND e.VISIBILITY='PUBLIC' AND e.TITLE LIKE '川序 v4.4.13%'"
             )
             row = cursor.fetchone()
@@ -1596,7 +1731,7 @@ def _step_objects_complete(cursor: Any, database: str, script: Path, *, version:
         try:
             cursor.execute(
                 "SELECT COUNT(*) FROM ENTITIES WHERE ENTITY_TYPE='KNOWLEDGE' "
-                "AND STATUS='ACTIVE' AND TITLE LIKE '川序 v4.4.13%' AND ("
+                "AND STATUS IN ('ACTIVE','ARCHIVED') AND VISIBILITY='PUBLIC' AND TITLE LIKE '川序 v4.4.13%' AND ("
                 "CONTENT LIKE '%database-authoritative enterprise platform%' OR "
                 "CONTENT LIKE '%Portal checks both principals%' OR "
                 "CONTENT LIKE '%Humans and Agents are governed principals%' OR "
@@ -2099,11 +2234,12 @@ def release_script_names(version: str, database: str, config_path: Path, edition
     # Application-only releases retain the reviewed schema chain.
     # v4.5.0 starts with the complete reviewed continuity schema. New schema
     # changes must extend this selection rather than mutate historical SQL.
-    memory_context_release = version == "5.0.1"
-    source_ip_release = version in {"5.0.0", "5.0.1"}
+    model_processing_release = version == "5.0.2"
+    memory_context_release = version in {"5.0.1", "5.0.2"}
+    source_ip_release = version in {"5.0.0", "5.0.1", "5.0.2"}
     extension_release = version == "4.5.1"
-    continuity_release = version in {"4.5.2", "5.0.0", "5.0.1"}
-    version = {"4.4.16": "4.4.15", "4.5.0": "4.4.15", "4.5.1": "4.4.15", "4.5.2": "4.4.15", "5.0.0": "4.4.15", "5.0.1": "4.4.15"}.get(version, version)
+    continuity_release = version in {"4.5.2", "5.0.0", "5.0.1", "5.0.2"}
+    version = {"4.4.16": "4.4.15", "4.5.0": "4.4.15", "4.5.1": "4.4.15", "4.5.2": "4.4.15", "5.0.0": "4.4.15", "5.0.1": "4.4.15", "5.0.2": "4.4.15"}.get(version, version)
     selectors = {
         "4.3.7": _v437_script_names,
         "4.4.10": _v410_script_names,
@@ -2169,6 +2305,8 @@ def release_script_names(version: str, database: str, config_path: Path, edition
         names.append("102_v5_0_0_network_access.sql")
     if memory_context_release:
         names.extend(V501_MIGRATION_SCRIPTS[-3:])
+    if model_processing_release:
+        names.extend(v502_runtime_migration_scripts(database))
     return names
 
 
@@ -2756,7 +2894,9 @@ def _connect_for_preflight(database: str, config: dict[str, Any]) -> Any:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", choices=("all", "oracle", "pg", "yashandb"), default="all")
-    parser.add_argument("--version", choices=("4.0.1", "4.1.0", "4.2.0", "4.2.1", "4.3.0", "4.3.1", "4.3.2", "4.3.3", "4.3.4", "4.3.5", "4.3.6", "4.3.7", "4.4.0", "4.4.1", "4.4.2", "4.4.3", "4.4.4", "4.4.5", "4.4.6", "4.4.8", "4.4.9", "4.4.10", "4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1"), default="4.1.0")
+    parser.add_argument("--version", choices=("4.0.1", "4.1.0", "4.2.0", "4.2.1", "4.3.0", "4.3.1", "4.3.2", "4.3.3", "4.3.4", "4.3.5", "4.3.6", "4.3.7", "4.4.0", "4.4.1", "4.4.2", "4.4.3", "4.4.4", "4.4.5", "4.4.6", "4.4.8", "4.4.9", "4.4.10", "4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1", "5.0.2"), default="4.1.0")
+    parser.add_argument("--from-version", choices=("5.0.1",),
+                        help="declare a v5.0.1 to v5.0.2 transition and require exact applied predecessor evidence")
     parser.add_argument("--edition", choices=("community", "enterprise"), default="community",
                         help="v4.2 scheduler scope; Community excludes Enterprise HA objects")
     parser.add_argument("--oracle-config", type=Path)
@@ -2772,10 +2912,13 @@ def main() -> int:
         help="confirm database-side backup/recovery responsibility before applying migrations",
     )
     args = parser.parse_args()
+    if args.from_version and args.version != "5.0.2":
+        parser.error("--from-version is supported only for the declared v5.0.1 to v5.0.2 transition")
 
-    global MIGRATION_VERSION, MIGRATION_EDITION
+    global MIGRATION_VERSION, MIGRATION_EDITION, MIGRATION_FROM_VERSION
     MIGRATION_VERSION = args.version
     MIGRATION_EDITION = args.edition
+    MIGRATION_FROM_VERSION = args.from_version
     paths = {
         "oracle": args.oracle_config,
         "pg": args.pg_config,
@@ -2958,6 +3101,7 @@ def main() -> int:
     payload = {
         "schema": "ai-agent-infra-migration-evidence/v1",
         "version": MIGRATION_VERSION,
+        "from_version": MIGRATION_FROM_VERSION,
         "edition": MIGRATION_EDITION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "dry-run" if args.dry_run else ("preflight" if args.preflight else "apply"),

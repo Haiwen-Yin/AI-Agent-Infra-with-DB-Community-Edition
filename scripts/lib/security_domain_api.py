@@ -93,6 +93,9 @@ def _execution_group_binding(group_expression: str, binding_expression: str = "b
 
 
 def _domain_row(domain_id: str, *, active_only: bool = False) -> Optional[Dict[str, Any]]:
+    from .processing_native import reserved_domain
+    if reserved_domain(domain_id):
+        return None
     suffix = " AND d.STATUS = 'ACTIVE'" if active_only else ""
     return _row(connection.execute_query_one(
         "SELECT d.SECURITY_DOMAIN_ID,d.DOMAIN_NAME,d.CLASSIFICATION,d.PURPOSE,d.STATUS,d.CREATED_AT,"
@@ -115,6 +118,9 @@ def _principal_exists(principal_id: str) -> Dict[str, Any]:
 
 
 def _actor_can_use_domain(actor: str, domain_id: str) -> bool:
+    from .processing_native import reserved_domain
+    if reserved_domain(domain_id):
+        return False
     if identity_api.effective_access(actor, DOMAIN_ACTION).get("decision") == "ALLOW":
         return True
     row = _row(connection.execute_query_one(
@@ -131,7 +137,9 @@ def list_domains(actor: str, *, limit: int = 200, include_inactive: bool = False
     identity_api._require(actor, DOMAIN_READ_ACTION)
     limit = max(1, min(int(limit), 500))
     admin = identity_api.effective_access(actor, DOMAIN_ACTION).get("decision") == "ALLOW"
-    status = "" if include_inactive and admin else " AND d.STATUS='ACTIVE'"
+    status = " AND d.SECURITY_DOMAIN_ID<>'CX_NATIVE_RUNTIME_ANCHOR'"
+    if not (include_inactive and admin):
+        status += " AND d.STATUS='ACTIVE'"
     if admin:
         rows = connection.execute_query(
             "SELECT d.SECURITY_DOMAIN_ID,d.DOMAIN_NAME,d.CLASSIFICATION,d.PURPOSE,d.STATUS,d.CREATED_AT,"
@@ -172,7 +180,8 @@ def list_members(actor: str, domain_id: str) -> List[Dict[str, Any]]:
 def create_domain(actor: str, domain_id: str, name: str, classification: str, purpose: str, owner_principal_id: str, reason: str, *, status: str = "ACTIVE") -> Dict[str, Any]:
     _require(actor)
     domain_id = _text(domain_id, "security domain ID", 128, required=True).upper()
-    if domain_id == "DEFAULT":
+    from .processing_native import reserved_domain
+    if domain_id == "DEFAULT" or reserved_domain(domain_id):
         raise SecurityDomainError("DEFAULT cannot be created or repurposed")
     name = _text(name, "domain name", 256, required=True)
     purpose = _text(purpose, "purpose", 1000, required=True)
@@ -477,6 +486,9 @@ def list_legacy_collaboration_messages(actor: str, group_id: str, *, channel_id:
 
 
 def create_conversion_draft(actor: str, group_id: str, domain_id: str, domain_name: str, classification: str, purpose: str, owner_principal_id: str, reason: str) -> Dict[str, Any]:
+    from .processing_native import reserved_domain
+    if reserved_domain(domain_id):
+        raise SecurityDomainError("Internal accounting anchors are unavailable for collaboration")
     _require(actor)
     group_id = _text(group_id, "collaboration group", 128, required=True)
     domain_id = _text(domain_id, "security domain ID", 128, required=True).upper()

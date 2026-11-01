@@ -145,6 +145,7 @@ def test_nonempty_or_shared_root_is_preserved(tmp_path,packages):
     with pytest.raises(SkillRuntimeError,match='NONEMPTY_RUNTIME_ROOT'): SkillRuntime(existing,public)
     assert sorted(path.name for path in existing.iterdir())==['important']
     shared=tmp_path/'shared';shared.mkdir(mode=0o755)
+    shared.chmod(0o755)
     with pytest.raises(SkillRuntimeError,match='PRIVATE_RUNTIME_ROOT_REQUIRED'): SkillRuntime(shared,public)
 
 

@@ -216,10 +216,18 @@ class KnowledgeProposal(Contract):
 class ExperienceProposal(Contract):
     family: Literal['EXPERIENCE']
     title: Text
-    problem: Text
-    solution: Text
-    validation: Text
-    applicability: Text
+    problem: Text = Field(description=(
+        'Describe the problem evidenced by the sources; label an inferred need or generalized scenario '
+        'as a proposal, not an observed event.'))
+    solution: Text = Field(description=(
+        'Separate source-recorded actions from proposed steps. Do not infer an implemented method, '
+        'determinism or absence of side effects from trigger, strategy or status labels.'))
+    validation: Text = Field(description=(
+        'Report only validation and outcomes evidenced by the sources. If absent, state that they are '
+        'unverified and describe proposed checks without implying they ran.'))
+    applicability: Text = Field(description=(
+        'Describe evidenced scope and conditional reuse. Broader applications are suggestions, not '
+        'proof of applicability, successful execution or validated results.'))
 
 
 class OutcomeContent(Contract):

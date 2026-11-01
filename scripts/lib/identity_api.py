@@ -2345,6 +2345,8 @@ def redeem_enrollment(token: str, agent_id: str = "", *, runtime: str = "", envi
         raise IdentityError("Agent identifier is invalid")
 
     def work(tx):
+        from .processing_native import require_external_identity
+        require_external_identity(generated_agent_id, transaction=tx)
         row = _row(tx.query_one(
             "SELECT t.TOKEN_ID, t.GRANT_ID, g.AGENT_ID, g.SPONSOR_PRINCIPAL_ID, g.OWNER_PRINCIPAL_ID, g.RESPONSIBLE_GROUP_ID, g.SECURITY_DOMAIN_ID, g.ENVIRONMENT AS GRANT_ENVIRONMENT, g.RUNTIME AS GRANT_RUNTIME, g.AGENT_NAME, g.NODE_CONSTRAINT, g.PUBLIC_KEY_CONSTRAINT, g.RISK_TIER, g.POLICY_SNAPSHOT, g.MAX_USES, g.USED_COUNT "
             "FROM CX_ENROLLMENT_TOKENS t JOIN CX_ENROLLMENT_GRANTS g ON g.GRANT_ID = t.GRANT_ID "
@@ -2449,6 +2451,8 @@ def activate_community_agent(agent_id: str, security_domain_id: str, baseline: D
     digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def work(tx: Any) -> Dict[str, Any]:
+        from .processing_native import require_external_identity
+        require_external_identity(agent_id, transaction=tx)
         agent = _row(tx.query_one(
             "SELECT PRINCIPAL_ID,STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:agent_id "
             "AND PRINCIPAL_TYPE='AGENT' FOR UPDATE", {"agent_id": agent_id},
@@ -2582,7 +2586,7 @@ def list_agents_cursor(principal_id: str, *, page_size: int = 20, cursor: str = 
     return result
 
 
-def _agent_visible_to(actor_principal_id: str, agent_id: str) -> bool:
+def _agent_visible_to(actor_principal_id: str, agent_id: str, *, transaction=None) -> bool:
     """Check an Agent relationship or organization scope server-side."""
     if effective_access(actor_principal_id, "agents.read.all")["decision"] == "ALLOW":
         return True
@@ -2590,7 +2594,8 @@ def _agent_visible_to(actor_principal_id: str, agent_id: str) -> bool:
     params = {"agent_id": agent_id}
     if ":principal_id" in visibility:
         params["principal_id"] = actor_principal_id
-    row = _row(connection.execute_query_one(
+    query = transaction.query_one if transaction is not None else connection.execute_query_one
+    row = _row(query(
         "SELECT 1 FROM CX_PRINCIPALS p WHERE p.PRINCIPAL_ID = :agent_id "
         "AND p.PRINCIPAL_TYPE = 'AGENT' AND " + visibility,
         params,
@@ -2785,13 +2790,18 @@ def transition_channel_lifecycle(
     )
     params = {
         "channel_id": channel_id, "status": decision["target"],
-        "retention_until": deadline, "reason": reason[:2000],
+        "reason": reason[:2000],
     }
+    deadline_updates = ""
+    if deadline is not None:
+        params["retention_until"] = deadline
+        deadline_updates = "RETENTION_UNTIL = :retention_until, DELETION_AFTER = :retention_until, "
+    # Leave both timestamps unchanged when no deadline is present. An untyped
+    # NULL bind in COALESCE can fail native TIMESTAMP inference on YashanDB.
     # Metadata JSON remains portable and records the latest state reason even
     # on databases where no vendor JSON operators are available.
     connection.execute(
-        "UPDATE CX_CHANNELS SET STATUS = :status, RETENTION_UNTIL = COALESCE(:retention_until, RETENTION_UNTIL), "
-        "DELETION_AFTER = COALESCE(:retention_until, DELETION_AFTER), LIFECYCLE_REASON = :reason, "
+        "UPDATE CX_CHANNELS SET STATUS = :status, " + deadline_updates + "LIFECYCLE_REASON = :reason, "
         "QUARANTINED_AT = CASE WHEN :status = 'QUARANTINED' THEN CURRENT_TIMESTAMP ELSE QUARANTINED_AT END, "
         "METADATA_JSON = :metadata_json, UPDATED_AT = CURRENT_TIMESTAMP WHERE CHANNEL_ID = :channel_id",
         {**params, "metadata_json": _merge_metadata(
@@ -3407,6 +3417,9 @@ def offboard_agent(actor_principal_id: str, agent_id: str, *, owner_type: str = 
 
 
 def create_channel(principal_id: str, name: str, security_domain_id: str, *, classification: str = "INTERNAL", channel_type: str = "TEAM") -> Dict[str, Any]:
+    from .processing_native import reserved_domain
+    if reserved_domain(security_domain_id):
+        raise IdentityError("Internal accounting anchors cannot contain Channels")
     _require(principal_id, "channels.create")
     if not str(name or "").strip() or not str(security_domain_id or "").strip():
         raise IdentityError("Channel name and security domain are required")
@@ -3733,9 +3746,10 @@ def list_channel_threads(principal_id: str, channel_id: str, limit: int = 100) -
     )
 
 
-def _assert_channel_member(principal_id: str, channel_id: str, action: str = "channels.read") -> Dict[str, Any]:
+def _assert_channel_member(principal_id: str, channel_id: str, action: str = "channels.read", *, transaction=None) -> Dict[str, Any]:
     _require(principal_id, action)
-    row = _row(connection.execute_query_one(
+    query = transaction.query_one if transaction is not None else connection.execute_query_one
+    row = _row(query(
         "SELECT c.CHANNEL_ID, c.SECURITY_DOMAIN_ID, c.CLASSIFICATION, c.STATUS, m.MEMBER_ROLE "
         "FROM CX_CHANNELS c JOIN CX_CHANNEL_MEMBERS m ON m.CHANNEL_ID = c.CHANNEL_ID "
         "JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID = m.PRINCIPAL_ID "
@@ -3745,7 +3759,7 @@ def _assert_channel_member(principal_id: str, channel_id: str, action: str = "ch
         {"channel_id": channel_id, "principal_id": principal_id},
     ))
     if not row and action == "channels.read" and effective_access(principal_id, "channels.read.all")["decision"] == "ALLOW":
-        row = _row(connection.execute_query_one(
+        row = _row(query(
             "SELECT CHANNEL_ID, SECURITY_DOMAIN_ID, CLASSIFICATION, STATUS, 'SYSTEM_ADMIN' AS MEMBER_ROLE "
             "FROM CX_CHANNELS WHERE CHANNEL_ID = :channel_id AND STATUS <> 'DELETED'",
             {"channel_id": channel_id},
@@ -3756,7 +3770,7 @@ def _assert_channel_member(principal_id: str, channel_id: str, action: str = "ch
     # boundary. Recheck the Domain on every guarded operation so expired or
     # revoked members cannot retain access through historical Channel rows.
     if effective_access(principal_id, "domains.manage")["decision"] != "ALLOW":
-        domain_member = _row(connection.execute_query_one(
+        domain_member = _row(query(
             "SELECT MEMBERSHIP_ID FROM CX_DOMAIN_MEMBERS WHERE SECURITY_DOMAIN_ID=:domain_id "
             "AND PRINCIPAL_ID=:principal_id AND STATUS='ACTIVE' "
             "AND (VALID_UNTIL IS NULL OR VALID_UNTIL>CURRENT_TIMESTAMP)",
@@ -3769,17 +3783,18 @@ def _assert_channel_member(principal_id: str, channel_id: str, action: str = "ch
     return row
 
 
-def _assert_thread_member(principal_id: str, thread_id: str, action: str = "channels.read") -> Dict[str, Any]:
+def _assert_thread_member(principal_id: str, thread_id: str, action: str = "channels.read", *, transaction=None) -> Dict[str, Any]:
     """Recheck Channel and explicit private/direct thread membership."""
-    thread = _row(connection.execute_query_one(
+    query = transaction.query_one if transaction is not None else connection.execute_query_one
+    thread = _row(query(
         "SELECT THREAD_ID, CHANNEL_ID, THREAD_TYPE, STATUS FROM CX_CHANNEL_THREADS "
         "WHERE THREAD_ID = :thread_id",
         {"thread_id": thread_id},
     ))
     if not thread or str(thread.get("status") or "").upper() != "ACTIVE":
         raise IdentityError("thread is unavailable")
-    _assert_channel_member(principal_id, str(thread["channel_id"]), action)
-    if str(thread.get("thread_type") or "").upper() in {"PRIVATE", "DIRECT"} and not _row(connection.execute_query_one(
+    _assert_channel_member(principal_id, str(thread["channel_id"]), action, **({"transaction": transaction} if transaction is not None else {}))
+    if str(thread.get("thread_type") or "").upper() in {"PRIVATE", "DIRECT"} and not _row(query(
         "SELECT THREAD_MEMBER_ID FROM CX_CHANNEL_THREAD_MEMBERS "
         "WHERE THREAD_ID = :thread_id AND PRINCIPAL_ID = :principal_id AND STATUS = 'ACTIVE' "
         "AND (VALID_UNTIL IS NULL OR VALID_UNTIL > CURRENT_TIMESTAMP)",
@@ -3968,7 +3983,7 @@ def begin_channel_agent_response(agent_id: str, channel_id: str, *, execution_id
 
 
 def update_channel_agent_response(agent_id: str, channel_id: str, body: str, *, execution_id: str,
-                                  completed: bool = False) -> Dict[str, Any]:
+                                  completed: bool = False, before_publish=None, lock_principals=()) -> Dict[str, Any]:
     """Update the single placeholder owned by a managed Agent.
 
     Chunk updates intentionally do not create audit rows. The begin and final
@@ -3984,12 +3999,23 @@ def update_channel_agent_response(agent_id: str, channel_id: str, body: str, *, 
     content_security.enforce(body, "OUTPUT")
     message_id = _channel_agent_response_message_id(channel_id, execution_id)
     def work(tx: Any) -> int:
+        # Trusted Runtime callbacks declare their full Principal set before
+        # any execution row is locked; public bodies cannot select this set.
+        for principal_id in sorted({agent_id, *lock_principals}) if before_publish is not None or lock_principals else ():
+            current = _row(tx.query_one('SELECT STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:principal_id FOR UPDATE',
+                                        {'principal_id': principal_id}))
+            if not current or current.get('status') != 'ACTIVE':
+                raise PermissionError('Agent response authority was revoked')
         principal = _row(tx.query_one("SELECT STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:agent FOR UPDATE", {"agent": agent_id}))
         if not principal or principal.get("status") != "ACTIVE":
             raise PermissionError("Agent response authority was revoked")
         execution = _row(tx.query_one("SELECT STATUS FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution AND AGENT_ID=:agent FOR UPDATE", {"execution": execution_id, "agent": agent_id}))
         if not execution or execution.get("status") != "CLAIMED":
             raise PermissionError("Agent response execution is no longer active")
+        if before_publish is not None:
+            if not callable(before_publish):
+                raise TypeError('A trusted Runtime publication callback is required')
+            before_publish(tx)
         return tx.execute(
             "UPDATE CX_CHANNEL_MESSAGES SET BODY_TEXT=:body,MESSAGE_TYPE=:message_type WHERE MESSAGE_ID=:message_id "
             "AND CHANNEL_ID=:channel_id AND PRINCIPAL_ID=:agent AND EXISTS (SELECT 1 FROM CX_CHANNEL_MEMBERS cm "

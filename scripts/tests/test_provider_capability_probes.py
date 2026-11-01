@@ -5,6 +5,12 @@ from lib import provider_capability_probes as probes, native_agent_api
 
 PROFILE = {"model_id": "qwopus3.6-35b-a3b-coder-mtp", "profile_id": "profile", "version": 3}
 
+@pytest.fixture(autouse=True)
+def local_provider_route(monkeypatch):
+    # These protocol/parser fixtures have no cross-installation enrollment.
+    from lib import model_coordinator_origin
+    monkeypatch.setattr(model_coordinator_origin, "selected_route", lambda profile: None)
+
 
 def completion(content="CX_OK", **message):
     return {"model": PROFILE["model_id"], "choices": [{"message": {"content": content, **message}, "finish_reason": "stop"}]}
@@ -70,6 +76,8 @@ def test_refusal_is_not_success_even_with_expected_body():
 
 def stream(monkeypatch, frames):
     import io
+    from lib import model_dispatch
+    monkeypatch.setattr(model_dispatch,'_lookup',lambda _:None)
     data = b"".join(b"data: " + (item.encode() if isinstance(item, str) else json.dumps(item).encode()) + b"\n\n" for item in frames)
     class Opener:
         def open(self, *_args, **_kwargs):
@@ -102,9 +110,12 @@ def test_health_check_cannot_accept_empty_completion(monkeypatch, message):
     class Response:
         def __enter__(self): return self
         def __exit__(self, *_): pass
-        def read(self, *_): return json.dumps({"model": "m", "choices": [{"message": message}]}).encode()
+        def read(self, *_): return json.dumps({"model": "m", "choices": [{"message": message, "finish_reason": "stop"}]}).encode()
     monkeypatch.setattr(native_agent_api.urllib.request, "urlopen", lambda *_a, **_k: Response())
     monkeypatch.setattr(native_agent_api.connection, "execute_transaction_callback", lambda callback: callback(None))
+    from lib import model_dispatch, model_endpoint_capacity
+    monkeypatch.setattr(model_dispatch, "_lookup", lambda _: None)
+    monkeypatch.setattr(model_endpoint_capacity, "selected_group", lambda *_: None)
     monkeypatch.setattr(native_agent_api, "_audit", lambda *_a, **_k: None)
     with pytest.raises(native_agent_api.NativeAgentError, match="no content"):
         native_agent_api.probe_llm_profile("admin", "test", "http://provider/v1", "m", "")

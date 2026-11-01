@@ -11,6 +11,12 @@ except ModuleNotFoundError:
 
 @pytest.fixture
 def dispatch(monkeypatch):
+    # This historical v4.1.2 policy fixture has no v5.0.2 processing schema.
+    try:
+        from shared.lib import processing_recovery
+    except ModuleNotFoundError:
+        from lib import processing_recovery
+    monkeypatch.setattr(processing_recovery, "schema_enabled", lambda: False)
     item = dict(dispatch_id="D1", sender_principal_id="sender", receiver_agent_id="receiver",
                 context_ref="C1", snapshot_digest=db4a2a.context_snapshot({"text": "context"}), expected_version=1,
                 scope_ref="workspace:W1", branch_policy="CHILD_BRANCH_WRITE", status="DISPATCHED",

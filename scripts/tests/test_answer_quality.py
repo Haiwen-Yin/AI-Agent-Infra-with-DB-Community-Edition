@@ -10,6 +10,9 @@ from lib import answer_quality as quality, task_continuity
 
 @pytest.fixture
 def database(monkeypatch):
+    from lib import edition_features
+    # This fixture installs the historical migration-105 answer-quality schema.
+    monkeypatch.setattr(edition_features, "MODEL_RUNTIME_CONTEXT_ENABLED", False, raising=False)
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")

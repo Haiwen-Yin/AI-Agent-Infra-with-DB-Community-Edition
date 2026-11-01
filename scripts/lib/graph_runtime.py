@@ -22,6 +22,7 @@ from . import graph_executor
 from . import graph_scheduler
 from . import graph_assurance
 from .graph_contracts import completion_request_digest, worker_matches
+from .continuity_state import ContinuityConflict
 
 TERMINAL_RUNS = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "REVIEW_REQUIRED"})
 LEASE_OPERATIONS = frozenset({"claim", "heartbeat", "checkpoint", "complete", "fail"})
@@ -360,6 +361,9 @@ def create_run(graph_version_id: str, plan_id: str, actor_id: str,
                idempotency_key: Optional[str] = None, *,
                start_paused: bool = False,
                admission_evidence: Optional[Dict[str, Any]] = None,
+               processing_domain_id: Optional[str] = None,
+               canonical_task_id: Optional[str] = None,
+               processing_parent_run_id: Optional[str] = None,
                transaction=None) -> str:
     if not graph_version_id or not plan_id or not actor_id:
         raise ValueError("graph_version_id, plan_id, and actor_id are required")
@@ -428,6 +432,10 @@ def create_run(graph_version_id: str, plan_id: str, actor_id: str,
     def _create(tx):
         for sql, params in statements:
             tx.execute(sql, params)
+        from . import processing_graph
+        if processing_graph.enabled():
+            processing_graph.bind_run(tx, run_id, domain_id=processing_domain_id,
+                                      canonical_task_id=canonical_task_id, parent_run_id=processing_parent_run_id)
         _record_governance_event(
             "RUN_CREATED", actor_id, "Graph Run created", run_id=run_id,
             detail={"graph_version_id": graph_version_id, "plan_id": plan_id,
@@ -1066,6 +1074,19 @@ def claim_ready(worker_id: str, runtime: str, capabilities: Optional[List[str]] 
              "input_state_json": _canonical(input_state), "idempotency_key": attempt_id,
              "effect_idempotency_key": ready.get("effect_idempotency_key")},
         )
+        from . import processing_graph
+        if processing_graph.enabled():
+            processing = processing_graph.claim(tx, attempt_id, lease_seconds)
+            if not processing["allowed"]:
+                tx.execute("UPDATE GRAPH_ATTEMPTS SET STATUS='CANCELLED',ERROR_CODE=:reason,COMPLETED_AT=CURRENT_TIMESTAMP "
+                           "WHERE ATTEMPT_ID=:attempt", {"reason": processing["reason"], "attempt": attempt_id})
+                tx.execute("UPDATE GRAPH_READY_NODES SET STATUS='WAITING',CLAIMED_AT=NULL WHERE READY_ID=:ready",
+                           {"ready": ready_id})
+                tx.execute("UPDATE GRAPH_NODE_RUNS SET STATUS='WAITING',UPDATED_AT=CURRENT_TIMESTAMP WHERE NODE_RUN_ID=:node",
+                           {"node": ready["node_run_id"]})
+                tx.execute("UPDATE GRAPH_RUNS SET STATUS='REVIEW_REQUIRED',ERROR_CODE=:reason,UPDATED_AT=CURRENT_TIMESTAMP WHERE RUN_ID=:run",
+                           {"reason": processing["reason"], "run": ready["run_id"]})
+                return None
         if tx.execute(
             "UPDATE GRAPH_NODE_RUNS SET STATUS = 'RUNNING', UPDATED_AT = CURRENT_TIMESTAMP "
             "WHERE NODE_RUN_ID = :node_run_id AND STATUS IN ('READY','PENDING')",
@@ -1109,6 +1130,9 @@ def heartbeat(lease_token: str, lease_seconds: int = 120) -> bool:
     expires = _lease_expiry(lease_seconds)
 
     def _heartbeat(tx):
+        from . import processing_graph
+        if processing_graph.enabled() and not processing_graph.heartbeat(tx, lease["attempt_id"], expires):
+            return False
         updated = tx.execute(
             "UPDATE GRAPH_ATTEMPTS SET LEASE_EXPIRES_AT = :expires_at WHERE ATTEMPT_ID = :attempt_id "
             "AND FENCING_TOKEN = :fencing_token AND STATUS = 'RUNNING'",
@@ -1480,6 +1504,15 @@ def complete_attempt(lease_token: str, output_state: Optional[Dict[str, Any]], a
             reducer_evidence=evidence or {}, reducers=(evidence or {}).get("reducers"),
         )
         graph_assurance.checkpoint("after_checkpoint")
+        from . import processing_graph
+        processing_allowed = True
+        if processing_graph.enabled():
+            processing = processing_graph.finish(tx, attempt["attempt_id"], outcome="SUCCEEDED",
+                token_count=(evidence or {}).get("token_count", 0), checkpoint_digest=checkpoint.get("state_hash"))
+            processing_allowed = processing["allowed"]
+            if not processing_allowed:
+                tx.execute("UPDATE GRAPH_RUNS SET STATUS='REVIEW_REQUIRED',ERROR_CODE='PROCESSING_BLOCKED',UPDATED_AT=CURRENT_TIMESTAMP "
+                           "WHERE RUN_ID=:run AND STATUS NOT IN ('SUCCEEDED','CANCELLED')", {"run": attempt["run_id"]})
         if tx.execute(
             "UPDATE GRAPH_ATTEMPTS SET STATUS = 'SUCCEEDED', OUTPUT_STATE_JSON = :output_state_json, "
             "COMPLETION_DIGEST = :completion_digest, COMPLETED_AT = CURRENT_TIMESTAMP "
@@ -1511,7 +1544,7 @@ def complete_attempt(lease_token: str, output_state: Optional[Dict[str, Any]], a
                       attempt_id=attempt["attempt_id"], status="REVIEW_REQUIRED",
                       detail={"hard_exceeded": budget_result["hard_exceeded"]})
         run_status = tx.query_one("SELECT STATUS FROM GRAPH_RUNS WHERE RUN_ID = :run_id", {"run_id": attempt["run_id"]})
-        if budget_result["allowed"] and str((run_status or {}).get("status") or "").upper() not in {"CANCELLED", "PAUSED", "REVIEW_REQUIRED"}:
+        if processing_allowed and budget_result["allowed"] and str((run_status or {}).get("status") or "").upper() not in {"CANCELLED", "PAUSED", "REVIEW_REQUIRED"}:
             _activate_downstream_tx(tx, attempt["run_id"], attempt["node_run_id"], checkpoint["checkpoint_id"],
                                     safe_output, actor_id, evidence or {}, attempt["attempt_id"])
         _trace_tx(
@@ -1530,9 +1563,11 @@ def complete_attempt(lease_token: str, output_state: Optional[Dict[str, Any]], a
             "AND FENCING_TOKEN = :fencing_token AND REVOKED_AT IS NULL",
             {"attempt_id": attempt["attempt_id"], "fencing_token": lease["fencing_token"]},
         )
+        if processing_graph.enabled():
+            processing_graph.sync_run(tx, attempt["run_id"])
         graph_assurance.checkpoint("after_completion")
         return {"attempt_id": attempt["attempt_id"], "checkpoint": checkpoint,
-                "status": "SUCCEEDED" if budget_result["allowed"] else "REVIEW_REQUIRED",
+                "status": "SUCCEEDED" if budget_result["allowed"] and processing_allowed else "REVIEW_REQUIRED",
                 "worker_id": attempt.get("worker_id")}
 
     return connection.execute_transaction_callback(_complete)
@@ -1591,6 +1626,17 @@ def fail_attempt(lease_token: str, error_code: str, error_message: str, actor_id
             retry_decision = graph_executor.side_effect_retry_decision(
                 side_effect, error_code, attempts_used, max_attempts,
             )
+            from . import processing_graph
+            if processing_graph.enabled():
+                # An idempotency classification never proves that a timed-out
+                # external attempt stopped. Reconcile it before another send.
+                if retry_decision["uncertain_outcome"] and side_effect != "NONE":
+                    retry_decision = dict(retry_decision, retry=False, status="REVIEW_REQUIRED", automatic_retry=False)
+                processing = processing_graph.finish(tx, attempt["attempt_id"],
+                    outcome="UNOBSERVED" if retry_decision["uncertain_outcome"] and side_effect != "NONE" else "FAILED",
+                    error_code=error_code, retry=retry_decision["retry"])
+                if processing["status"] == "UNOBSERVED":
+                    retry_decision = dict(retry_decision, retry=False, status="REVIEW_REQUIRED", automatic_retry=False)
             uncertain = bool(retry_decision["uncertain_outcome"])
             if retry_decision["retry"]:
                 tx.execute(
@@ -1658,6 +1704,19 @@ def reap_expired_leases(limit: int = 100) -> int:
         )
         count = 0
         for attempt in attempts:
+            policy = tx.query_one("SELECT n.SIDE_EFFECT_CLASS,n.CONFIG_JSON FROM GRAPH_NODE_RUNS nr "
+                                  "JOIN GRAPH_RUNS r ON r.RUN_ID=nr.RUN_ID JOIN GRAPH_NODES n "
+                                  "ON n.GRAPH_VERSION_ID=r.GRAPH_VERSION_ID AND n.NODE_KEY=nr.NODE_KEY "
+                                  "WHERE nr.NODE_RUN_ID=:node", {"node": attempt["node_run_id"]}) or {}
+            retries = (_json(policy.get("config_json"), {}) or {}).get("retry_policy") or {}
+            used = tx.query_one("SELECT COUNT(*) AS ATTEMPT_COUNT FROM GRAPH_ATTEMPTS WHERE NODE_RUN_ID=:node",
+                                 {"node": attempt["node_run_id"]}) or {}
+            retry_decision = graph_executor.side_effect_retry_decision(str(policy.get("side_effect_class") or "NONE"),
+                "UNCERTAIN_OUTCOME", int(used.get("attempt_count") or 1),
+                int(retries.get("max_attempts") or int(retries.get("max_retries") or 0) + 1))
+            if retry_decision["uncertain_outcome"] and str(policy.get("side_effect_class") or "NONE") != "NONE":
+                retry_decision = dict(retry_decision, retry=False, status="REVIEW_REQUIRED", automatic_retry=False)
+            from . import processing_graph
             if tx.execute(
                 "UPDATE GRAPH_ATTEMPTS SET STATUS = 'STALE', ERROR_CODE = 'LEASE_EXPIRED', "
                 "ERROR_MESSAGE = 'Worker lease expired; work is eligible for recovery', "
@@ -1667,23 +1726,33 @@ def reap_expired_leases(limit: int = 100) -> int:
                  "lease_now": datetime.now(timezone.utc).replace(tzinfo=None)},
             ) != 1:
                 continue
+            if processing_graph.enabled():
+                processing = processing_graph.finish(tx, attempt["attempt_id"], outcome="UNOBSERVED", error_code="LEASE_EXPIRED")
+                if processing["status"] == "UNOBSERVED":
+                    retry_decision = dict(retry_decision, retry=False, status="REVIEW_REQUIRED", automatic_retry=False)
+            next_status = "READY" if retry_decision["retry"] else retry_decision["status"]
             tx.execute(
-                "UPDATE GRAPH_NODE_RUNS SET STATUS = 'READY', UPDATED_AT = CURRENT_TIMESTAMP "
+                "UPDATE GRAPH_NODE_RUNS SET STATUS = :status, UPDATED_AT = CURRENT_TIMESTAMP "
                 "WHERE NODE_RUN_ID = :node_run_id AND STATUS = 'RUNNING'",
-                {"node_run_id": attempt["node_run_id"]},
+                {"node_run_id": attempt["node_run_id"], "status": next_status},
             )
             tx.execute(
-                "UPDATE GRAPH_READY_NODES SET STATUS = 'READY', CLAIMED_AT = NULL "
+                "UPDATE GRAPH_READY_NODES SET STATUS = :status, CLAIMED_AT = NULL "
                 "WHERE NODE_RUN_ID = :node_run_id AND STATUS = 'CLAIMED'",
-                {"node_run_id": attempt["node_run_id"]},
+                {"node_run_id": attempt["node_run_id"], "status": "READY" if retry_decision["retry"] else "WAITING"},
             )
+            if not retry_decision["retry"]:
+                tx.execute("UPDATE GRAPH_RUNS SET STATUS=:status,ERROR_CODE='LEASE_EXPIRED',UPDATED_AT=CURRENT_TIMESTAMP "
+                           "WHERE RUN_ID=:run AND STATUS NOT IN ('SUCCEEDED','CANCELLED')",
+                           {"status": next_status, "run": attempt["run_id"]})
             tx.execute(
                 "UPDATE GRAPH_LEASE_TOKENS SET REVOKED_AT = CURRENT_TIMESTAMP WHERE ATTEMPT_ID = :attempt_id "
                 "AND FENCING_TOKEN = :fencing_token AND REVOKED_AT IS NULL",
                 {"attempt_id": attempt["attempt_id"], "fencing_token": attempt["fencing_token"]},
             )
             _trace_tx(tx, attempt["run_id"], "LEASE_EXPIRED", node_run_id=attempt["node_run_id"],
-                      attempt_id=attempt["attempt_id"], status="READY")
+                      attempt_id=attempt["attempt_id"], status=next_status,
+                      detail={"uncertain_outcome": retry_decision["uncertain_outcome"], "automatic_retry": retry_decision["automatic_retry"]})
             count += 1
         expired_waits = tx.query(
             "SELECT WAIT_ID, RUN_ID, NODE_RUN_ID FROM GRAPH_WAIT_SUBSCRIPTIONS WHERE STATUS = 'WAITING' "
@@ -1720,6 +1789,10 @@ def cancel_run(run_id: str, actor_id: str, reason: str) -> bool:
     if not str(reason or "").strip():
         raise ValueError("cancellation reason is required")
     def _cancel(tx):
+        from . import processing_graph
+        if processing_graph.enabled():
+            for attempt in tx.query("SELECT ATTEMPT_ID FROM GRAPH_ATTEMPTS WHERE RUN_ID=:run AND STATUS='RUNNING'", {"run": run_id}):
+                processing_graph.finish(tx, attempt["attempt_id"], outcome="UNOBSERVED", error_code="CLIENT_CLOSED")
         changed = tx.execute(
             "UPDATE GRAPH_RUNS SET STATUS = 'CANCELLED', ERROR_CODE = 'CANCELLED', ERROR_MESSAGE = :reason, UPDATED_AT = CURRENT_TIMESTAMP, COMPLETED_AT = CURRENT_TIMESTAMP "
             "WHERE RUN_ID = :run_id AND STATUS NOT IN ('SUCCEEDED','FAILED','CANCELLED')",
@@ -1732,6 +1805,8 @@ def cancel_run(run_id: str, actor_id: str, reason: str) -> bool:
         tx.execute("UPDATE GRAPH_ATTEMPTS SET STATUS = 'CANCELLED', ERROR_CODE = 'RUN_CANCELLED', ERROR_MESSAGE = :reason, COMPLETED_AT = CURRENT_TIMESTAMP WHERE RUN_ID = :run_id AND STATUS IN ('CLAIMED','RUNNING','WAITING')", {"run_id": run_id, "reason": str(reason)[:2000]})
         tx.execute("UPDATE GRAPH_LEASE_TOKENS SET REVOKED_AT = CURRENT_TIMESTAMP WHERE ATTEMPT_ID IN (SELECT ATTEMPT_ID FROM GRAPH_ATTEMPTS WHERE RUN_ID = :run_id) AND REVOKED_AT IS NULL", {"run_id": run_id})
         tx.execute("UPDATE GRAPH_WAIT_SUBSCRIPTIONS SET STATUS = 'CANCELLED', RESOLVED_AT = CURRENT_TIMESTAMP WHERE RUN_ID = :run_id AND STATUS = 'WAITING'", {"run_id": run_id})
+        if processing_graph.enabled():
+            processing_graph.sync_run(tx, run_id)
         _intervention_tx(tx, run_id, "CANCEL", actor_id, reason)
         _trace_tx(tx, run_id, "RUN_CANCELLED", status="CANCELLED", detail={"reason": reason})
         return True
@@ -1785,6 +1860,9 @@ def resume_run(run_id: str, actor_id: str, reason: str,
     if not str(reason or "").strip():
         raise ValueError("resume reason is required")
     def _resume(tx):
+        from . import processing_graph
+        if processing_graph.enabled():
+            processing_graph.control_gate(tx, run_id)
         current = tx.query_one(
             "SELECT STATUS, ERROR_CODE FROM GRAPH_RUNS WHERE RUN_ID = :run_id",
             {"run_id": run_id},
@@ -1818,6 +1896,9 @@ def retry_node(run_id: str, node_run_id: str, actor_id: str, reason: str,
     confirmation = confirmation if isinstance(confirmation, dict) else {}
     plan = _plan_for_run(run_id)
     def _retry(tx):
+        from . import processing_graph
+        if processing_graph.enabled():
+            processing_graph.control_gate(tx, run_id)
         node = tx.query_one("SELECT NODE_RUN_ID, NODE_KEY, STATUS FROM GRAPH_NODE_RUNS WHERE RUN_ID = :run_id AND NODE_RUN_ID = :node_run_id", {"run_id": run_id, "node_run_id": node_run_id})
         if not node or node.get("status") not in {"FAILED", "REVIEW_REQUIRED"}:
             return False
@@ -1846,9 +1927,27 @@ def reassign_attempt(attempt_id: str, actor_id: str, reason: str, worker_id: Opt
     if not str(reason or "").strip():
         raise ValueError("reassign reason is required")
     def _reassign(tx):
-        attempt = tx.query_one("SELECT ATTEMPT_ID, RUN_ID, NODE_RUN_ID, FENCING_TOKEN, STATUS FROM GRAPH_ATTEMPTS WHERE ATTEMPT_ID = :attempt_id", {"attempt_id": attempt_id})
+        attempt = tx.query_one("SELECT ATTEMPT_ID, RUN_ID, NODE_RUN_ID, FENCING_TOKEN, STATUS FROM GRAPH_ATTEMPTS WHERE ATTEMPT_ID = :attempt_id FOR UPDATE", {"attempt_id": attempt_id})
         if not attempt or attempt.get("status") not in {"CLAIMED", "RUNNING", "WAITING"}:
             return False
+        from . import processing_graph
+        if processing_graph.enabled():
+            processing_graph.control_gate(tx, attempt["run_id"])
+            processing_graph.finish(tx, attempt_id, outcome="UNOBSERVED", error_code="REASSIGNED")
+            tx.execute("UPDATE GRAPH_ATTEMPTS SET STATUS='STALE',ERROR_CODE='REASSIGNED',ERROR_MESSAGE=:reason,COMPLETED_AT=CURRENT_TIMESTAMP "
+                       "WHERE ATTEMPT_ID=:attempt AND STATUS IN ('CLAIMED','RUNNING','WAITING')", {"reason": reason[:2000], "attempt": attempt_id})
+            tx.execute("UPDATE GRAPH_READY_NODES SET STATUS='WAITING',CLAIMED_AT=NULL WHERE NODE_RUN_ID=:node AND STATUS IN ('CLAIMED','WAITING')",
+                       {"node": attempt["node_run_id"]})
+            tx.execute("UPDATE GRAPH_NODE_RUNS SET STATUS='REVIEW_REQUIRED',UPDATED_AT=CURRENT_TIMESTAMP WHERE NODE_RUN_ID=:node",
+                       {"node": attempt["node_run_id"]})
+            tx.execute("UPDATE GRAPH_RUNS SET STATUS='REVIEW_REQUIRED',ERROR_CODE='POSSIBLE_SEND',UPDATED_AT=CURRENT_TIMESTAMP WHERE RUN_ID=:run",
+                       {"run": attempt["run_id"]})
+            tx.execute("UPDATE GRAPH_LEASE_TOKENS SET REVOKED_AT=CURRENT_TIMESTAMP WHERE ATTEMPT_ID=:attempt AND FENCING_TOKEN=:fence AND REVOKED_AT IS NULL",
+                       {"attempt": attempt_id, "fence": attempt["fencing_token"]})
+            _intervention_tx(tx, attempt["run_id"], "REASSIGN", actor_id, reason, attempt["node_run_id"], {"worker_id": worker_id})
+            _trace_tx(tx, attempt["run_id"], "ATTEMPT_REASSIGNED", node_run_id=attempt["node_run_id"], attempt_id=attempt_id,
+                      status="REVIEW_REQUIRED", detail={"worker_id": worker_id, "remote_outcome": "UNOBSERVED"})
+            return True
         tx.execute("UPDATE GRAPH_ATTEMPTS SET STATUS = 'STALE', ERROR_CODE = 'REASSIGNED', ERROR_MESSAGE = :reason, COMPLETED_AT = CURRENT_TIMESTAMP WHERE ATTEMPT_ID = :attempt_id AND STATUS IN ('CLAIMED','RUNNING','WAITING')", {"attempt_id": attempt_id, "reason": reason[:2000]})
         tx.execute("UPDATE GRAPH_READY_NODES SET STATUS = 'READY', CLAIMED_AT = NULL, AVAILABLE_AT = CURRENT_TIMESTAMP WHERE NODE_RUN_ID = :node_run_id AND STATUS IN ('CLAIMED','WAITING')", {"node_run_id": attempt["node_run_id"]})
         tx.execute("UPDATE GRAPH_NODE_RUNS SET STATUS = 'READY', UPDATED_AT = CURRENT_TIMESTAMP WHERE NODE_RUN_ID = :node_run_id AND STATUS IN ('RUNNING','WAITING')", {"node_run_id": attempt["node_run_id"]})
@@ -1864,6 +1963,12 @@ def skip_node(run_id: str, node_run_id: str, actor_id: str, reason: str,
     if not str(reason or "").strip():
         raise ValueError("skip reason is required")
     def _skip(tx):
+        from . import processing_graph
+        if processing_graph.enabled():
+            processing_graph.control_gate(tx, run_id)
+            if tx.query_one("SELECT ATTEMPT_ID FROM GRAPH_ATTEMPTS WHERE RUN_ID=:run AND NODE_RUN_ID=:node AND STATUS IN ('CLAIMED','RUNNING','WAITING')",
+                            {"run": run_id, "node": node_run_id}):
+                raise ContinuityConflict("PROCESSING_ACTIVE_ATTEMPT", "An active native attempt must finish before a skip intervention")
         node = tx.query_one("SELECT NODE_RUN_ID, STATUS FROM GRAPH_NODE_RUNS WHERE RUN_ID = :run_id AND NODE_RUN_ID = :node_run_id", {"run_id": run_id, "node_run_id": node_run_id})
         if not node or node.get("status") in {"SUCCEEDED", "SKIPPED", "CANCELLED"}:
             return False
@@ -1881,6 +1986,12 @@ def force_route(run_id: str, node_run_id: str, edge_id: str, actor_id: str, reas
     if not str(reason or "").strip():
         raise ValueError("force-route reason is required")
     def _force(tx):
+        from . import processing_graph
+        if processing_graph.enabled():
+            processing_graph.control_gate(tx, run_id)
+            if tx.query_one("SELECT ATTEMPT_ID FROM GRAPH_ATTEMPTS WHERE RUN_ID=:run AND NODE_RUN_ID=:node AND STATUS IN ('CLAIMED','RUNNING','WAITING')",
+                            {"run": run_id, "node": node_run_id}):
+                raise ContinuityConflict("PROCESSING_ACTIVE_ATTEMPT", "An active native attempt must finish before a route intervention")
         node = tx.query_one("SELECT NODE_RUN_ID, STATUS FROM GRAPH_NODE_RUNS WHERE RUN_ID = :run_id AND NODE_RUN_ID = :node_run_id", {"run_id": run_id, "node_run_id": node_run_id})
         if not node or node.get("status") not in {"READY", "WAITING", "FAILED", "RUNNING"}:
             return False
@@ -1935,6 +2046,7 @@ def fork_run(run_id: str, actor_id: str, reason: str, idempotency_key: Optional[
         run.get("budget") or {}, idempotency_key or f"fork:{run_id}:{_hash(reason)[:16]}",
         start_paused=not decision["allowed"],
         admission_evidence={"parent_run_id": run_id, "fork_replay": decision},
+        processing_parent_run_id=run_id,
     )
     append_checkpoint(
         child_id, recover_state(run_id), actor_id, snapshot_kind="FORK",

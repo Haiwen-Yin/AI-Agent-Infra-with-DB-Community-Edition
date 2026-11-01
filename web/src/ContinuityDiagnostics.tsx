@@ -1,9 +1,10 @@
 import React, { useRef, useState } from "react";
+import ProcessingRecovery from "./ProcessingRecovery";
 
 type Row = Record<string, any>;
-type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string };
+type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; modelRuntimeEnabled?: boolean; canWrite?: boolean };
 
-export default function ContinuityDiagnostics({ request, text, domain }: Props) {
+export default function ContinuityDiagnostics({ request, text, domain, modelRuntimeEnabled = false, canWrite = false }: Props) {
   const [capabilities, setCapabilities] = useState<Row | null>(null);
   const [diagnostic, setDiagnostic] = useState<Row | null>(null);
   const [error, setError] = useState("");
@@ -48,5 +49,6 @@ export default function ContinuityDiagnostics({ request, text, domain }: Props) 
       <button className="primary-button">{text("运行诊断", "Run diagnostics")}</button>
     </fieldset></form>
     {diagnostic && <><p role="status">{status(diagnostic.status)}</p><p>{text("诊断记录", "Diagnostic record")}: {diagnostic.run_id}</p><ul>{diagnostic.checks.map((item: Row) => <li key={item.check_code}>{names[String(item.check_code)] || String(item.check_code)}: {status(item.status)} · {detail(item.detail_code)}</li>)}</ul></>}
+    {modelRuntimeEnabled && <ProcessingRecovery request={request} text={text} canRecover={canWrite} />}
   </section>;
 }
