@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.3 - Community Edition - Database Connection Pool Manager
 
 Unified yaspy connection pool with bind-variable support.
 Replaces all deploy_yashandb.py subprocess calls with direct yaspy access.

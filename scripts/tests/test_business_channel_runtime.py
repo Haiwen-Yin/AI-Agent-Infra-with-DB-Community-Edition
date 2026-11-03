@@ -192,6 +192,36 @@ def test_revoke_after_enqueue_blocks_streaming_response(store):
         business.validate_response('agent', 'channel', result['execution_id'])
 
 
+def test_held_publication_transaction_rechecks_every_source_without_new_connection(store,monkeypatch):
+    result=enqueue()
+    payload=json.loads(store.execute('SELECT INPUT_JSON FROM CX_RUNTIME_EXECUTIONS').fetchone()[0])
+    payload.update(answer_source='KNOWLEDGE_GROUNDED',knowledge_citations=[dict(entity_id='reviewed',digest='exact')])
+    store.execute("UPDATE CX_RUNTIME_EXECUTIONS SET STATUS='CLAIMED',INPUT_JSON=?",(json.dumps(payload),))
+    class HeldTransaction:
+        def query(self,sql,params=None):
+            return [dict(row) for row in store.execute(sql.replace(' FOR UPDATE',''),params or {})]
+        def query_one(self,sql,params=None):
+            rows=self.query(sql,params)
+            return {k.lower():v for k,v in rows[0].items()} if rows else None
+    tx=HeldTransaction()
+    def new_connection(*args,**kwargs):
+        pytest.fail('A held publication transaction must not reenter another connection')
+    monkeypatch.setattr(business.connection,'execute_query_one',new_connection)
+    monkeypatch.setattr(business.connection,'execute_query',new_connection)
+    monkeypatch.setattr(business.connection,'execute_transaction_callback',new_connection)
+    checked=[]
+    def original_source(actor,agent,item,*,transaction):
+        assert transaction is tx and item['entity_id']=='reviewed'
+        assert tx.query_one('SELECT STATUS FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:actor FOR UPDATE',dict(actor=actor))['status']=='ACTIVE'
+        checked.append((actor,agent))
+    monkeypatch.setattr(business.knowledge_grounding,'validate_citation',original_source)
+    business.validate_response('agent','channel',result['execution_id'],transaction=tx)
+    assert ('human','agent') in checked and ('agent','agent') in checked
+    store.execute("UPDATE CX_DOMAIN_MEMBERS SET STATUS='REVOKED' WHERE PRINCIPAL_ID='agent'")
+    with pytest.raises(PermissionError):
+        business.validate_response('agent','channel',result['execution_id'],transaction=tx)
+
+
 def test_response_cannot_be_redirected_or_used_before_claim(store):
     result = enqueue()
     with pytest.raises(PermissionError):

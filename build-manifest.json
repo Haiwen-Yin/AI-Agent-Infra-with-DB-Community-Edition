@@ -11,13 +11,13 @@
     "display": "Oracle / PostgreSQL / YashanDB"
   },
   "edition": "Community",
-  "version": "5.0.0",
+  "version": "5.0.3",
   "python_requirement": ">=3.14",
   "profile": "production",
   "graph_engineering": true,
   "graph_preview": false,
-  "release_date": "2026-10-18",
-  "source_commit": "26eec8b12b36d8ae6981fed9bbddf528da007727",
+  "release_date": "2026-11-03",
+  "source_commit": "8b1ef26d6d4d47c52e41ab92ddd12bc14b3e6d6d",
   "license": "Apache-2.0",
   "features": [],
   "session_timeout_seconds": 300,
@@ -33,7 +33,7 @@
     "chuanxu-logo-en-on-dark.svg": "1881844286f7b58622de866e73b5995b6375f5cf89766944982657f36f9dd864",
     "chuanxu-logo-en-on-dark.png": "06e7325b4e483053700ede31be5b1cea6abf9c06146aa6dd565a00aa203a5eb7"
   },
-  "notes": "RELEASE_NOTES_v5.0.0.md",
+  "notes": "RELEASE_NOTES_v5.0.3.md",
   "generated_package_guard": "build.py",
   "graph_migrations": [
     "9_v4_2_0_graph_engineering.sql",
@@ -70,5 +70,22 @@
     "edition": "Community",
     "license": "Apache-2.0",
     "brand": "chuanxu"
+  },
+  "platform_learning": {
+    "delivery": "separate",
+    "snapshots": {
+      "oracle": {
+        "revision": "7b27cf49d7b06db9407091df70f5580232587b8a6f22a862d95c4cade31afaba",
+        "sha256": "c3061de604d5e400876e4b19cd36efdecaad2af5fc2b3cd2fee857de55eae171"
+      },
+      "pg": {
+        "revision": "f3c072b69909ba0f51dc28de7234cae3ec71531234c74c8480c9b596bb3b2f4a",
+        "sha256": "018c940d6a944af48b597d7b65ae689986375042ef5bf495fdb753d523764737"
+      },
+      "yashandb": {
+        "revision": "23cf1c88aedcc3cb5e595ebeb515aa9ca4919e00aaef63fa83b77f4dba66c442",
+        "sha256": "04ccc4a4ef5dc17f90e983e7d84fbbdfe0fe3ae23ae9d3a90e62ad00a5ed9198"
+      }
+    }
   }
 }

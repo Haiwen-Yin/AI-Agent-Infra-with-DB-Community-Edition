@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Harness API
+"""AI Agent Infra v5.0.3 - Community Edition - Harness API
 
 Templates are reusable agent execution blueprints stored as ENTITIES
 with ENTITY_TYPE='HARNESS_TEMPLATE' and extended via HARNESS_META.

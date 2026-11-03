@@ -60,3 +60,28 @@ def test_changed_plan_cannot_overwrite_or_resume_the_original_journal(monkeypatc
         deployment.run("RESUME", **values)
     assert executed == ["executed"]
     assert journal.path.read_bytes() == before
+
+
+def test_declared_predecessor_survives_resume_and_cannot_be_reselected(monkeypatch, tmp_path):
+    _, _, values = prepared(monkeypatch, tmp_path)
+    monkeypatch.setattr(deployment, 'release_version', lambda *_: '5.0.3')
+    received = []
+    def interrupted(*_args, **kwargs):
+        received.append(kwargs.get('from_version'))
+        raise RuntimeError('Synthetic interrupted upgrade')
+    monkeypatch.setattr(deployment, '_migration_apply', interrupted)
+    with pytest.raises(RuntimeError, match='interrupted upgrade'):
+        deployment.run('UPGRADE', **values, from_version='5.0.2', database_backup_confirmed=True)
+    journal = deployment.DeploymentJournal(tmp_path, 'DEPLOY_RESUME')
+    assert journal.load()['from_version'] == '5.0.2'
+    with pytest.raises(RuntimeError, match='interrupted upgrade'):
+        deployment.run('RESUME', **values)
+    assert received == ['5.0.2', '5.0.2']
+    # A historical undeclared journal cannot be relabelled as a checked upgrade.
+    state = journal.load()
+    state.pop('from_version')
+    journal.save(state)
+    before = journal.path.read_bytes()
+    with pytest.raises(deployment.DeploymentError, match='declared predecessor'):
+        deployment.run('RESUME', **values, from_version='5.0.2')
+    assert journal.path.read_bytes() == before

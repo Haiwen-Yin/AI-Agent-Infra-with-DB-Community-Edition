@@ -20,6 +20,8 @@ from .continuity_contracts import OutcomeProposal
 from . import continuity_policy
 from . import continuity_runtime
 from . import continuity_native_sources
+from . import product_knowledge, connection
+from . import agent_source_sync,knowledge_curated
 
 
 def install_routes(app,require_action,schema_owner_context,*,prefix='/api'):
@@ -50,6 +52,37 @@ def install_routes(app,require_action,schema_owner_context,*,prefix='/api'):
         @router.post('/tools/{tool_id}/invoke')
         def invoke_dynamic_tool(tool_id:str,body:ToolInvocation,session:dict=Depends(require_action('actions.propose'))):
             return invoke(continuity_tools.propose,session,tool_id,body)
+
+    def learning(actor, role, goal):
+        return product_knowledge.learning_catalog(actor, 'pg' if connection.DATABASE_DIALECT == 'postgresql' else connection.DATABASE_DIALECT,
+                                                   role=role, goal=goal)
+
+    def learning_source(actor, entity_id, expected_digest):
+        return product_knowledge.read_learning(actor, 'pg' if connection.DATABASE_DIALECT == 'postgresql' else connection.DATABASE_DIALECT,
+                                                 entity_id, expected_digest)
+
+    @router.get('/learning')
+    def learning_directory(role:str|None=Query(None,pattern='^(HUMAN|ADMIN|AGENT)$'),
+                           goal:str|None=Query(None,pattern='^(onboarding|collaboration|access|tasks|workflow|knowledge|memory|integration|capabilities|handoff|answers|recovery|models)$'),
+                           session:dict=Depends(require_action('knowledge.read'))):
+        return invoke(learning,session,role,goal)
+
+    @router.get('/learning/{entity_id}')
+    def learning_content(entity_id:Identifier,expected_digest:str=Query(pattern='^[0-9a-f]{64}$'),
+                         session:dict=Depends(require_action('knowledge.read'))):
+        return invoke(learning_source,session,entity_id,expected_digest)
+
+    @router.get('/sources/{source_id}')
+    def read_curated_source(source_id:Identifier,session:dict=Depends(require_action('workspaces.read'))):
+        return invoke(agent_source_sync.read_source,session,source_id)
+
+    @router.post('/sources/{source_id}/curated-import')
+    def import_curated_source(source_id:Identifier,body:knowledge_curated.Import,
+                              session:dict=Depends(require_action('knowledge.write'))):
+        # Configure the exact content-addressed Source through the existing
+        # operator route first. Gateway/MCP callers cannot select a new owner,
+        # network destination, publication scope or trusted-import exception.
+        return invoke(knowledge_curated.import_documents,session,source_id,body)
 
     @router.get('/continuity-domains')
     def list_domains(cursor:Identifier|None=None,limit:int=Query(50,ge=1,le=100),session:dict=Depends(require_action('workspaces.read'))):
@@ -157,6 +190,10 @@ def install_routes(app,require_action,schema_owner_context,*,prefix='/api'):
     @router.post('/artifact-candidates')
     def create_candidate(body:NewCandidate,session:dict=Depends(require_action('workspaces.write'))):
         return invoke(candidates.create_candidate,session,body)
+
+    @router.post('/knowledge-intake/preview')
+    def preview_knowledge(body:NewCandidate,session:dict=Depends(require_action('workspaces.write'))):
+        return invoke(candidates.preview_knowledge,session,body)
 
     @router.get('/artifact-candidates/{candidate_id}')
     def read_candidate(candidate_id:str,revision:int|None=None,session:dict=Depends(require_action('workspaces.read'))):

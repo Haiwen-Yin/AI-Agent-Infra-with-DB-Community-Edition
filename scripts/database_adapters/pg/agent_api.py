@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Agent API
+"""AI Agent Infra v5.0.3 - Community Edition - Agent API
 
 Agent registration, session management, access audit logging,
 collaboration tracking, pool management, and Admin/Agent separation support.
@@ -32,6 +32,7 @@ _RUNTIME_DENY_TABLES = (
     "cx_platform_capabilities", "cx_platform_capability_dependencies",
     "cx_platform_capability_history",
     "cx_ip_access_state", "cx_ip_access_revisions", "cx_ip_access_rules",
+    "cx_knowledge_intake", "cx_knowledge_access_policies",
 ) + tuple(table.lower() for table in (*_AGENT_EXTENSION_TABLES, *_AGENT_INTEGRATION_TABLES))
 
 _JSON_COLUMNS = {"capabilities", "config", "context"}
@@ -896,7 +897,8 @@ def _provision_agent_login(agent_id: str) -> Dict[str, Any]:
                               'cx106_reject_runtime_mutation',
                               'cx107_reject_runtime_mutation',
                               'cx108_reject_runtime_mutation',
-                              'cx109_reject_runtime_mutation'
+                              'cx109_reject_runtime_mutation',
+                              'cx111_reject_runtime_mutation'
                           )
                           AND NOT g.tgisinternal
                     )

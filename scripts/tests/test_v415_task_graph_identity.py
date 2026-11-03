@@ -3,6 +3,33 @@ from lib import task_plan_api, graph_compat
 import pytest
 
 
+@pytest.mark.parametrize('dialect', ['oracle', 'yashandb', 'postgresql'])
+def test_step_reads_observed_times_without_unsupported_pg_assignment_column(monkeypatch, dialect):
+    monkeypatch.setattr(task_plan_api, 'DATABASE_DIALECT', dialect)
+    calls = []
+    def query(sql, params):
+        calls.append(sql)
+        assert ('NULL AS ASSIGNED_AGENT_ID' in sql) == (dialect == 'postgresql')
+        assert 'TO_CHAR(STARTED_AT,' in sql and 'TO_CHAR(COMPLETED_AT,' in sql
+        return [dict(step_id='S1', started_at='2026-11-02 16:00:00', completed_at=None)]
+    monkeypatch.setattr(task_plan_api, 'execute_query', query)
+    assert task_plan_api.get_plan_steps('P1')[0]['started_at'] == '2026-11-02 16:00:00'
+    assert len(calls) == 1
+
+
+def test_legacy_step_read_does_not_invent_execution_times_from_creation(monkeypatch):
+    calls = []
+    def query(sql, params):
+        calls.append(sql)
+        if len(calls) == 1:
+            raise ValueError('Legacy schema lacks timestamp columns')
+        assert 'NULL AS STARTED_AT' in sql and 'NULL AS COMPLETED_AT' in sql
+        assert 'CREATED_AT' not in sql
+        return [dict(step_id='S1', started_at=None, completed_at=None)]
+    monkeypatch.setattr(task_plan_api, 'execute_query', query)
+    assert task_plan_api.get_plan_steps('P1')[0]['completed_at'] is None
+
+
 @pytest.mark.parametrize("dialect", ["oracle", "yashandb", "postgresql"])
 @pytest.mark.parametrize("actual", [None, "RUNNING", "PENDING"])
 def test_step_insert_locks_parent_and_rejects_stale_status(monkeypatch, dialect, actual):

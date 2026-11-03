@@ -21,7 +21,10 @@ def enabled():
 def _json(value):
     if hasattr(value, "read"):
         value = value.read()
-    return json.loads(value) if isinstance(value, str) else value or {}
+    from .graph_compat import _portable_json_value
+    # Native JSON NUMBER values can be Decimal. Receipt digests must use
+    # the same finite representation as text JSON and Graph definitions.
+    return _portable_json_value(json.loads(value) if isinstance(value, str) else value or {})
 
 
 def _run(tx, run_id):

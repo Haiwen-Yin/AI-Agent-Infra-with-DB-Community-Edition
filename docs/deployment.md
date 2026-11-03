@@ -1,4 +1,4 @@
-# Deployment guide v5.0.2
+# Deployment guide v5.0.3
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -205,7 +205,7 @@ regular file with mode `0600`, then run:
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ```
@@ -234,7 +234,7 @@ They must not enter public archives.
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config "$CX_CONFIG_PATH"
 ./start_web_server.sh start
 ./start_web_server.sh status

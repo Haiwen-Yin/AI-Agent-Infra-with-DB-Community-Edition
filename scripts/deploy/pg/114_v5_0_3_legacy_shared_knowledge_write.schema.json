@@ -1,0 +1,41 @@
+{
+  "database": "pg",
+  "guards": [
+    {
+      "body": "BEGIN IF SESSION_USER<>CURRENT_USER AND ((TG_OP='INSERT' AND NEW.ENTITY_TYPE='KNOWLEDGE' AND NEW.VISIBILITY IS DISTINCT FROM 'PRIVATE') OR (TG_OP='UPDATE' AND (OLD.ENTITY_TYPE='KNOWLEDGE' OR NEW.ENTITY_TYPE='KNOWLEDGE') AND (NEW.ENTITY_TYPE IS DISTINCT FROM 'KNOWLEDGE' OR NEW.VISIBILITY IS DISTINCT FROM 'PRIVATE' OR OLD.VISIBILITY IS DISTINCT FROM 'PRIVATE' OR (EXISTS (SELECT 1 FROM CX_CONTINUITY_ARTIFACT_REVS r JOIN CX_CONTINUITY_ARTIFACTS a ON a.ARTIFACT_ID=r.ARTIFACT_ID WHERE r.NATIVE_ENTITY_ID=OLD.ENTITY_ID::text AND a.FAMILY='KNOWLEDGE') OR EXISTS (SELECT 1 FROM CX_KNOWLEDGE_ACCESS_POLICIES k WHERE k.ENTITY_ID=OLD.ENTITY_ID::text AND k.STATUS='ACTIVE' AND k.SCOPE_TYPE<>'PRINCIPAL_PRIVATE')))) OR (TG_OP='DELETE' AND OLD.ENTITY_TYPE='KNOWLEDGE' AND (OLD.VISIBILITY IS DISTINCT FROM 'PRIVATE' OR (EXISTS (SELECT 1 FROM CX_CONTINUITY_ARTIFACT_REVS r JOIN CX_CONTINUITY_ARTIFACTS a ON a.ARTIFACT_ID=r.ARTIFACT_ID WHERE r.NATIVE_ENTITY_ID=OLD.ENTITY_ID::text AND a.FAMILY='KNOWLEDGE') OR EXISTS (SELECT 1 FROM CX_KNOWLEDGE_ACCESS_POLICIES k WHERE k.ENTITY_ID=OLD.ENTITY_ID::text AND k.STATUS='ACTIVE' AND k.SCOPE_TYPE<>'PRINCIPAL_PRIVATE'))))) THEN RAISE EXCEPTION 'Shared or reviewed Knowledge requires governed intake' USING ERRCODE='42501'; END IF; IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW; END",
+      "columns": [
+        "ENTITY_ID",
+        "ENTITY_TYPE",
+        "TITLE",
+        "CONTENT",
+        "SUMMARY",
+        "CATEGORY",
+        "STATUS",
+        "OWNED_BY_AGENT",
+        "VISIBILITY",
+        "WORKSPACE_ID",
+        "EXPIRES_AT"
+      ],
+      "function": "cx503_know_entity_guard",
+      "table": "ENTITIES",
+      "trigger": "CX503_KNOW_ENTITY_GUARD"
+    },
+    {
+      "body": "BEGIN IF SESSION_USER<>CURRENT_USER AND (EXISTS (SELECT 1 FROM public.entities e WHERE e.entity_type='KNOWLEDGE' AND ((TG_OP<>'INSERT' AND e.entity_id=OLD.entity_id) OR (TG_OP<>'DELETE' AND e.entity_id=NEW.entity_id)) AND (e.visibility IS DISTINCT FROM 'PRIVATE' OR EXISTS (SELECT 1 FROM public.cx_knowledge_access_policies k WHERE k.entity_id=e.entity_id::text AND k.status='ACTIVE' AND k.scope_type<>'PRINCIPAL_PRIVATE'))) OR EXISTS (SELECT 1 FROM public.cx_continuity_artifact_revs r JOIN public.cx_continuity_artifacts a ON a.artifact_id=r.artifact_id WHERE a.family='KNOWLEDGE' AND ((TG_OP<>'INSERT' AND r.native_entity_id=OLD.entity_id::text) OR (TG_OP<>'DELETE' AND r.native_entity_id=NEW.entity_id::text)))) THEN RAISE EXCEPTION 'Shared or reviewed Knowledge requires governed intake' USING ERRCODE='42501'; END IF; IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW; END",
+      "columns": [],
+      "function": "cx503_know_meta_guard",
+      "table": "KNOWLEDGE_META",
+      "trigger": "CX503_KNOW_META_GUARD"
+    },
+    {
+      "body": "BEGIN IF SESSION_USER<>CURRENT_USER AND (TRUE) THEN RAISE EXCEPTION 'Shared or reviewed Knowledge requires governed intake' USING ERRCODE='42501'; END IF; IF TG_OP='DELETE' THEN RETURN OLD; END IF; RETURN NEW; END",
+      "columns": [],
+      "function": "cx503_know_policy_guard",
+      "table": "CX_KNOWLEDGE_ACCESS_POLICIES",
+      "trigger": "CX503_KNOW_POLICY_GUARD"
+    }
+  ],
+  "owner_control_plane": "PRESERVED",
+  "policy_table_native_mutation": "DENIED",
+  "schema": "v503-native-knowledge-governance/v1"
+}

@@ -21,14 +21,26 @@ def test_knowledge_scope_predicate_uses_authoritative_organization_facts():
 
 
 def test_policy_validation_requires_correct_group_target(monkeypatch):
+    import importlib
+    from unittest.mock import Mock
+    intake=importlib.import_module(knowledge_api.__package__+'.knowledge_intake')
+    work=importlib.import_module(knowledge_api.__package__+'.continuity_work')
     calls = []
-    monkeypatch.setattr(knowledge_api, "execute", lambda sql, params: calls.append((sql, params)) or 1)
+    tx=Mock(execute=lambda sql,params:calls.append((sql,params)) or 1,
+            query_one=Mock(return_value={'owned_by_agent':'admin','principal_id':'admin'}))
+    monkeypatch.setattr(knowledge_api.connection,'execute_transaction_callback',lambda action:action(tx))
+    monkeypatch.setattr(work,'_lock_actor',lambda *_:None)
+    monkeypatch.setattr(knowledge_api.identity_api,'effective_access',lambda *_:{'decision':'ALLOW','scopes':['ALL']})
+    monkeypatch.setattr(knowledge_api.identity_api,'_audit_tx',lambda *_:None)
+    checked=Mock()
+    monkeypatch.setattr(intake,'require_reviewed_projection',checked)
     result = knowledge_api.set_access_policy(
-        "knowledge-1", "ORGANIZATION_SUBTREE", "admin",
+        "123", "ORGANIZATION_SUBTREE", "admin",
         organization_id="finance", reason="Finance-only policy",
     )
     assert result["organization_id"] == "finance"
     assert len(calls) == 2
+    checked.assert_called_once_with(tx,'admin','123')
 
 
 def test_policy_validation_rejects_missing_organization():

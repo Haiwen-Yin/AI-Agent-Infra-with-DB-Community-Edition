@@ -43,7 +43,12 @@ class SourceConfiguration(Contract):
 
     @model_validator(mode='after')
     def contract(self):
-        endpoint = validate_endpoint(self.endpoint)
+        from .knowledge_curated import manifest_id
+        curated=manifest_id(self.endpoint) is not None
+        if curated and (self.kind!='DOCUMENT' or self.pinned_commit or self.credential_ref
+                or set(self.content_types)-{'text/plain','text/markdown'}):
+            raise ValueError('Curated document URNs allow no network credentials or Git/fetch contract')
+        endpoint = self.endpoint if curated else validate_endpoint(self.endpoint)
         parsed = urlsplit(endpoint)
         if self.kind == 'GITHUB':
             if parsed.hostname != 'github.com' or not re.fullmatch(r'/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', parsed.path.rstrip('/')):
@@ -54,7 +59,7 @@ class SourceConfiguration(Contract):
             raise ValueError('Document sources use response versions, not Git commits')
         for path in self.paths:
             validate_path(path)
-        if self.kind == 'DOCUMENT' and self.paths != ('/',):
+        if self.kind == 'DOCUMENT' and not curated and self.paths != ('/',):
             raise ValueError('A document source references its exact configured URL')
         if self.credential_ref:
             if not re.fullmatch(r'[A-Z][A-Z0-9_]{0,99}',self.credential_ref):
@@ -288,6 +293,9 @@ def enqueue(actor, source_id, value):
     request = SyncRequest.model_validate(value)
     def perform(tx):
         source = _source(tx, actor, source_id, write=True)
+        from .knowledge_curated import manifest_id
+        if manifest_id(source['endpoint']):
+            raise ContinuityConflict('CURATED_IMPORT_REQUIRED','Submit the exact reviewed document bundle through curated-import')
         prior = _receipt(tx, actor, 'SOURCE_SYNC', request, source_id)
         if prior:
             return prior
@@ -362,7 +370,27 @@ def _configuration(tx, source):
     return source
 
 
+def _document_chunks(document):
+    """Bound candidates without cutting a paragraph, table or fenced code.
+
+    Oversized semantic blocks require source-author preparation. Do not make
+    apparently independent facts by slicing away their conditions or headers.
+    Validate the entire document before committing any candidate/checkpoint.
+    """
+    text = document['text']
+    # A paragraph boundary alone cannot prove that a later exception does not
+    # qualify an earlier claim. Until the configured source provides explicit
+    # author-reviewed standalone units, keep the entire document together.
+    if len(text) > 4000:
+        raise ContinuityError('SOURCE_CHUNK_REVIEW_REQUIRED',
+                              'The complete source exceeds the candidate limit; supply author-reviewed standalone source units')
+    return [dict(start=0, end=len(text), text=text, digest=hashlib.sha256(text.encode()).hexdigest())]
+
+
 def _fetch(source, get):
+    from .knowledge_curated import manifest_id
+    if manifest_id(source['endpoint']):
+        raise ContinuityConflict('CURATED_IMPORT_REQUIRED','Curated documents are supplied explicitly, never fetched from a URN')
     headers = _credential(source)
     if source['source_kind'] == 'DOCUMENT':
         result = get(source['endpoint'], allowed_hosts={urlsplit(source['endpoint']).hostname}, headers=headers, max_bytes=int(source['max_bytes']))
@@ -467,6 +495,7 @@ def run(actor, job_id, *, get=None):
             connection.execute_transaction_callback(check)
             return (get or https_get)(*args, **kwargs)
         documents = _fetch(source, checked_get)
+        prepared = [(document, _document_chunks(document)) for document in documents]
         def commit(tx):
             from . import continuity_candidates
             current_job, current = _job(tx, actor, job_id, write=True)
@@ -474,14 +503,12 @@ def run(actor, job_id, *, get=None):
             from .processing_runtime import source_credential
             source_credential(tx,current_job,current)
             checkpoint_items, last_revision = [], None
-            for document in documents:
-                # The bounded candidate DTO stores a full fact. Split source
-                # text into exact independently evidenced chunks, never trim.
-                chunks = [document['text'][start:start + 3500] for start in range(0, len(document['text']), 3500)] or ['']
-                for number, chunk in enumerate(chunks, 1):
+            for document, blocks in prepared:
+                for number, block in enumerate(blocks, 1):
+                    chunk = block['text']
                     if not chunk.strip():
                         continue
-                    path = document['path'] + ('#chunk-' + str(number) if len(chunks) > 1 else '')
+                    path = document['path'] + ('#chars-' + str(block['start']) + '-' + str(block['end']) if len(blocks) > 1 else '')
                     if len(path)>500:
                         raise ValueError('Chunked source path exceeds its exact locator limit')
                     content_hash = hashlib.sha256(chunk.encode()).hexdigest()
@@ -571,10 +598,84 @@ def source_metadata(tx, actor, domain, reference):
 
 def resolve_source(tx, actor, domain, reference):
     source_metadata(tx, actor, domain, reference)
-    revision = tx.query_one("SELECT CONTENT_CIPHER FROM CX_AGENT_SOURCE_REVISIONS WHERE SOURCE_ID=:source AND REVISION_ID=:revision",
+    revision = tx.query_one("SELECT CONTENT_CIPHER,SOURCE_VERSION,SOURCE_PATH,TITLE FROM CX_AGENT_SOURCE_REVISIONS WHERE SOURCE_ID=:source AND REVISION_ID=:revision",
                             {'source': reference.entity_id, 'revision': reference.revision_id})
+    return _resolved_source(domain, reference, revision)
+
+
+def _resolved_source(domain, reference, revision):
     cipher = revision['content_cipher']
-    text = decrypt_section(cipher.read() if hasattr(cipher, 'read') else cipher)['text']
+    stored=decrypt_section(cipher.read() if hasattr(cipher, 'read') else cipher)
+    text = stored['text']
     if hashlib.sha256(text.encode()).hexdigest() != reference.content_digest:
         raise ContinuityError('INTEGRITY_ERROR', 'Stored source evidence failed digest verification')
-    return {'source': reference.model_dump(mode='json'), 'text': text, 'content_digest': reference.content_digest, 'authorized_scope': domain}
+    provenance={}
+    if str(revision['source_version']).startswith('curated:'):
+        from .knowledge_curated import verify_snapshot
+        provenance={'provenance':verify_snapshot(revision,stored)}
+    return {'source': reference.model_dump(mode='json'), 'text': text, 'content_digest': reference.content_digest, 'authorized_scope': domain,**provenance}
+
+
+def resolve_source_batch(tx, actor, domain, references, *, omit_denied=False):
+    """Read exact revisions with current source authority on both sides.
+
+    Shared source/Agent grants are evaluated once per source before and after
+    loading this bounded batch. Every distinct revision still undergoes the
+    original authenticated decryption, body digest and curator binding checks.
+    No authority or decrypted content survives this call.
+    """
+    from .continuity_sources import read_ids
+    refs=[item if isinstance(item,SourceRef) else SourceRef.model_validate(item) for item in references]
+    if len(refs)>500 or any(item.family.value!='SOURCE' for item in refs):
+        raise ValueError('A bounded configured-source batch is required')
+    if not refs:return []
+    sources={}
+    def authorize(source_id):
+        try:
+            source=_source(tx,actor,source_id)
+            if source['security_domain_id']!=domain:
+                raise PermissionError('Source evidence must retain its original domain')
+            return source
+        except PermissionError:
+            if not omit_denied:raise
+            return None
+    for source_id in dict.fromkeys(item.entity_id for item in refs):
+        sources[source_id]=authorize(source_id)
+    selected=[item for item in refs if sources[item.entity_id] is not None]
+    def revisions(ids,*,body=False):
+        columns='SOURCE_ID,REVISION_ID,CONTENT_DIGEST,LIFECYCLE_STATE,SOURCE_VERSION,SOURCE_PATH,TITLE'
+        rows=read_ids(tx,'SELECT '+columns+(',CONTENT_CIPHER' if body else '')+
+            ' FROM CX_AGENT_SOURCE_REVISIONS WHERE REVISION_ID IN ({ids})',ids)
+        # Consume LOBs while their native cursor/transaction is still alive.
+        return {(row['source_id'],row['revision_id']):
+            {name:value.read() if hasattr(value,'read') else value for name,value in row.items()}
+            for row in rows}
+    selected_ids=[item.revision_id for item in selected]
+    metadata=revisions(selected_ids)
+    def eligible(ref):
+        row=metadata.get((ref.entity_id,ref.revision_id))
+        return (sources[ref.entity_id] is not None and row is not None
+            and row['lifecycle_state']=='AVAILABLE' and row['content_digest']==ref.content_digest)
+    body_ids=[item.revision_id for item in selected if eligible(item)]
+    records=revisions(body_ids,body=True)
+    result=[]
+    for ref in refs:
+        row=records.get((ref.entity_id,ref.revision_id))
+        if not eligible(ref):
+            if not omit_denied:raise PermissionError('Source evidence is unavailable')
+            result.append(None)
+        else:
+            if row is None or {key:value for key,value in row.items() if key!='content_cipher'}!=metadata[(ref.entity_id,ref.revision_id)]:
+                raise ContinuityConflict('STALE_CONTENT','Source revision changed before body loading')
+            result.append(_resolved_source(domain,ref,row))
+    if revisions(selected_ids)!=metadata or revisions(body_ids,body=True)!=records:
+        raise ContinuityConflict('STALE_CONTENT','Source revisions changed during body loading')
+    for source_id,previous in sources.items():
+        if previous is None:continue
+        current=authorize(source_id)
+        if current is None:
+            for index,ref in enumerate(refs):
+                if ref.entity_id==source_id:result[index]=None
+        elif current!=previous:
+            raise ContinuityConflict('STALE_CONTENT','Source configuration changed during body loading')
+    return result

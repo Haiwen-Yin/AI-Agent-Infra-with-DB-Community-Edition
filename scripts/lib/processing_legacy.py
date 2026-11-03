@@ -197,7 +197,7 @@ def update_step(tx, step_id, changes):
                              "ON p.PLAN_ID=s.PLAN_ID WHERE s.STEP_ID=:step FOR UPDATE", {"step": step_id}))
     if not draft:
         return False
-    binding = row(tx.query_one("SELECT * FROM GRAPH_COMPAT_BINDINGS WHERE LEGACY_KIND='TASK_PLAN' AND LEGACY_ID=:plan", {"plan": draft["plan_id"]}))
+    binding = row(tx.query_one("SELECT * FROM GRAPH_COMPAT_BINDINGS WHERE LEGACY_KIND='TASK_PLAN' AND LEGACY_ID=:plan", {"plan": str(draft["plan_id"])}))
     design_only = (not binding.get("graph_run_id") and draft["current_plan_status"] == "PENDING" and
                    "tool_output" not in changes and changes.get("status", "PENDING") == "PENDING")
     if not design_only:

@@ -117,6 +117,8 @@ def main() -> int:
     parser.add_argument("--edition", choices=("community", "enterprise"), required=True)
     parser.add_argument("--config", type=Path, default=SCRIPT_ROOT.parent / "config.json")
     parser.add_argument("--version", default="", help="must match the packaged baseline manifest")
+    parser.add_argument("--from-version", choices=("5.0.2",),
+                        help="declare a v5.0.2 to v5.0.3 upgrade; verify the predecessor and apply only additive steps")
     parser.add_argument("--run-id", default="", help="required to resume a previous local deployment journal")
     parser.add_argument("--admin-password-file", type=Path,
                         help="0600 file required for initialize and for resume before administrator setup; the plaintext is never persisted")
@@ -133,7 +135,8 @@ def main() -> int:
         result = run(args.command, database=args.database, edition=args.edition, config_path=args.config,
                      root=SCRIPT_ROOT.parent, run_id=args.run_id, target_version=args.version,
                      bootstrap_admin_password=admin_password,
-                     database_backup_confirmed=database_backup_confirmed)
+                     database_backup_confirmed=database_backup_confirmed,
+                     from_version=args.from_version)
     except DeploymentError as exc:
         print(json.dumps({"status": "FAILED", "error": str(exc)}, ensure_ascii=True), file=sys.stderr)
         return 1

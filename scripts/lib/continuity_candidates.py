@@ -10,6 +10,7 @@ from .continuity_contracts import (NewCandidate, CandidateRevision, CandidatePay
                                   CandidatePromotion, Proposal, content_digest, request_digest)
 from .continuity_state import ContinuityError, ContinuityConflict, require_version, require_idempotent_request
 from .continuity_sources import resolve
+from . import knowledge_intake
 
 FIELDS={
     'MEMORY':('TITLE','BODY','MEMORY_TYPE'),
@@ -66,7 +67,7 @@ def schema_statements(dialect):
 
 
 def _payload(request):
-    return CandidatePayload(content=request.content,sources=request.sources,replaces=request.replaces)
+    return CandidatePayload(content=request.content,sources=request.sources,replaces=request.replaces,intake=request.intake)
 
 
 def _authority(tx,actor,domain,family,*,review=False):
@@ -82,10 +83,12 @@ def _authority(tx,actor,domain,family,*,review=False):
 
 
 def _sources(tx,actor,domain,payload):
+    resolved=[]
     for source in payload.sources:
-        resolve(tx,actor,domain,source,purpose='CANDIDATE_REVIEW')
+        resolved.append(resolve(tx,actor,domain,source,purpose='CANDIDATE_REVIEW'))
     if payload.replaces:
         resolve(tx,actor,domain,payload.replaces,purpose='CANDIDATE_REVIEW')
+    return resolved
 
 
 def _receipt(tx,actor,operation,request,candidate_id=None):
@@ -126,6 +129,8 @@ def _write(tx,actor,candidate_id,revision,payload,reason):
         for index,action in enumerate(payload.content.required_actions,1):
             tx.execute("INSERT INTO CX_CANDIDATE_SKILL_ACTIONS(CANDIDATE_ID,REVISION_NO,ITEM_NO,RESOURCE_ACTION) VALUES(:candidate,:revision,:item_no,:action)",
                        {'candidate':candidate_id,'revision':revision,'item_no':index,'action':action})
+    if family=='KNOWLEDGE':
+        knowledge_intake.write(tx,candidate_id,revision,payload.intake)
     for index,source in enumerate(payload.sources,1):
         tx.execute("INSERT INTO CX_CANDIDATE_SOURCES(CANDIDATE_ID,REVISION_NO,ITEM_NO,FAMILY,ENTITY_ID,SOURCE_REVISION_ID,CONTENT_DIGEST) "
                    "VALUES(:candidate,:revision,:item_no,:family,:entity,:source_revision,:digest)",
@@ -153,7 +158,8 @@ def _read(tx,root,revision=None):
                      "WHERE CANDIDATE_ID=:candidate AND REVISION_NO=:revision ORDER BY ITEM_NO",params)
     old=None if record['replaces_entity_id'] is None else dict(family=root['family'],entity_id=record['replaces_entity_id'],
          revision_id=record['replaces_revision_id'],content_digest=record['replaces_digest'])
-    payload=CandidatePayload(content=content,sources=sources,replaces=old)
+    intake=knowledge_intake.read(tx,root['candidate_id'],selected) if root['family']=='KNOWLEDGE' else None
+    payload=CandidatePayload(content=content,sources=sources,replaces=old,intake=intake)
     if content_digest(payload)!=record['content_digest']:
         raise ContinuityError('INTEGRITY_ERROR','Candidate revision failed integrity validation')
     return payload,record['content_digest']
@@ -171,6 +177,18 @@ def _lock(tx,actor,candidate_id,*,write=True):
 def create_candidate(actor,value):
     request=value if isinstance(value,NewCandidate) else NewCandidate.model_validate(value)
     return connection.execute_transaction_callback(lambda tx:_create_candidate(tx,actor,request))
+
+
+def preview_knowledge(actor,value):
+    request=value if isinstance(value,NewCandidate) else NewCandidate.model_validate(value)
+    if request.content.family!='KNOWLEDGE':
+        raise ContinuityError('INVALID_FAMILY','Knowledge preview requires a Knowledge candidate')
+    def perform(tx):
+        _authority(tx,actor,request.security_domain_id,'KNOWLEDGE')
+        payload=_payload(request)
+        _sources(tx,actor,request.security_domain_id,payload)
+        return knowledge_intake.preview(tx,actor,payload)
+    return connection.execute_transaction_callback(perform)
 
 
 def _create_candidate(tx,actor,request):
@@ -199,8 +217,18 @@ def read_candidate(actor,candidate_id,revision=None):
                 'current_revision_no':int(root['current_revision_no']),'proposed_by':root['proposed_by'],
                 'security_domain_id':root['security_domain_id'],
                 'status':root['status'],'payload':payload.model_dump(mode='json'),'content_digest':digest,
+                'legacy_remediation_allowed':actor==root['proposed_by'] and
+                    (revision is None or revision==int(root['current_revision_no'])) and _legacy_remediation(root,payload),
+                **({'intake_preview':knowledge_intake.preview(tx,actor,payload)} if root['family']=='KNOWLEDGE' else {}),
                 'result_entity_id':root['result_entity_id'],'result_revision_id':root['result_revision_id']}
     return connection.execute_transaction_callback(perform)
+
+
+def _legacy_remediation(root,payload):
+    # Historical approval remains immutable. Only an unpublished Knowledge
+    # revision without intake can be supplemented and returned to review.
+    return root['family']=='KNOWLEDGE' and root['status']=='APPROVED' and \
+        root['result_entity_id'] is None and root['result_revision_id'] is None and payload.intake is None
 
 
 def revise_candidate(actor,candidate_id,value):
@@ -210,16 +238,21 @@ def revise_candidate(actor,candidate_id,value):
         _authority(tx,actor,root['security_domain_id'],root['family'])
         if actor!=root['proposed_by'] or request.security_domain_id!=root['security_domain_id'] or request.content.family!=root['family']:
             raise PermissionError('Candidate ownership, domain and family cannot change')
+        payload=_payload(request)
+        _sources(tx,actor,root['security_domain_id'],payload)
         prior=_receipt(tx,actor,'CANDIDATE_REVISE',request,candidate_id)
         if prior:
             return prior
         require_version(int(root['version']),request.expected_version)
         if root['status']!='PENDING':
-            raise ContinuityConflict('CANDIDATE_CLOSED','Only pending candidates can be revised')
-        payload=_payload(request)
-        _sources(tx,actor,root['security_domain_id'],payload)
+            previous,_=_read(tx,root)
+            if not _legacy_remediation(root,previous):
+                raise ContinuityConflict('CANDIDATE_CLOSED','Only pending candidates or unpublished legacy Knowledge without intake can be revised')
+            if payload.intake is None or content_digest(payload.model_copy(update={'intake':None}))!=content_digest(previous):
+                raise ContinuityConflict('LEGACY_METADATA_ONLY','Supplement intake without changing the historical content, sources or replacement')
         _write(tx,actor,candidate_id,int(root['current_revision_no'])+1,payload,request.reason)
-        tx.execute("UPDATE CX_ARTIFACT_CANDIDATES SET VERSION=VERSION+1,CURRENT_REVISION_NO=CURRENT_REVISION_NO+1,UPDATED_AT=CURRENT_TIMESTAMP WHERE CANDIDATE_ID=:candidate",{'candidate':candidate_id})
+        tx.execute("UPDATE CX_ARTIFACT_CANDIDATES SET VERSION=VERSION+1,CURRENT_REVISION_NO=CURRENT_REVISION_NO+1,"
+                   "STATUS='PENDING',REVIEWED_BY=NULL,UPDATED_AT=CURRENT_TIMESTAMP WHERE CANDIDATE_ID=:candidate",{'candidate':candidate_id})
         return _record(tx,actor,'CANDIDATE_REVISE',request,candidate_id,request.expected_version+1)
     return connection.execute_transaction_callback(perform)
 
@@ -241,6 +274,8 @@ def review_candidate(actor,candidate_id,value):
         if digest!=request.expected_digest:
             raise ContinuityConflict('STALE_CONTENT','Review must match the exact candidate revision')
         _sources(tx,actor,root['security_domain_id'],payload)
+        if root['family']=='KNOWLEDGE' and request.decision=='APPROVED':
+            knowledge_intake.validate_publication(tx,payload,root['security_domain_id'])
         tx.execute("INSERT INTO CX_CANDIDATE_REVIEWS(REVIEW_ID,CANDIDATE_ID,REVISION_NO,REVIEWER_ID,DECISION,CONTENT_DIGEST,REASON) "
                    "VALUES(:review_id,:candidate,:revision,:actor,:decision,:digest,:reason)",
                    {'review_id':work._id('CR'),'candidate':candidate_id,'revision':root['current_revision_no'],'actor':actor,
@@ -281,6 +316,8 @@ def promote_candidate(actor,candidate_id,value):
         # No sender identity is used to read source text. The promoter must
         # independently have access to every exact source at promotion time.
         _sources(tx,actor,root['security_domain_id'],payload)
+        if root['family']=='KNOWLEDGE':
+            knowledge_intake.validate_publication(tx,payload,root['security_domain_id'])
         from .continuity_promotions import promote
         result=promote(tx,actor,root,payload,request.reason)
         tx.execute("UPDATE CX_ARTIFACT_CANDIDATES SET RESULT_ENTITY_ID=:entity,RESULT_REVISION_ID=:revision,VERSION=VERSION+1,UPDATED_AT=CURRENT_TIMESTAMP "

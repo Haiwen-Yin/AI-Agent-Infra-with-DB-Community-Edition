@@ -69,6 +69,30 @@ def test_generic_recognized_frames_carry_only_attributes_and_authorized_citation
     assert 'never fill it' in instruction and 'installed product identity' in instruction
 
 
+@pytest.mark.parametrize('supplement',['Y','N'])
+def test_conflict_judgment_retains_both_sources_without_general_supplement(supplement):
+    items=[source(content='Alder headquarters are Northbank.'),source(entity='source-b',content='Alder headquarters are Southbank.')]
+    value=prepare('Where is Alder headquartered?',items,status='AMBIGUOUS',supplement=supplement,
+        evidence_decision=dict(contradictions=[dict(attribute='headquarters',source_ids=['source-a','source-b'])],
+                               contradiction_method='EXPLICIT_ATTRIBUTES_ONLY'))
+    assert value['answer_source']=='KNOWLEDGE_GROUNDED'
+    assert len(value['citations'])==2
+    assert prompt(value)['judgment_context']==dict(evidence_status='AMBIGUOUS',conflicting_attributes=['headquarters'],
+        conflict_detection='EXPLICIT_ATTRIBUTES_ONLY',requires_human_decision=True,automatic_execution=False)
+    instruction=value['messages'][0]['content']
+    assert 'basic assessment bounded by the evidence' in instruction and 'conditional advice' in instruction
+    assert 'higher retrieval rank' in instruction and 'general model knowledge in a separate' not in instruction
+
+
+def test_no_disclosure_conflicts_return_original_evidence_and_conditional_human_decision():
+    value=prepare('Alder headquarters',[source(),source(entity='source-b')],status='AMBIGUOUS',disclosure=False,
+        evidence_decision=dict(contradictions=[dict(attribute='headquarters')]))
+    assert value['messages']==[] and value['answer_source']=='KNOWLEDGE_EXTRACTS'
+    assert '[1]' in value['knowledge_reply'] and '[2]' in value['knowledge_reply']
+    assert 'Sources disagree' in value['knowledge_reply'] and 'Conditional advice' in value['knowledge_reply']
+    assert 'Human decision' in value['knowledge_reply']
+
+
 @pytest.mark.parametrize('attributes,expected', [
     ('identity', ['identity']), ('version', ['version']), ('version and identity', ['version','identity']),
 ])
@@ -101,13 +125,15 @@ def test_current_source_order_alone_sets_citation_numbers_for_each_covered_attri
     assert reordered['requested_attributes'][1] == dict(attribute='version', source_citations=[1])
 
 
-def test_coverage_uses_exact_12000_character_content_sent_to_model():
+def test_coverage_uses_the_complete_source_that_fits_the_context_budget():
     item = source(content='Alder is a platform. '+'x'*12000+' Snapshot version v8.3.2.')
     value = prompt(prepare(EN, [item]))
-    assert len(value['authorized_sources'][0]['content']) == 12000
-    assert 'v8.3.2' not in value['authorized_sources'][0]['content']
+    # Whole-reference selection replaced fixed-width truncation. A late
+    # qualifier that fits the real budget must reach both model and coverage.
+    assert value['authorized_sources'][0]['content']==item['content']
+    assert 'v8.3.2' in value['authorized_sources'][0]['content']
     assert value['requested_attributes'] == [dict(attribute='identity', source_citations=[1]),
-        dict(attribute='version', source_citations=[])]
+        dict(attribute='version', source_citations=[1])]
 
 
 def test_source_metadata_cannot_supply_coverage_or_values_absent_from_prompt():
@@ -140,7 +166,7 @@ def test_expired_final_reference_cannot_back_an_attribute():
 def test_unrecognized_frames_keep_original_model_prompt_semantics(question):
     value = prepare(question, [source()])
     wire = prompt(value)
-    assert set(wire) == {'question','missing_parts','authorized_sources'}
+    assert set(wire) == {'question','missing_parts','authorized_sources','temporal_context'}
     assert wire['question'] == question
     assert 'Answer each requested_attributes item' not in value['messages'][0]['content']
 
@@ -161,7 +187,9 @@ def test_no_source_and_denied_paths_keep_existing_reply_and_supplement_behavior(
 
 def test_ambiguous_conflict_and_extract_branches_do_not_create_attribute_requests():
     ambiguous = prepare(EN, [source()], status='AMBIGUOUS', evidence_decision=dict(contradictions=[dict(attribute='identity')]))
-    assert ambiguous['messages'] == [] and ambiguous['answer_source'] == 'INSUFFICIENT_KNOWLEDGE'
+    assert ambiguous['answer_source'] == 'KNOWLEDGE_GROUNDED'
+    assert prompt(ambiguous)['judgment_context']['conflicting_attributes']==['identity']
+    assert 'responsible Human must make' in ambiguous['messages'][0]['content']
     extracted = prepare(EN, [source()], disclosure=False)
     assert extracted['messages'] == [] and extracted['answer_source'] == 'KNOWLEDGE_EXTRACTS'
     assert extracted['knowledge_reply'] == '[1] Alder\n'+source()['content']

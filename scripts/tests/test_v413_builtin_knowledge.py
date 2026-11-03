@@ -29,6 +29,7 @@ def test_immutable_version_rejects_tampering(monkeypatch):
     tx.execute.assert_not_called()
 
 def test_withdraw_revokes_chunks_and_is_audited(db):
+    db.query_one.return_value={'knowledge_key':'public-runbook','status':'PUBLISHED'}
     result = knowledge.withdraw("admin", "k1", "retire")
     assert result["status"] == "REVOKED"
     sqls = [call.args[0] for call in db.execute.call_args_list]

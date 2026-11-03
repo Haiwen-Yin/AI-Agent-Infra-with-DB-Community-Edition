@@ -1,4 +1,4 @@
-# Migration guide v5.0.2
+# Migration guide v5.0.3
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -14,6 +14,29 @@ v5.0.1 adds migrations 103–105 for memory quality, context assets and final-an
 evaluation; its generated target ends at 105. This target description does not
 declare completed database or release acceptance.
 
+v5.0.2 adds migrations 106–109; PostgreSQL also requires 110 for the historical
+approval-constraint repair. v5.0.3 retains that backend-specific predecessor
+chain and adds the following tail. PostgreSQL/YashanDB end at 117 and Oracle
+ends at 118; verify every selected step and manifest, not just that terminal.
+
+| Backend | v5.0.3 additions |
+|---|---|
+| PostgreSQL, including AgentX | 111–114, then 117 |
+| Oracle | 111–114, then 117–118 |
+| YashanDB | 111, 115–117 |
+
+Migration 111 stores guided intake metadata. The native Knowledge write guards
+use 112–114 on PostgreSQL/Oracle and 115 on YashanDB. YashanDB 116 adds body
+search while retaining the title index. Historical 112–114 files remain in the
+YashanDB package for checksum/history continuity but are not its selected tail.
+Migration 117 adds nullable Task Step start/completion timestamps without a
+default or historical backfill. Existing rows, grants and unknown times remain
+unchanged. A missing historical time is not evidence that a step never ran.
+Oracle 118 adds an explicit redundant member document key and recreates the
+existing collaboration Duality View with every original JSON field. The member
+primary key, rows and grants are preserved. The exact repair also handles the
+matching ORA-40609 during fresh schema execution without rewriting old SQL.
+
 Single-backend baselines are at `scripts/deploy/baseline_v*.json`. In the
 unified Community package, each backend has exactly one baseline under
 `scripts/deploy/<database>/`. Use only the selected backend's scripts, driver
@@ -26,6 +49,8 @@ and configuration. OpenTenBase AgentX can only use the PostgreSQL chain.
 | v4.5.1 | 100 |
 | v4.5.2 | 101 |
 | v5.0.0 | 102 |
+| v5.0.1 | 105 |
+| v5.0.2 | PostgreSQL 110; Oracle/YashanDB 109 |
 
 These versions were normal releases. Historical migration filenames describe
 when a structure was introduced, not the target version to pass to a current
@@ -67,10 +92,18 @@ Use the installed package's Python environment and work from its root:
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
+  --from-version 5.0.2 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
+
+For the v5.0.2 to v5.0.3 transition, `--from-version 5.0.2` checks the actual
+predecessor objects and APPLIED checksums before any new migration. It selects
+only the backend's v5.0.3 tail above. A resumed upgrade retains the declared
+predecessor in its original journal; an older undeclared journal cannot be
+relabelled as a checked transition. Do not use this argument for initialization
+or another version transition.
 
 Replace the database and edition with the supported values for this package.
 The installer validates the baseline, source state, ordered script digests and
@@ -111,6 +144,11 @@ checked, not discarded.
 | 103 | Memory-time/reconciliation/restore facts, immutable working notes and explicit Task-linked retrospectives |
 | 104 | Context budgets/representations, Agent asset bindings, configured source revisions and fenced sync/import checkpoints |
 | 105 | Versioned answer rubrics, Task-linked runs, encrypted input/output, exact sources and independent Human reviews |
+| 106–109 | Model capacity, processing recovery, governed model turns and observed-answer reviews |
+| 110 (PostgreSQL) | Historical approval-constraint repair, preserving ordinary decision authority |
+| 111–116 (backend-selected subset) | Guided Knowledge metadata, native shared-write boundaries and backend-specific body search |
+| 117 | Observed Task Step start/completion times; historical unknowns stay NULL |
+| 118 (Oracle) | Explicit child document key; preserve the complete collaboration JSON projection |
 
 For a v5.0.1 target, verify all three added scripts and schema manifests, including
 their actual tables, keys, constraints and native protection. A successful 105
@@ -133,10 +171,10 @@ checksum, skip a failed fragment or assume an interrupted statement committed.
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -150,7 +188,7 @@ verified, stop and use the database's documented recovery procedure.
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config /absolute/path/config.json
 ```
 

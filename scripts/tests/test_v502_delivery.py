@@ -209,7 +209,7 @@ def test_declared_transition_requires_backup_gate_before_mutation(monkeypatch, t
                                     "--from-version", "5.0.1", "--pg-config", str(tmp_path / "fixture.json")])
     monkeypatch.setattr(runner, "_load_database_config", lambda *_args: {})
     monkeypatch.setattr(runner, "_connect_for_preflight", lambda *_args: Connection())
-    monkeypatch.setattr(runner, "release_script_names", lambda *_args: list(PHASE_STEPS))
+    monkeypatch.setattr(runner, "release_script_names", lambda *_args, **_kwargs: list(PHASE_STEPS))
     monkeypatch.setattr(runner, "_preflight", lambda *_args: {"passed": True, "scripts": []})
     monkeypatch.setattr(runner, "_apply_pg", lambda *_args: pytest.fail("Missing backup acknowledgement must block mutation"))
     assert runner.main() == 1

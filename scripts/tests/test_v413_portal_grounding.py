@@ -3,6 +3,13 @@ from unittest.mock import Mock
 from decimal import Decimal
 import pytest
 from lib import portal_grounding as portal, knowledge_grounding as knowledge
+from lib import knowledge_candidates
+from . import candidate_sqlite
+
+
+@pytest.fixture(autouse=True)
+def portable_candidate_adapter(monkeypatch):
+    monkeypatch.setattr(knowledge_candidates, 'native', candidate_sqlite.adapter())
 
 
 def test_policy_version_is_json_serializable_across_drivers(monkeypatch):
@@ -13,6 +20,24 @@ def test_policy_version_is_json_serializable_across_drivers(monkeypatch):
     result = portal.policy()
     assert type(result["version"]) is int
     assert json.loads(json.dumps(result))["version"] == 7
+
+
+@pytest.mark.parametrize('agent,readers', [('human', ['human']), ('agent', ['human', 'agent'])])
+def test_citation_checks_each_distinct_reader_and_never_reuses_a_prior_authorization(monkeypatch,agent,readers):
+    monkeypatch.setattr(knowledge, 'require_reader', Mock())
+    allowed={'human','agent'}
+    calls=[]
+    def read(entity_id,principal_id,**kwargs):
+        calls.append(principal_id)
+        return dict(entity_id=entity_id,title='Scoped source',content='Retain its exception.',status='ACTIVE') if principal_id in allowed else None
+    monkeypatch.setattr(knowledge.knowledge_api,'get_knowledge',read)
+    result=knowledge.citation('human',agent,'source')
+    assert result['content']=='Retain its exception.' and calls==readers
+    calls.clear()
+    allowed.remove(agent)
+    with pytest.raises(PermissionError,match='unavailable'):
+        knowledge.citation('human',agent,'source',result['digest'])
+    assert calls==readers
 
 
 @pytest.fixture
@@ -179,6 +204,7 @@ def test_chinese_company_query_does_not_match_generic_company_text(monkeypatch, 
     db.executemany('INSERT INTO ENTITIES VALUES (?, ?, ?, NULL, ?, ?, ?, ?)', [
         ('unrelated', 'KNOWLEDGE', 'ACTIVE', '川序数据库事实与安全边界', '', '公司知识通过数据库权限隔离。', '2026-09-23'),
         ('product', 'KNOWLEDGE', 'ACTIVE', '川序平台', '', '平台功能介绍', '2026-09-23')])
+    candidate_sqlite.schema(db)
     monkeypatch.setattr(knowledge, 'require_reader', Mock())
     monkeypatch.setattr(knowledge.knowledge_api, 'knowledge_access_predicate', lambda *_: '1=1')
     monkeypatch.setattr(knowledge.connection, 'DATABASE_DIALECT', 'pg')
@@ -188,7 +214,7 @@ def test_chinese_company_query_does_not_match_generic_company_text(monkeypatch, 
     try:
         assert knowledge.search('human', 'agent', question)['status'] == 'NO_MATCH'
         source.assert_not_called()
-        db.execute('INSERT INTO ENTITIES VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
+        db.execute('INSERT INTO ENTITIES(ENTITY_ID,ENTITY_TYPE,STATUS,EXPIRES_AT,TITLE,SUMMARY,CONTENT,UPDATED_AT) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
                    ('relevant', 'KNOWLEDGE', 'ACTIVE', '甲骨文公司简介', '', '数据库厂商简介', '2026-09-23'))
         result = knowledge.search('human', 'agent', question)
         assert [item['entity_id'] for item in result['items']] == ['relevant']
@@ -220,6 +246,7 @@ def test_complete_subject_sql_and_source_boundaries(monkeypatch, question, unrel
     db.execute('CREATE TABLE ENTITIES (ENTITY_ID TEXT, ENTITY_TYPE TEXT, STATUS TEXT, EXPIRES_AT TEXT, TITLE TEXT, SUMMARY TEXT, CONTENT TEXT, UPDATED_AT TEXT)')
     for key, title, summary in [('wrong', unrelated, ''), ('summary_only', 'Unrelated source', relevant), ('right', relevant, '')]:
         db.execute("INSERT INTO ENTITIES VALUES (?, 'KNOWLEDGE', 'ACTIVE', NULL, ?, ?, '', '2026-09-23')", (key, title, summary))
+    candidate_sqlite.schema(db)
     monkeypatch.setattr(knowledge, 'require_reader', Mock())
     monkeypatch.setattr(knowledge.knowledge_api, 'knowledge_access_predicate', lambda *_: '1=1')
     monkeypatch.setattr(knowledge.connection, 'DATABASE_DIALECT', 'pg')

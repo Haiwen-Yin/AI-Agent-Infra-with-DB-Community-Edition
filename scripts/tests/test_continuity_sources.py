@@ -9,12 +9,15 @@ from .test_continuity_work import database
 @pytest.fixture
 def memory_source(database,monkeypatch):
     db=database
+    from lib import continuity_candidates
+    for statement in continuity_candidates.schema_statements('pg'):
+        db.execute(statement)
     db.execute('CREATE TABLE CX_MEMORY_FAMILIES(FAMILY_ID TEXT,CURRENT_VERSION_ID TEXT)')
     db.execute('CREATE TABLE CX_MEMORY_TIME_FACTS(VERSION_ID TEXT,APPLIES_FROM TIMESTAMP,APPLIES_UNTIL TIMESTAMP)')
     db.execute('CREATE TABLE CX_MEMORY_VERSIONS(VERSION_ID TEXT,FAMILY_ID TEXT,TITLE TEXT,BODY_TEXT TEXT,CONTENT_DIGEST TEXT,'
-               'MEMORY_TYPE TEXT,MEMORY_SCOPE TEXT,CLASSIFICATION TEXT,LIFECYCLE_STATE TEXT,SECURITY_DOMAIN_ID TEXT,OWNER_PRINCIPAL_ID TEXT,VALID_UNTIL TIMESTAMP)')
+               'MEMORY_TYPE TEXT,MEMORY_SCOPE TEXT,CLASSIFICATION TEXT,LIFECYCLE_STATE TEXT,SECURITY_DOMAIN_ID TEXT,OWNER_PRINCIPAL_ID TEXT,VALID_UNTIL TIMESTAMP,VERSION_NUMBER INTEGER)')
     digest=memory._digest('Fact','Synthetic body','FACT','AGENT_MEMORY','INTERNAL')
-    db.execute("INSERT INTO CX_MEMORY_VERSIONS VALUES('v1','f1','Fact','Synthetic body',?,'FACT','AGENT_MEMORY','INTERNAL','ACTIVE','domain','owner',NULL)",(digest,))
+    db.execute("INSERT INTO CX_MEMORY_VERSIONS VALUES('v1','f1','Fact','Synthetic body',?,'FACT','AGENT_MEMORY','INTERNAL','ACTIVE','domain','owner',NULL,1)",(digest,))
     db.execute("INSERT INTO CX_MEMORY_FAMILIES VALUES('f1','v1')")
     db.commit()
     # Use the real memory authorization implementation with its DB query routed

@@ -6,6 +6,7 @@ import ContinuityDiagnostics from "./ContinuityDiagnostics";
 import ContinuityAgentAssets from "./ContinuityAgentAssets";
 import ContinuityNotes from "./ContinuityNotes";
 import ContinuityQuality from "./ContinuityQuality";
+import PlatformLearning from "./PlatformLearning";
 
 type Row = Record<string, any>;
 type SourceRef = { family: string; entity_id: string; revision_id: string; content_digest: string };
@@ -181,6 +182,7 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
   const field = (name: string, zh: string, en: string, value = "", multiline = false) => <label className="workbench-field"><span>{text(zh, en)}</span>{multiline ? <textarea name={name} required defaultValue={value} maxLength={4000} rows={3} /> : <input name={name} required defaultValue={value} maxLength={4000} />}</label>;
   const recipientCanRespond = !!handoff && handoff.to_principal_id === principalId && !handoff.expired && handoff.executable !== false;
   return <section className="page-stack continuity-workbench" aria-label={text("工作交接", "Work continuity")}>
+    <PlatformLearning request={request} text={text} />
     <div className="page-toolbar"><label>{text("安全域", "Security Domain")}<select value={domain} disabled={busy} onChange={e => selectDomain(e.target.value)}><option value="">{text("请选择安全域", "Select a Security Domain")}</option>{domains.map(item => <option key={item.security_domain_id} value={item.security_domain_id}>{item.display_name || item.domain_name || item.security_domain_id}</option>)}</select></label><button type="button" className="small-button" disabled={busy || !domain} onClick={() => void run(() => load(domain))}><RefreshCw size={14} />{text("刷新", "Refresh")}</button></div>
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {domainCursor && <button type="button" className="small-button" disabled={busy} onClick={() => void run(() => moreChoices("domain"))}>{text("加载更多安全域", "Load more domains")}</button>}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pytest
 from pathlib import Path
 
@@ -303,6 +304,50 @@ def test_representation_selection_deduplicates_families_and_respects_budget(monk
     monkeypatch.setattr(lifecycle, '_require_memory_access', lambda *args,**kwargs:None)
     result = lifecycle.select_representations("HP-1", ["MV-1", "MV-2"], token_budget=10)
     assert len(result) == 1 and result[0]["representation_id"] == "MR-1"
+
+
+def test_derived_representation_defaults_to_explicit_source_lineage(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(lifecycle, "execute", lambda sql, params: captured.update(params) or 1)
+    lifecycle.create_representation("MV-1", "SHORT_SUMMARY", "brief")
+    assert json.loads(captured["source_versions"]) == ["MV-1"]
+
+
+def test_representation_selection_drops_derived_rows_with_denied_sources(monkeypatch):
+    target = {"version_id": "MV-1", "family_id": "MF-1", "lifecycle_state": "ACTIVE",
+              "classification": "INTERNAL", "security_domain_id": "domain", "owner_principal_id": "owner"}
+    source = {"version_id": "MV-secret", "family_id": "MF-secret", "lifecycle_state": "ACTIVE",
+              "classification": "INTERNAL", "security_domain_id": "domain", "owner_principal_id": "owner"}
+    representation = {"representation_id": "MR-derived", "version_id": "MV-1",
+                      "representation_type": "SHORT_SUMMARY", "body_text": "secret summary",
+                      "token_count": 4, "content_digest": "digest", "created_at": "2026-10-21",
+                      "source_version_ids_json": '["MV-secret"]'}
+
+    class Tx:
+        def query(self, sql, params):
+            values = {str(value) for value in params.values()}
+            if "CX_MEMORY_REPRESENTATIONS r" in sql:
+                return [representation]
+            if "FROM CX_MEMORY_VERSIONS" in sql:
+                return [row for row in (target, source) if row["version_id"] in values]
+            return []
+
+        def query_one(self, _sql, _params):
+            return None
+
+        def execute_many(self, _sql, _rows):
+            return 1
+
+    from contextlib import nullcontext
+    monkeypatch.setattr(lifecycle, "execute_transaction_callback", lambda callback: callback(Tx()))
+    from lib import continuity_work, context_selection
+    monkeypatch.setattr(continuity_work, "_lock_actor", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(context_selection, "permission_inputs", lambda *_args, **_kwargs: nullcontext())
+    monkeypatch.setattr(lifecycle, "_authorized_version",
+                        lambda _principal, version_id, **kwargs: (_ for _ in ()).throw(
+                            lifecycle.MemoryLifecycleError("ACCESS_DENIED", "memory is unavailable")
+                        ) if version_id == "MV-secret" else kwargs["_version"])
+    assert lifecycle.select_representations("owner", ["MV-1"], token_budget=20) == []
 
 
 def test_job_creation_freezes_bounded_item_partition(monkeypatch):

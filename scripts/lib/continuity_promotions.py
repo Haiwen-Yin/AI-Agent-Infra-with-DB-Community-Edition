@@ -1,10 +1,214 @@
 """Atomic candidate promotion into existing, typed artifact business entities."""
 import json
 import secrets
+from contextvars import ContextVar
 
 from . import connection, continuity_work as work, identity_api
 from .continuity_contracts import content_digest, KnowledgeProposal, SkillProposal, ExperienceProposal
 from .continuity_state import ContinuityError, ContinuityConflict
+
+_reading_origins=ContextVar('artifact_original_source_reads',default=())
+
+
+def original_source_contexts(actors,native_entity_ids,*,transaction=None):
+    """Bounded batch authority for projections, excluding denied originals.
+
+    Ordinary legacy/manual rows have no candidate lineage. Read failures and
+    integrity errors propagate; they cannot become an empty authorized result.
+    No original-source body or permission decision is cached across calls.
+    """
+    keys=list(dict.fromkeys(str(key) for key in native_entity_ids))
+    actors=tuple(dict.fromkeys(actors))
+    if not keys:return {}
+    if len(keys)>500 or not 1<=len(actors)<=2 or any(not actor for actor in actors):
+        raise ValueError('A bounded authenticated projection read is required')
+    params={f'projection_id{i}':key for i,key in enumerate(keys)}
+    query=transaction.query if transaction is not None else connection.execute_query
+    rows=query('SELECT r.NATIVE_ENTITY_ID FROM CX_CONTINUITY_ARTIFACT_REVS r '
+        "JOIN CX_CONTINUITY_ARTIFACTS a ON a.ARTIFACT_ID=r.ARTIFACT_ID WHERE a.FAMILY='KNOWLEDGE' "
+        'AND r.NATIVE_ENTITY_ID IN ('+','.join(':'+name for name in params)+')',params)
+    if not rows:return {}
+    def read(tx):
+        from .agent_source_sync import resolve_source_batch
+        contexts={}
+        groups={}
+        for row in rows:
+            key=str(next(value for name,value in row.items() if name.lower()=='native_entity_id'))
+            try:
+                projection=_original_projection(tx,key)
+                if projection is None:
+                    contexts[key]=None
+                    continue
+                domain=projection['security_domain_id']
+                # Current domain authorization precedes all candidate bodies.
+                if domain not in groups:
+                    groups[domain]=[]
+                    try:
+                        for actor in actors:work._authorize(tx,actor,domain,write=False)
+                    except PermissionError:
+                        groups[domain]=None
+                if groups[domain] is None:
+                    contexts[key]=None
+                    continue
+                _check_origin_stack(projection)
+                payload,bound_digest=_original_payload(tx,projection)
+                if payload.replaces or any(source.family.value!='SOURCE' for source in payload.sources):
+                    # Rich/recursive families retain their ordinary resolver,
+                    # cycle detection and exact replacement-source checks.
+                    contexts[key]=require_original_sources(tx,actors[0],key)
+                    for actor in actors[1:]:require_original_sources(tx,actor,key)
+                else:
+                    groups[domain].append((key,projection,payload,bound_digest))
+            except PermissionError:
+                contexts[key]=None
+        for domain,entries in groups.items():
+            if not entries:continue
+            # Candidate limits and per-candidate source limits are independent;
+            # never turn their product into an unbounded body read.
+            pending=list(entries)
+            while pending:
+                batch=[];count=0
+                while pending and count+len(pending[0][2].sources)<=500:
+                    entry=pending.pop(0);batch.append(entry);count+=len(entry[2].sources)
+                refs=[source for _,_,payload,_ in batch for source in payload.sources]
+                originals=None;allowed=[True]*len(refs)
+                for actor in actors:
+                    current=resolve_source_batch(tx,actor,domain,refs,omit_denied=True)
+                    allowed=[prior and item is not None for prior,item in zip(allowed,current)]
+                    if originals is None:originals=current
+                    elif any(before!=after for before,after in zip(originals,current)
+                             if before is not None and after is not None):
+                        raise ContinuityConflict('STALE_CONTENT','Source evidence changed between readers')
+                offset=0
+                for key,projection,payload,bound_digest in batch:
+                    end=offset+len(payload.sources)
+                    if _original_projection(tx,key)!=projection or _original_payload(tx,projection)!=(payload,bound_digest):
+                        raise ContinuityConflict('STALE_CONTENT','Artifact provenance changed during source loading')
+                    contexts[key]=(_original_context(projection,payload,bound_digest,originals[offset:end])
+                        if all(allowed[offset:end]) else None)
+                    offset=end
+            try:
+                for actor in actors:work._authorize(tx,actor,domain,write=False)
+            except PermissionError:
+                for key,_,_,_ in entries:contexts[key]=None
+        return contexts
+    return read(transaction) if transaction is not None else connection.execute_transaction_callback(read)
+
+
+def _original_projection(tx,native_entity_id):
+    return tx.query_one("SELECT a.ARTIFACT_ID,a.FAMILY,a.SECURITY_DOMAIN_ID,a.STATUS,r.REVISION_ID,"
+        "r.CONTENT_DIGEST,r.CANDIDATE_ID,r.CANDIDATE_REVISION_NO FROM CX_CONTINUITY_ARTIFACT_REVS r "
+        "JOIN CX_CONTINUITY_ARTIFACTS a ON a.ARTIFACT_ID=r.ARTIFACT_ID WHERE r.NATIVE_ENTITY_ID=:entity",
+        {'entity':str(native_entity_id)})
+
+
+def _check_origin_stack(row):
+    stack=_reading_origins.get()
+    key=(row['artifact_id'],row['revision_id'])
+    if key in stack or len(stack)>=16:
+        raise ContinuityError('CYCLIC_SOURCE','Artifact source lineage contains a cycle or exceeds its bound')
+    if row['status']!='ACTIVE':
+        raise PermissionError('Artifact source is unavailable')
+    return stack+(key,)
+
+
+def _original_payload(tx,row):
+    from . import continuity_candidates as candidates
+    root=tx.query_one('SELECT * FROM CX_ARTIFACT_CANDIDATES WHERE CANDIDATE_ID=:candidate',
+            {'candidate':row['candidate_id']})
+    if (not root or root['family']!=row['family'] or root['security_domain_id']!=row['security_domain_id']
+                or root['status']!='APPROVED' or root['result_entity_id']!=row['artifact_id']
+                or root['result_revision_id']!=row['revision_id']):
+        raise ContinuityError('INTEGRITY_ERROR','Artifact candidate provenance is unavailable')
+    payload,bound_digest=candidates._read(tx,root,int(row['candidate_revision_no']))
+    review=tx.query_one("SELECT REVIEWER_ID,CONTENT_DIGEST FROM CX_CANDIDATE_REVIEWS "
+            "WHERE CANDIDATE_ID=:candidate AND REVISION_NO=:revision AND DECISION='APPROVED'",
+            {'candidate':row['candidate_id'],'revision':row['candidate_revision_no']})
+    if (not review or review['reviewer_id']==root['proposed_by'] or review['content_digest']!=bound_digest
+                or content_digest(payload.content)!=row['content_digest']):
+        raise ContinuityError('INTEGRITY_ERROR','Artifact original review failed integrity validation')
+    return payload,bound_digest
+
+
+def _original_context(row,payload,bound_digest,originals):
+    return dict(candidate_id=row['candidate_id'],candidate_revision=int(row['candidate_revision_no']),
+            candidate_digest=bound_digest,intake=payload.intake.model_dump(mode='json') if payload.intake else None,
+            sources=[item['source'] for item in originals],
+            provenance=[dict(source=item['source'],origin=item['provenance']) for item in originals if item.get('provenance')],
+            **({'derived_sources':[dict(source=item['source'],source_context=item['source_context'])
+                for item in originals if item.get('source_context')]}
+                if any(item.get('source_context') for item in originals) else {}))
+
+
+def require_original_sources(tx,actor,native_entity_id):
+    """Publication retains each reader's current original source grants.
+
+    Manual/built-in rows without a candidate retain their original contracts.
+    No permission decision or original body is retained across calls.
+    """
+    from . import continuity_candidates as candidates
+    row=_original_projection(tx,native_entity_id)
+    if row is None:return
+    token=_reading_origins.set(_check_origin_stack(row))
+    try:
+        work._authorize(tx,actor,row['security_domain_id'],write=False)
+        payload,bound_digest=_original_payload(tx,row)
+        originals=candidates._sources(tx,actor,row['security_domain_id'],payload)
+        return _original_context(row,payload,bound_digest,originals)
+    finally:
+        _reading_origins.reset(token)
+
+
+def require_memory_original_sources(tx,actor,family_id,version_id,record):
+    """Candidate-derived Memory retains the original candidate's authority.
+
+    Resolve through authoritative result bindings, never mutable SOURCE_REF or
+    the proposer's identity. Manual successors retain the most recent reviewed
+    predecessor's origins. A later explicit candidate establishes its own exact
+    source contract; it does not retroactively constrain earlier versions.
+    """
+    from . import continuity_candidates as candidates, memory_lifecycle as memory
+    root=tx.query_one('SELECT CANDIDATE_ID,FAMILY,SECURITY_DOMAIN_ID,STATUS,PROPOSED_BY,CURRENT_REVISION_NO, '
+        'ORIGIN_VERSION_ID,ORIGIN_DIGEST,ORIGIN_CLASSIFICATION FROM '
+        '(SELECT c.CANDIDATE_ID,c.FAMILY,c.SECURITY_DOMAIN_ID,c.STATUS,c.PROPOSED_BY,c.CURRENT_REVISION_NO, '
+        'v.VERSION_ID AS ORIGIN_VERSION_ID,v.CONTENT_DIGEST AS ORIGIN_DIGEST,v.CLASSIFICATION AS ORIGIN_CLASSIFICATION, '
+        'ROW_NUMBER() OVER (ORDER BY v.VERSION_NUMBER DESC) AS ORIGIN_POSITION '
+        'FROM CX_ARTIFACT_CANDIDATES c JOIN CX_MEMORY_VERSIONS v ON v.VERSION_ID=c.RESULT_REVISION_ID '
+        'AND v.FAMILY_ID=c.RESULT_ENTITY_ID JOIN CX_MEMORY_VERSIONS target ON target.FAMILY_ID=v.FAMILY_ID '
+        "WHERE c.FAMILY='MEMORY' AND c.RESULT_ENTITY_ID=:family AND target.VERSION_ID=:revision "
+        'AND v.VERSION_NUMBER<=target.VERSION_NUMBER) cx_memory_origin WHERE ORIGIN_POSITION=1',
+        {'family':family_id,'revision':version_id})
+    if root is None:return
+    key=('MEMORY',family_id,version_id)
+    stack=_reading_origins.get()
+    if key in stack or len(stack)>=16:
+        raise ContinuityError('CYCLIC_SOURCE','Memory source lineage contains a cycle or exceeds its bound')
+    token=_reading_origins.set(stack+(key,))
+    try:
+        if (root['status']!='APPROVED' or record['security_domain_id']!=root['security_domain_id']):
+            raise ContinuityError('INTEGRITY_ERROR','Memory candidate provenance is unavailable')
+        work._authorize(tx,actor,root['security_domain_id'],write=False)
+        payload,bound_digest=candidates._read(tx,root,int(root['current_revision_no']))
+        review=tx.query_one("SELECT REVIEWER_ID,CONTENT_DIGEST FROM CX_CANDIDATE_REVIEWS "
+            "WHERE CANDIDATE_ID=:candidate AND REVISION_NO=:revision AND DECISION='APPROVED'",
+            {'candidate':root['candidate_id'],'revision':root['current_revision_no']})
+        expected=memory._digest(payload.content.title,payload.content.body,payload.content.memory_type,
+            'AGENT_MEMORY',root['origin_classification'])
+        if (not review or review['reviewer_id']==root['proposed_by'] or review['content_digest']!=bound_digest
+                or expected!=root['origin_digest']):
+            raise ContinuityError('INTEGRITY_ERROR','Memory original review failed integrity validation')
+        originals=candidates._sources(tx,actor,root['security_domain_id'],payload)
+        return dict(candidate_id=root['candidate_id'],candidate_revision=int(root['current_revision_no']),
+            candidate_digest=bound_digest,sources=[item['source'] for item in originals],
+            **({'inherited_memory_origin':dict(family='MEMORY',entity_id=family_id,
+                revision_id=root['origin_version_id'],content_digest=root['origin_digest'])}
+                if root['origin_version_id']!=version_id else {}),
+            provenance=[dict(source=item['source'],origin=item['provenance']) for item in originals if item.get('provenance')],
+            **({'derived_sources':[dict(source=item['source'],source_context=item['source_context'])
+                for item in originals if item.get('source_context')]}
+                if any(item.get('source_context') for item in originals) else {}))
+    finally:
+        _reading_origins.reset(token)
 
 
 def schema_statements(dialect):
@@ -89,7 +293,9 @@ def _native_entity(tx,actor,root,payload,reason):
     if len(content.title)>500:
         raise ContinuityError('TITLE_TOO_LONG','Artifact titles are limited to 500 characters')
     if content.family=='KNOWLEDGE':
-        tx.execute("INSERT INTO KNOWLEDGE_META(ENTITY_ID,ENTITY_TYPE,REVIEW_COUNT) VALUES(:entity,'KNOWLEDGE',0)",{'entity':entity_id})
+        tx.execute("INSERT INTO KNOWLEDGE_META(ENTITY_ID,ENTITY_TYPE,REVIEW_COUNT,DOMAIN,TOPIC) VALUES(:entity,'KNOWLEDGE',0,:domain_name,:topic)",
+                   {'entity':entity_id,'domain_name':payload.intake.applicable_product if payload.intake else None,
+                    'topic':payload.intake.subject if payload.intake else None})
         tx.execute("INSERT INTO CX_KNOWLEDGE_ACCESS_POLICIES(POLICY_ID,ENTITY_ID,SCOPE_TYPE,PRINCIPAL_ID,CREATED_BY,REASON) "
                    "VALUES(:policy,:entity,'PRINCIPAL_PRIVATE',:owner,:actor,:reason)",
                    {'policy':work._id('KAP'),'entity':str(entity_id),'owner':root['proposed_by'],'actor':actor,'reason':reason})
@@ -156,7 +362,8 @@ def resolve_artifact(tx,actor,domain,source):
         raise PermissionError('Source access denied')
     action={'KNOWLEDGE':'knowledge.read','EXPERIENCE':'knowledge.read','SKILL':'skills.read'}[source.family.value]
     access=identity_api.effective_access(actor,action,resource={'security_domain_id':domain})
-    if access.get('decision')!='ALLOW' or (actor!=root['owner_principal_id'] and 'ALL' not in access.get('scopes',[])):
+    if access.get('decision')!='ALLOW' or (source.family.value!='KNOWLEDGE'
+            and actor!=root['owner_principal_id'] and 'ALL' not in access.get('scopes',[])):
         raise PermissionError('Source access denied')
     if source.family.value=='KNOWLEDGE':
         from .knowledge_api import knowledge_access_predicate
@@ -169,10 +376,10 @@ def resolve_artifact(tx,actor,domain,source):
                              knowledge_access_predicate('e',':actor'),{'entity':entity_id,'actor':actor})
         if not allowed:
             raise PermissionError('Source access denied')
-    return _artifact_payload(tx,source,domain)
+    return _artifact_payload(tx,source,domain,actor=actor)
 
 
-def _artifact_payload(tx,source,domain):
+def _artifact_payload(tx,source,domain,*,actor):
     """Read native fields after ordinary-reader or publication authorization."""
     from .continuity_sources import _render
     revision=tx.query_one("SELECT * FROM CX_CONTINUITY_ARTIFACT_REVS WHERE ARTIFACT_ID=:artifact AND REVISION_ID=:revision",
@@ -180,6 +387,7 @@ def _artifact_payload(tx,source,domain):
     if not revision or revision['content_digest']!=source.content_digest:
         raise ContinuityConflict('STALE_SOURCE','The exact artifact revision is unavailable')
     native=revision['native_entity_id']
+    source_context=require_original_sources(tx,actor,native)
     entity_id=int(native) if connection.DATABASE_DIALECT in {'pg','postgresql'} else native
     entity=tx.query_one("SELECT TITLE,CONTENT FROM ENTITIES WHERE ENTITY_ID=:entity AND ENTITY_TYPE=:family AND STATUS='ACTIVE' "
                         "AND (EXPIRES_AT IS NULL OR EXPIRES_AT>CURRENT_TIMESTAMP)",{'entity':entity_id,'family':source.family.value})
@@ -207,5 +415,8 @@ def _artifact_payload(tx,source,domain):
         content=ExperienceProposal(family='EXPERIENCE',title=title,**{key:text(value) for key,value in meta.items()})
     if content_digest(content)!=source.content_digest:
         raise ContinuityError('INTEGRITY_ERROR','Native artifact failed integrity validation')
+    # Keep exact historical text for already frozen assemblies. Applicability
+    # is a separate envelope, not an unversioned change to the source body.
     return {'source':source.model_dump(mode='json'),'text':_render(content.model_dump(mode='json')),
-            'content_digest':source.content_digest,'authorized_scope':domain}
+            'content_digest':source.content_digest,'authorized_scope':domain,
+            **({'source_context':source_context} if source_context else {})}

@@ -1,0 +1,19 @@
+{
+  "columns": {
+    "COMPLETED_AT": {
+      "default": null,
+      "nullable": true,
+      "type": "TIMESTAMP"
+    },
+    "STARTED_AT": {
+      "default": null,
+      "nullable": true,
+      "type": "TIMESTAMP"
+    }
+  },
+  "database": "pg",
+  "grants": "UNCHANGED",
+  "historical_backfill": false,
+  "schema": "v503-task-step-timestamps/v1",
+  "table": "TASK_STEPS"
+}

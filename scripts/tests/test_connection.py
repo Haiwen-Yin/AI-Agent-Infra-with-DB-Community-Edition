@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Connection Pool Tests"""
+"""AI Agent Infra v5.0.3 - Connection Pool Tests"""
 
 import sys
 import os
@@ -11,10 +11,14 @@ from lib.connection import (
 
 
 def test_pool_init():
+    from lib.config import get_config
+    configured = get_config().database
     pool = get_pool()
     assert pool is not None
-    assert pool.min == 2
-    assert pool.max == 5
+    expected_min = configured.min_conn if hasattr(configured, 'min_conn') else configured.pool_min
+    expected_max = configured.max_conn if hasattr(configured, 'max_conn') else configured.pool_max
+    assert pool.min == expected_min
+    assert pool.max == expected_max
     print("PASS: test_pool_init")
 
 

@@ -256,6 +256,25 @@ V502_NATIVE_MIGRATION_SCRIPTS = (
     "105_v5_0_1_answer_quality.sql", *V502_RUNTIME_MIGRATION_SCRIPTS,
 )
 V502_PG_APPROVAL_REPAIR_SCRIPT = "110_v5_0_2_pg_approval_entity_repair.sql"
+V503_RUNTIME_MIGRATION_SCRIPTS = ("111_v5_0_3_knowledge_intake.sql","112_v5_0_3_native_knowledge_governance.sql","113_v5_0_3_authenticated_knowledge_write.sql","114_v5_0_3_legacy_shared_knowledge_write.sql")
+V503_YASHAN_GUARD_SCRIPT = '115_v5_0_3_yashandb_lob_knowledge_write.sql'
+V503_YASHAN_SEARCH_SCRIPT = '116_v5_0_3_yashandb_knowledge_body_search.sql'
+V503_TASK_TIMESTAMPS_SCRIPT = '117_v5_0_3_task_step_timestamps.sql'
+V503_ORACLE_COLLAB_SCRIPT = '118_v5_0_3_oracle_collab_document_key.sql'
+
+
+def v503_runtime_migration_scripts(database: str) -> tuple[str, ...]:
+    if database == 'yashandb':
+        # Retain the earlier draft SQL, but never execute its unsupported
+        # UPDATE OF CLOB syntax on fresh installs or declared upgrades.
+        return (V503_RUNTIME_MIGRATION_SCRIPTS[0], V503_YASHAN_GUARD_SCRIPT, V503_YASHAN_SEARCH_SCRIPT, V503_TASK_TIMESTAMPS_SCRIPT)
+    if database not in {'pg','postgresql','oracle'}:
+        raise ValueError('Unknown v5.0.3 database backend')
+    return V503_RUNTIME_MIGRATION_SCRIPTS + (V503_TASK_TIMESTAMPS_SCRIPT,) + ((V503_ORACLE_COLLAB_SCRIPT,) if database=='oracle' else ())
+
+
+def v503_migration_scripts(database: str) -> tuple[str, ...]:
+    return v502_migration_scripts(database) + v503_runtime_migration_scripts(database)
 
 
 def v502_runtime_migration_scripts(database: str) -> tuple[str, ...]:
@@ -1845,6 +1864,63 @@ def validate_v502_static_contract(database: str, scripts: Sequence[Path], editio
             "passed": bool(base.get("passed")) and control["passed"]}
 
 
+def validate_v503_static_contract(database: str, scripts: Sequence[Path], edition: str = 'enterprise') -> dict[str, Any]:
+    base = validate_v502_static_contract(database, scripts, edition)
+    selected = {path.name: path for path in scripts}
+    invalid = {}
+    for name in v503_runtime_migration_scripts(database):
+        try:
+            path = selected[name]
+            if not path.is_file():
+                raise OSError('Missing migration')
+            facts = json.loads(path.with_suffix('.schema.json').read_text())
+            if name == V503_ORACLE_COLLAB_SCRIPT:
+                try:
+                    from lib.oracle_collab_document import render
+                except ModuleNotFoundError:
+                    from shared.lib.oracle_collab_document import render
+                _,expected_sql,expected_facts=render()
+                if database!='oracle' or facts!=expected_facts or path.read_text()!=expected_sql:
+                    invalid[name]=['ORACLE_COLLAB_DOCUMENT_KEY_CONTRACT']
+                continue
+            if name == V503_TASK_TIMESTAMPS_SCRIPT:
+                try:
+                    from lib.task_step_timestamps import render
+                except ModuleNotFoundError:
+                    from shared.lib.task_step_timestamps import render
+                _, expected_sql, expected_facts = render(database)
+                if facts != expected_facts or path.read_text() != expected_sql:
+                    invalid[name] = ['TASK_STEP_TIMESTAMPS_CONTRACT']
+                continue
+            if name==V503_YASHAN_SEARCH_SCRIPT:
+                try:
+                    from lib.knowledge_native_governance import render_body_search
+                except ModuleNotFoundError:
+                    from shared.lib.knowledge_native_governance import render_body_search
+                _,expected_sql,expected_facts=render_body_search()
+                if facts!=expected_facts or path.read_text()!=expected_sql:
+                    invalid[name]=['NATIVE_BODY_SEARCH_CONTRACT']
+                continue
+            if name in {*V503_RUNTIME_MIGRATION_SCRIPTS[1:],V503_YASHAN_GUARD_SCRIPT}:
+                try:
+                    from lib.knowledge_native_governance import render
+                except ModuleNotFoundError:
+                    from shared.lib.knowledge_native_governance import render
+                _,expected_sql,expected_facts=render(database,authenticated_login=not name.startswith('112_'),legacy_shared=name.startswith('114_'),all_updates=name==V503_YASHAN_GUARD_SCRIPT)
+                if facts!=expected_facts or path.read_text()!=expected_sql:
+                    invalid[name]=['NATIVE_GOVERNANCE_CONTRACT']
+                continue
+            failures = validate_v502_schema_manifest(facts)
+            if set(facts) != {'CX_KNOWLEDGE_INTAKE'}:
+                failures.append('INTAKE_TABLE_SET')
+            if failures:
+                invalid[name] = failures
+        except (KeyError, OSError, ValueError, TypeError):
+            invalid[name] = ['UNREADABLE_MIGRATION_OR_MANIFEST']
+    return {'database': database, 'v502': base, 'v503_knowledge_intake': {'invalid': invalid, 'passed': not invalid},
+            'passed': bool(base.get('passed')) and not invalid}
+
+
 def _pg_runtime_permission_contract(cursor: Any) -> dict[str, Any]:
     """Read actual PostgreSQL grants; absence of the runtime role is a failure."""
     cursor.execute("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ai_agent_runtime')")
@@ -2515,7 +2591,10 @@ def main() -> int:
     static_contracts: dict[str, dict[str, Any]] = {}
     if requires_v43:
         for database in available_databases:
-            if requires_v502:
+            if at_least((5, 0, 3)):
+                migration_scripts = migration_scripts_for_edition(v503_migration_scripts(database), edition)
+                validator = lambda database, scripts: validate_v503_static_contract(database, scripts, edition)
+            elif requires_v502:
                 migration_scripts = migration_scripts_for_edition(v502_migration_scripts(database), edition)
                 validator = lambda database, scripts: validate_v502_static_contract(database, scripts, edition)
             elif at_least((5, 0, 1)):

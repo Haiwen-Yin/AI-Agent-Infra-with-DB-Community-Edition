@@ -1,9 +1,9 @@
 {
-  "version": "5.0.2",
-  "database": "yashandb",
+  "version": "5.0.3",
+  "database": "oracle",
   "fresh_install": true,
   "deployment": "bootstrap-deployment-agent",
-  "required_terminal_migration": "109_v5_0_2_observed_answer_reviews.sql",
+  "required_terminal_migration": "118_v5_0_3_oracle_collab_document_key.sql",
   "historical_chain": "retained-for-audit",
   "withdrawn_upgrade_sources": [
     "4.4.8"

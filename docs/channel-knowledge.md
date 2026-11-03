@@ -1,4 +1,4 @@
-# v5.0.2 Channel and Portal knowledge answers
+# v5.0.3 Channel and Portal knowledge answers
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -15,6 +15,24 @@ Unavailable channels can degrade to authorized text retrieval with actual
 strategy and reason recorded; permission failure never expands the source scope.
 Rank fusion is not confidence. Separate evidence assessment checks subject,
 coverage and explicit contradictions before selecting sources.
+
+Declared product, version, decision status and applicability instant filter
+native candidates before channel limits; original source chains are checked
+again when loading and using evidence. Copies with equal text and applicability
+follow distinct facts in the bounded pool. Redundant bodies are removed after
+source reauthorization. Conflicting text, distinct applicability, exact graph
+endpoints and explicitly selected source identities remain separate. Repetition
+does not establish confidence.
+
+Natural-language questions can refer to a procedure without repeating its
+wording. Authorized references may remain available for semantic review when
+literal matching cannot establish claim coverage. Their presence is not a
+verified answer: the response must check the actual text, preserve subject,
+version, time and exceptions, and distinguish supported facts from unresolved
+claims. Expired sources and incompatible declared versions remain excluded.
+Explicit document-identity requests, named-claim lists and company scalar facts
+retain their strict evidence checks. Unassessed references do not become
+general-model gap filling; model disclosure approval is still required.
 
 Partial coverage is `PARTIAL_MATCH`; missing evidence is `NO_MATCH`. Ambiguous
 database/vendor subjects request clarification, and explicit contradictions

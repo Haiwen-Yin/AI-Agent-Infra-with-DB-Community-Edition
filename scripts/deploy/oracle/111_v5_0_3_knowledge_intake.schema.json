@@ -1,0 +1,69 @@
+{
+  "CX_KNOWLEDGE_INTAKE": {
+    "check_expressions": [
+      "REVISION_NO>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "CANDIDATE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "METADATA_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "METADATA_JSON": {
+        "default": null,
+        "not_null": true,
+        "type": "CLOB"
+      },
+      "POLICY_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REVISION_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "CANDIDATE_ID",
+      "REVISION_NO",
+      "POLICY_VERSION",
+      "METADATA_JSON",
+      "METADATA_DIGEST"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "CANDIDATE_ID",
+          "REVISION_NO"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CANDIDATE_ID",
+          "REVISION_NO"
+        ],
+        "CX_CANDIDATE_KNOWLEDGE",
+        [
+          "CANDIDATE_ID",
+          "REVISION_NO"
+        ]
+      ]
+    ],
+    "trigger": "CX111_E0E1C6EF1B4A1B8A",
+    "trigger_body": "BEGIN IF DELETING OR UPDATING('CANDIDATE_ID') OR UPDATING('REVISION_NO') OR UPDATING('POLICY_VERSION') OR UPDATING('METADATA_JSON') OR UPDATING('METADATA_DIGEST') THEN RAISE_APPLICATION_ERROR(-20906,'Runtime evidence is immutable'); END IF; END;"
+  }
+}

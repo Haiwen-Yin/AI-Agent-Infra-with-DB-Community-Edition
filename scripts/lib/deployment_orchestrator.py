@@ -681,7 +681,7 @@ def _activate_runtime_config(config_path: Path) -> None:
 
 
 def _migration_apply(target_version: str, database: str, edition: str, config_path: Path,
-                     config: Dict[str, Any], root: Path) -> List[Dict[str, Any]]:
+                     config: Dict[str, Any], root: Path, *, from_version: str | None = None) -> List[Dict[str, Any]]:
     import sys
     scripts_root = root / "scripts"
     if scripts_root.is_dir() and str(scripts_root) not in sys.path:
@@ -692,13 +692,24 @@ def _migration_apply(target_version: str, database: str, edition: str, config_pa
         raise DeploymentError("migration runner is unavailable in this package") from exc
     runner.MIGRATION_VERSION = target_version
     runner.MIGRATION_EDITION = edition.lower()
+    runner.MIGRATION_FROM_VERSION = from_version
     try:
-        names = runner.release_script_names(target_version, database, config_path, edition.lower())
+        names = runner.release_script_names(target_version, database, config_path, edition.lower(),
+                                            from_version=from_version)
     except ValueError as exc:
         raise DeploymentError(str(exc)) from exc
     deploy = _package_deploy_dir(database, root)
     apply = {"oracle": runner._apply_oracle, "pg": runner._apply_pg, "yashandb": runner._apply_yashandb}[database]
     results = []
+    if from_version is not None:
+        probe = _connect(database, config)
+        try:
+            checked = runner._preflight(probe, database, [deploy / name for name in names])
+        finally:
+            probe.close()
+        if not checked.get("passed"):
+            raise DeploymentError("declared stable upgrade preflight failed: " +
+                                  str(checked.get("error_type") or "MigrationContractIncomplete"))
     scripts = runner._order_successor_recovery(database, config, [deploy / name for name in names], version=target_version)
     for script in scripts:
         name = script.name
@@ -878,18 +889,19 @@ def postflight(database: str, edition: str, config: Dict[str, Any], terminal_mig
                 "Resolve failed migration steps before handoff.", {"count": failed},
             ))
 
-            if terminal_migration in {"109_v5_0_2_observed_answer_reviews.sql", "110_v5_0_2_pg_approval_entity_repair.sql"}:
+            if terminal_migration in {"109_v5_0_2_observed_answer_reviews.sql", "110_v5_0_2_pg_approval_entity_repair.sql", "111_v5_0_3_knowledge_intake.sql", "112_v5_0_3_native_knowledge_governance.sql", "113_v5_0_3_authenticated_knowledge_write.sql", "114_v5_0_3_legacy_shared_knowledge_write.sql", "115_v5_0_3_yashandb_lob_knowledge_write.sql", "116_v5_0_3_yashandb_knowledge_body_search.sql", "117_v5_0_3_task_step_timestamps.sql", "118_v5_0_3_oracle_collab_document_key.sql"}:
                 import migration_runner
-                native_tail = migration_runner.v502_native_migration_scripts(database)
+                intake_release = terminal_migration in migration_runner.v503_runtime_migration_scripts(database)
+                native_tail = migration_runner.v502_native_migration_scripts(database) + (migration_runner.v503_runtime_migration_scripts(database) if intake_release else ())
                 checks.append(_check(
                     "V502_BACKEND_TERMINAL", "PASS" if terminal_migration == native_tail[-1] else "BLOCKED",
                     "Packaged terminal matches the selected backend",
-                    "Use the current PostgreSQL 110 or Oracle/YashanDB 109 deployment baseline.",
+                    "Use the selected release's exact backend deployment baseline.",
                     {"expected": native_tail[-1], "actual": terminal_migration},
                 ))
                 deploy_dir = _package_deploy_dir(database, root)
                 for name in native_tail:
-                    complete = migration_runner._step_objects_complete(cursor, database, deploy_dir / name, version="5.0.2")
+                    complete = migration_runner._step_objects_complete(cursor, database, deploy_dir / name, version='5.0.3' if intake_release else '5.0.2')
                     checks.append(_check(
                         "V502_NATIVE_" + name.split('_', 1)[0], "PASS" if complete else "BLOCKED",
                         "Native release schema and security boundary verified",
@@ -1269,7 +1281,8 @@ def _configure_models(raw: Dict[str, Any], run_id: str) -> Dict[str, Any]:
 
 def run(mode: str, *, database: str, edition: str, config_path: Path,
         root: Path = PACKAGE_ROOT, run_id: str = "", target_version: str = "",
-        bootstrap_admin_password: str = "", database_backup_confirmed: bool = False) -> Dict[str, Any]:
+        bootstrap_admin_password: str = "", database_backup_confirmed: bool = False,
+        from_version: str | None = None) -> Dict[str, Any]:
     mode = str(mode or "").upper()
     database = str(database or "").lower()
     edition = str(edition or "").lower()
@@ -1277,6 +1290,9 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
         raise DeploymentError("unsupported deployment mode, database, or edition")
     baseline = release_baseline(database, root)
     target_version = release_version(database, root, target_version)
+    if from_version is not None and (mode not in {"UPGRADE", "RESUME"} or
+                                    (from_version, target_version) != ("5.0.2", "5.0.3")):
+        raise DeploymentError("--from-version requires the supported v5.0.2 to v5.0.3 upgrade")
     terminal_migration = str(baseline["required_terminal_migration"])
     raw = _resolve_sensitive_config(_read_config(config_path))
     config = _database_config(raw, database)
@@ -1300,6 +1316,12 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
     prior = {}
     if resuming:
         prior = journal.load()
+        if from_version is not None and prior.get("from_version") != from_version:
+            raise DeploymentError("deployment journal does not match the declared predecessor")
+        from_version = prior.get("from_version")
+        if from_version is not None and (prior.get("mode") != "UPGRADE" or
+                                        (from_version, target_version) != ("5.0.2", "5.0.3")):
+            raise DeploymentError("deployment journal has an unsupported predecessor")
         if (str(prior.get("database") or "") != database or str(prior.get("edition") or "") != edition
                 or str(prior.get("target_version") or target_version) != target_version):
             raise DeploymentError("deployment journal does not match the requested target")
@@ -1320,6 +1342,7 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
     if any(planned_actions.get(key) != checksum for key, checksum in completed_actions.items()):
         raise DeploymentError("completed deployment action does not match the current plan")
     state = {"run_id": journal.run_id, "mode": mode, "database": database, "edition": edition,
+             "from_version": from_version,
              "target_version": target_version, "terminal_migration": terminal_migration,
              "plan_digest": plan_digest, "completed_actions": completed_actions,
              "initial_preflight": prior.get("initial_preflight"), "updated_at": _now()}
@@ -1368,7 +1391,8 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
             raise DeploymentError("initial administrator setup is incomplete; resume with --admin-password-file")
     state["current_step"] = "MIGRATIONS"
     journal_digest = journal.save(state)
-    migrations = _migration_apply(target_version, database, edition, config_path, config, root)
+    migration_options = {"from_version": from_version} if from_version is not None else {}
+    migrations = _migration_apply(target_version, database, edition, config_path, config, root, **migration_options)
     # A resumed/idempotent migration run may return already-applied entries in
     # ledger order rather than the manifest order.  The terminal contract is
     # satisfied when the packaged terminal script is present and passed; it
@@ -1403,7 +1427,8 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
         raise DeploymentError("scoped platform management knowledge did not pass postflight")
     _record_evidence(journal.run_id, "PLATFORM_KNOWLEDGE_POSTFLIGHT", knowledge_state)
     from . import product_knowledge
-    installed_knowledge = product_knowledge.publish(admin["principal_id"], database, root)
+    installed_knowledge = product_knowledge.install_default(admin["principal_id"], database, root,
+                                                          initialize=mode == 'INITIALIZE')
     _record_evidence(journal.run_id, "INSTALLED_PRODUCT_KNOWLEDGE", installed_knowledge)
     models = _configure_models(raw, journal.run_id)
     verified = postflight(database, edition, config, terminal_migration, root)

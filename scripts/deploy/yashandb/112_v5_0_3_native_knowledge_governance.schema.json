@@ -1,0 +1,41 @@
+{
+  "database": "yashandb",
+  "guards": [
+    {
+      "body": "DECLARE native_agent VARCHAR2(128); governed_intake_required EXCEPTION; n NUMBER; BEGIN native_agent:=SYS_CONTEXT('USERENV','SESSION_USER'); IF native_agent<>'__CX_SCHEMA_OWNER__' THEN IF INSERTING AND :NEW.ENTITY_TYPE='KNOWLEDGE' AND COALESCE(:NEW.VISIBILITY,'?')<>'PRIVATE' THEN RAISE governed_intake_required; END IF; IF UPDATING AND (:OLD.ENTITY_TYPE='KNOWLEDGE' OR :NEW.ENTITY_TYPE='KNOWLEDGE') THEN IF COALESCE(:NEW.ENTITY_TYPE,'?')<>'KNOWLEDGE' OR COALESCE(:NEW.VISIBILITY,'?')<>'PRIVATE' OR COALESCE(:OLD.VISIBILITY,'?')<>'PRIVATE' THEN RAISE governed_intake_required; END IF; END IF; IF (UPDATING OR DELETING) AND :OLD.ENTITY_TYPE='KNOWLEDGE' THEN SELECT COUNT(*) INTO n FROM CX_CONTINUITY_ARTIFACT_REVS r JOIN CX_CONTINUITY_ARTIFACTS a ON a.ARTIFACT_ID=r.ARTIFACT_ID WHERE r.NATIVE_ENTITY_ID=:OLD.ENTITY_ID AND a.FAMILY='KNOWLEDGE'; IF n>0 OR (DELETING AND COALESCE(:OLD.VISIBILITY,'?')<>'PRIVATE') THEN RAISE governed_intake_required; END IF; END IF; END IF; END;",
+      "columns": [
+        "ENTITY_ID",
+        "ENTITY_TYPE",
+        "TITLE",
+        "CONTENT",
+        "SUMMARY",
+        "CATEGORY",
+        "STATUS",
+        "OWNED_BY_AGENT",
+        "VISIBILITY",
+        "WORKSPACE_ID",
+        "EXPIRES_AT"
+      ],
+      "function": null,
+      "table": "ENTITIES",
+      "trigger": "CX503_KNOW_ENTITY_GUARD"
+    },
+    {
+      "body": "DECLARE native_agent VARCHAR2(128); governed_intake_required EXCEPTION; n NUMBER; BEGIN native_agent:=SYS_CONTEXT('USERENV','SESSION_USER'); IF native_agent<>'__CX_SCHEMA_OWNER__' THEN SELECT COUNT(*) INTO n FROM CX_CONTINUITY_ARTIFACT_REVS r JOIN CX_CONTINUITY_ARTIFACTS a ON a.ARTIFACT_ID=r.ARTIFACT_ID WHERE (r.NATIVE_ENTITY_ID=:OLD.ENTITY_ID OR r.NATIVE_ENTITY_ID=:NEW.ENTITY_ID) AND a.FAMILY='KNOWLEDGE'; IF n>0 THEN RAISE governed_intake_required; END IF; END IF; END;",
+      "columns": [],
+      "function": null,
+      "table": "KNOWLEDGE_META",
+      "trigger": "CX503_KNOW_META_GUARD"
+    },
+    {
+      "body": "DECLARE native_agent VARCHAR2(128); governed_intake_required EXCEPTION; n NUMBER; BEGIN native_agent:=SYS_CONTEXT('USERENV','SESSION_USER'); IF native_agent<>'__CX_SCHEMA_OWNER__' THEN RAISE governed_intake_required; END IF; END;",
+      "columns": [],
+      "function": null,
+      "table": "CX_KNOWLEDGE_ACCESS_POLICIES",
+      "trigger": "CX503_KNOW_POLICY_GUARD"
+    }
+  ],
+  "owner_control_plane": "PRESERVED",
+  "policy_table_native_mutation": "DENIED",
+  "schema": "v503-native-knowledge-governance/v1"
+}

@@ -1,0 +1,70 @@
+{
+  "CX_KNOWLEDGE_INTAKE": {
+    "check_expressions": [
+      "REVISION_NO>0"
+    ],
+    "checks": 1,
+    "columns": {
+      "CANDIDATE_ID": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(128)"
+      },
+      "METADATA_DIGEST": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "METADATA_JSON": {
+        "default": null,
+        "not_null": true,
+        "type": "TEXT"
+      },
+      "POLICY_VERSION": {
+        "default": null,
+        "not_null": true,
+        "type": "VARCHAR(64)"
+      },
+      "REVISION_NO": {
+        "default": null,
+        "not_null": true,
+        "type": "INTEGER"
+      }
+    },
+    "grant_policy": "NO_NON_OWNER_GRANTS",
+    "immutable_columns": [
+      "CANDIDATE_ID",
+      "REVISION_NO",
+      "POLICY_VERSION",
+      "METADATA_JSON",
+      "METADATA_DIGEST"
+    ],
+    "indexes": [],
+    "keys": [
+      [
+        "P",
+        [
+          "CANDIDATE_ID",
+          "REVISION_NO"
+        ],
+        "",
+        []
+      ],
+      [
+        "R",
+        [
+          "CANDIDATE_ID",
+          "REVISION_NO"
+        ],
+        "CX_CANDIDATE_KNOWLEDGE",
+        [
+          "CANDIDATE_ID",
+          "REVISION_NO"
+        ]
+      ]
+    ],
+    "trigger": "CX111_E0E1C6EF1B4A1B8A",
+    "trigger_body": "BEGIN RAISE EXCEPTION 'Runtime evidence is immutable' USING ERRCODE='23000'; END",
+    "trigger_function": "cx111_reject_runtime_mutation"
+  }
+}

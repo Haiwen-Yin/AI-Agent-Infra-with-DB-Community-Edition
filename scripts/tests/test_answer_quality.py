@@ -110,7 +110,7 @@ def test_mixed_scope_is_persisted_without_supplying_missing_answer_content(datab
     monkeypatch.setattr(quality.answer_planning, 'retrieve', lambda *a, **kw: {
         'status': 'PARTIAL_MATCH', 'missing_parts': ['explain tunneling'],
         'items': [{'entity_id': 'route', 'title': 'Atlas routing', 'content': 'route-742', 'digest': 'd1'}]})
-    monkeypatch.setattr(quality.knowledge_grounding, 'citation', lambda *a: {})
+    monkeypatch.setattr(quality.knowledge_grounding, 'citation', lambda *a,**kw: {})
     raw = 'Atlas uses route-742 [1]. ' + ('Quantum tunneling crosses a potential barrier.' if correct else 'No explanation.')
     monkeypatch.setattr(quality.native_runtime, '_call_llm', lambda *a: {'content': raw, 'model': 'test'})
     quality.register_rubric('owner', 'case', 1, rubric(allowed_answer_sources=['MIXED_SOURCES']), 'Fixed before execution')

@@ -242,10 +242,10 @@ def metadata(tx, actor, domain, source, *, _located=_UNREAD, _record=_UNREAD, _a
         access = (_access or {}).get(action) or identity_api.effective_access(actor, action, resource={'security_domain_id': domain})
         if access.get('decision') != 'ALLOW':
             raise PermissionError('Source access denied')
-        # Memory ownership/scopes are governed by its existing reader, which
-        # also supports explicitly assigned domain members. Asset eligibility
-        # must neither replace that authority nor narrow it to owner/ALL.
-        if family != 'MEMORY' and located['owner_principal_id'] != actor and 'ALL' not in access.get('scopes', []):
+        # Memory has its own scoped reader; Knowledge uses its current native
+        # sharing policy below. Neither is limited to the artifact's author.
+        # Other artifact families retain their owner/ALL boundary.
+        if family in {'EXPERIENCE','SKILL'} and located['owner_principal_id'] != actor and 'ALL' not in access.get('scopes', []):
             raise PermissionError('Source access denied')
     if family == 'MEMORY':
         from . import memory_lifecycle as memory
@@ -271,7 +271,7 @@ def metadata(tx, actor, domain, source, *, _located=_UNREAD, _record=_UNREAD, _a
             # body resolver retains its normal applicability conflict result.
             raise PermissionError('Source access denied') from exc
     elif family in {'KNOWLEDGE', 'EXPERIENCE', 'SKILL'}:
-        record = tx.query_one("SELECT e.TITLE,r.CONTENT_DIGEST FROM CX_CONTINUITY_ARTIFACT_REVS r JOIN ENTITIES e ON "
+        record = tx.query_one("SELECT e.TITLE,r.CONTENT_DIGEST,r.NATIVE_ENTITY_ID FROM CX_CONTINUITY_ARTIFACT_REVS r JOIN ENTITIES e ON "
                               "CAST(e.ENTITY_ID AS VARCHAR(128))=r.NATIVE_ENTITY_ID WHERE r.ARTIFACT_ID=:entity AND r.REVISION_ID=:revision",
                               {'entity': source.entity_id, 'revision': source.revision_id}) if _record is _UNREAD else _record
         if family == 'KNOWLEDGE':
@@ -293,7 +293,15 @@ def metadata(tx, actor, domain, source, *, _located=_UNREAD, _record=_UNREAD, _a
         record = {'title': family, 'content_digest': resolved['content_digest']}
     if not record or record['content_digest'] != source.content_digest:
         raise ContinuityConflict('STALE_CONTENT', 'Source metadata revision or digest changed')
-    return {'name': str(record.get('title') or family), 'description': '', 'source': source}
+    source_context=None
+    if family=='MEMORY':
+        from .continuity_promotions import require_memory_original_sources
+        source_context=require_memory_original_sources(tx,actor,source.entity_id,source.revision_id,record)
+    elif family in {'KNOWLEDGE','EXPERIENCE','SKILL'}:
+        from .continuity_promotions import require_original_sources
+        source_context=require_original_sources(tx,actor,record['native_entity_id'])
+    return {'name': str(record.get('title') or family), 'description': '', 'source': source,
+        **({'source_context':source_context} if source_context else {})}
 
 
 @contextmanager
@@ -339,7 +347,7 @@ def _metadata_inputs(tx,sources):
         for source in memories:records[('MEMORY',source.entity_id,source.revision_id)]=found.get((source.entity_id,source.revision_id))
     artifacts=[source for source in sources if source.family.value in {'KNOWLEDGE','EXPERIENCE','SKILL'}]
     if artifacts:
-        rows=read_ids(tx,"SELECT r.ARTIFACT_ID AS BATCH_ENTITY_ID,r.REVISION_ID AS BATCH_REVISION_ID,e.TITLE,r.CONTENT_DIGEST "
+        rows=read_ids(tx,"SELECT r.ARTIFACT_ID AS BATCH_ENTITY_ID,r.REVISION_ID AS BATCH_REVISION_ID,e.TITLE,r.CONTENT_DIGEST,r.NATIVE_ENTITY_ID "
             "FROM CX_CONTINUITY_ARTIFACT_REVS r JOIN ENTITIES e ON CAST(e.ENTITY_ID AS VARCHAR(128))=r.NATIVE_ENTITY_ID "
             "WHERE r.ARTIFACT_ID IN ({ids}) ORDER BY r.ARTIFACT_ID,r.REVISION_ID FOR UPDATE",[source.entity_id for source in artifacts])
         found={(row['batch_entity_id'],row['batch_revision_id']):row for row in rows}
@@ -376,7 +384,40 @@ def metadata_many(tx,actor,domain,values,*,omit_denied=False):
     return result
 
 
-def select_sources(tx, actor, request):
+def _knowledge_sources(tx,actor,request,reader):
+    """Discover exact current domain artifacts through the shared hybrid path.
+
+    Optional hits retain ordinary metadata/source authority. This does not
+    promote legacy notes, infer grants, or turn graph relations into receipts.
+    """
+    from . import knowledge_grounding,embedding_api
+    from .continuity_sources import read_ids
+    if request.knowledge_retrieval is None or request.entry_limit==0:
+        return []
+    work._authorize(tx,reader,request.security_domain_id,write=False)
+    with embedding_api.query_scope():
+        found=knowledge_grounding.search(actor,reader,request.query_text,
+            strategy='hybrid',limit=20,artifact_domain=request.security_domain_id,applicability=request.applicability,
+            transaction=tx)
+    keys=[item['entity_id'] for item in found['items']]
+    rows=read_ids(tx,"SELECT r.NATIVE_ENTITY_ID,r.ARTIFACT_ID,r.REVISION_ID,r.CONTENT_DIGEST "
+        "FROM CX_CONTINUITY_ARTIFACTS a JOIN CX_CONTINUITY_ARTIFACT_REVS r ON r.ARTIFACT_ID=a.ARTIFACT_ID "
+        "AND r.REVISION_ID=a.CURRENT_REVISION_ID WHERE a.STATUS='ACTIVE' AND a.FAMILY='KNOWLEDGE' "
+        "AND a.SECURITY_DOMAIN_ID=:domain AND r.NATIVE_ENTITY_ID IN ({ids})",keys,
+        params={'domain':request.security_domain_id})
+    by_native={str(row['native_entity_id']):row for row in rows}
+    sources=[SourceRef(family='KNOWLEDGE',entity_id=by_native[key]['artifact_id'],
+        revision_id=by_native[key]['revision_id'],content_digest=by_native[key]['content_digest']) for key in keys if key in by_native]
+    result=[]
+    metadata=metadata_many(tx,actor,request.security_domain_id,sources,omit_denied=True)
+    other=metadata_many(tx,reader,request.security_domain_id,sources,omit_denied=True) if reader!=actor else metadata
+    for rank,(item,readable) in enumerate(zip(metadata,other)):
+        if item is not None and readable is not None:
+            result.append(dict(item,mandatory=False,rank_score=1000-rank,selection_reason='DATABASE_HYBRID'))
+    return result
+
+
+def select_sources(tx, actor, request,*,reader=None):
     mandatory = {(s.family.value, s.entity_id, s.revision_id) for s in request.mandatory_sources}
     seen, candidates, unique = {}, [], []
     for source in (*request.mandatory_sources, *request.sources):
@@ -391,6 +432,19 @@ def select_sources(tx, actor, request):
         key=(source.family.value,source.entity_id,source.revision_id)
         item.update(mandatory=key in mandatory, rank_score=score(request.query_text, item['name'], item['description']))
         candidates.append(item)
+    for item in _knowledge_sources(tx,actor,request,reader or actor):
+        source=item['source']
+        key=(source.family.value,source.entity_id,source.revision_id)
+        if key not in seen:
+            candidates.append(item)
+            seen[key]=source.content_digest
+        elif seen[key]!=source.content_digest:
+            raise ContinuityConflict('STALE_CONTENT','A discovered source conflicts with the explicit exact digest')
+        else:
+            current=next(candidate for candidate in candidates if
+                (candidate['source'].family.value,candidate['source'].entity_id,candidate['source'].revision_id)==key)
+            current['rank_score']=max(current['rank_score'],item['rank_score'])
+            current.setdefault('selection_reason','DATABASE_HYBRID')
     return sorted(candidates, key=lambda item: (not item['mandatory'], -item['rank_score']))
 
 

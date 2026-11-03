@@ -9,8 +9,14 @@ from . import continuity_contracts as dto
 from .continuity_policy import HandoffPolicyChange
 from .continuity_runtime import ContextExecutionRequest
 from .continuity_native_sources import CaptureRequest
+from .knowledge_curated import Import as CuratedImport
 
 OPERATIONS={
+    'learning_discover':('GET','/learning',dto.LearningDiscovery,None,False),
+    'learning_read':('GET','/learning/{entity_id}',dto.LearningRead,'entity_id',False),
+    'knowledge_intake_preview':('POST','/knowledge-intake/preview',dto.NewCandidate,None,False),
+    'source_read':('GET','/sources/{source_id}',dto.Contract,'source_id',False),
+    'source_curated_import':('POST','/sources/{source_id}/curated-import',CuratedImport,'source_id',False),
     'context_native_capture':('POST','/context/native-sources',CaptureRequest,None,False),
     'context_runtime_enqueue':('POST','/context/runtime-executions',ContextExecutionRequest,None,False),
     'context_runtime_read':('GET','/context/runtime-executions/{execution_id}',dto.Contract,'execution_id',False),

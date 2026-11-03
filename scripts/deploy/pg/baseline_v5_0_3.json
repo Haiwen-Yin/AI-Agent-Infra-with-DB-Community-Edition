@@ -1,9 +1,9 @@
 {
-  "version": "5.0.2",
-  "database": "oracle",
+  "version": "5.0.3",
+  "database": "pg",
   "fresh_install": true,
   "deployment": "bootstrap-deployment-agent",
-  "required_terminal_migration": "109_v5_0_2_observed_answer_reviews.sql",
+  "required_terminal_migration": "117_v5_0_3_task_step_timestamps.sql",
   "historical_chain": "retained-for-audit",
   "withdrawn_upgrade_sources": [
     "4.4.8"

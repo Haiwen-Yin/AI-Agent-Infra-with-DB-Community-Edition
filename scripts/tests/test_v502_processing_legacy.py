@@ -1,5 +1,6 @@
 """Offline original-domain Loop/TaskStep processing hooks and rollback checks."""
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -7,6 +8,50 @@ from lib import connection, graph_compat, loop_api, processing_graph as graph
 from lib import processing_legacy as legacy, processing_recovery as recovery, task_plan_api
 from lib.continuity_state import ContinuityConflict, ContinuityError
 from .test_v502_processing_graph import ledger
+
+
+def test_native_json_numbers_keep_step_receipts_identical_to_text_json(native, monkeypatch):
+    original_query = native.query
+    json_columns = {'tool_input', 'tool_output', 'config_json'}
+    def native_json_query(sql, params):
+        rows = original_query(sql, params)
+        for row in rows:
+            for key in json_columns & row.keys():
+                if isinstance(row[key], str):
+                    row[key] = json.loads(row[key], parse_int=Decimal, parse_float=Decimal)
+        return rows
+    monkeypatch.setattr(native, 'query', native_json_query)
+    output = dict(requests=0, nested=[dict(ratio=0.25, count=42)])
+    assert task_plan_api.update_step('step', status='SUCCESS', tool_output=output)
+    observed = task_plan_api._row_to_dict(native.query_one('SELECT * FROM TASK_STEPS WHERE STEP_ID=:id', {'id':'step'}))
+    assert observed['tool_output'] == output
+    assert json.dumps(observed['tool_output']) == json.dumps(output)
+    assert graph.digest(graph._json(dict(n=Decimal('0.25'), items=[Decimal(42)]))) == graph.digest(dict(n=0.25, items=[42]))
+    assert budget(native)['steps_used'] == 1
+
+
+@pytest.mark.parametrize('value', ['NaN', 'Infinity', '-Infinity', '9' * 400 + '.1'])
+def test_nonfinite_native_json_numbers_cannot_become_processing_receipts(value):
+    with pytest.raises(ValueError):
+        graph._json(dict(n=Decimal(value)))
+
+
+@pytest.mark.parametrize('plan_id',[122,Decimal(122),'PLAN_ORACLE_122'])
+def test_native_plan_locator_is_text_at_compatibility_binding_boundary(plan_id):
+    class NativeDraftTransaction:
+        def query_one(self,sql,params):
+            if 'FROM TASK_STEPS' in sql:
+                return dict(plan_id=plan_id,current_plan_status='PENDING',description='Original task')
+            if 'FROM GRAPH_COMPAT_BINDINGS' in sql:
+                if type(params['plan']) is not str:
+                    raise TypeError('Native VARCHAR comparison does not accept a numeric bind')
+                assert params['plan']==str(plan_id)
+                return None
+            pytest.fail('Unexpected native draft query')
+        def execute(self,sql,params):
+            assert sql.startswith('UPDATE TASK_STEPS SET DESCRIPTION=')
+            return 1
+    assert legacy.update_step(NativeDraftTransaction(),'148',dict(description='Edited draft'))
 
 
 @pytest.fixture

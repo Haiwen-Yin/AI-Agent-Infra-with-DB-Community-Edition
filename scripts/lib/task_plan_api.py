@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Task Plan API
+"""AI Agent Infra v5.0.3 - Community Edition - Task Plan API
 
 Task plan creation, step management, breakpoint recovery,
 tool call auditing, and dependency tracking.
@@ -35,6 +35,9 @@ def _row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
             except (json.JSONDecodeError, TypeError):
                 result[lk] = value
         else:
+            if lk in ('tool_input', 'tool_output', 'context_data') and isinstance(value, (dict, list)):
+                from .graph_compat import _portable_json_value
+                value = _portable_json_value(value)
             result[lk] = value
     return result
 
@@ -304,10 +307,12 @@ def _sync_step_graph(step_id: str, status: str):
 
 def get_plan_steps(plan_id: str) -> List[Dict[str, Any]]:
     """Return all steps for a plan ordered by STEP_ORDER."""
+    assigned_column = ("NULL AS ASSIGNED_AGENT_ID" if DATABASE_DIALECT in {'postgresql', 'pg'}
+                       else "ASSIGNED_AGENT_ID")
     try:
-        sql = """
+        sql = f"""
             SELECT STEP_ID, PLAN_ID, PLAN_STATUS, STEP_ORDER, DESCRIPTION,
-                   TOOL_NAME, TOOL_INPUT, TOOL_OUTPUT, ASSIGNED_AGENT_ID, STATUS,
+                   TOOL_NAME, TOOL_INPUT, TOOL_OUTPUT, {assigned_column}, STATUS,
                    TO_CHAR(STARTED_AT, 'YYYY-MM-DD HH24:MI:SS') AS STARTED_AT,
                    TO_CHAR(COMPLETED_AT, 'YYYY-MM-DD HH24:MI:SS') AS COMPLETED_AT
             FROM TASK_STEPS
@@ -320,8 +325,8 @@ def get_plan_steps(plan_id: str) -> List[Dict[str, Any]]:
             sql = """
                 SELECT STEP_ID, PLAN_ID, PLAN_STATUS, STEP_ORDER, DESCRIPTION,
                        TOOL_NAME, TOOL_INPUT, TOOL_OUTPUT, STATUS,
-                       TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS STARTED_AT,
-                       TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS COMPLETED_AT
+                       NULL AS STARTED_AT,
+                       NULL AS COMPLETED_AT
                 FROM TASK_STEPS
                 WHERE PLAN_ID = :plan_id
                 ORDER BY STEP_ORDER

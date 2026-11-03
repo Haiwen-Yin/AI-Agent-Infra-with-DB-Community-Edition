@@ -29,7 +29,7 @@ def _expected_target(facts, version, product):
         agentx = product == "agentx-community"
         prefix = ("cxv5013" if agentx else "cxv5012") if track == "upgrade" else ("cxv5011" if agentx else "cxv501")
         return prefix + short
-    return ("cxv5022" if product == "agentx-community" else "cxv" + version.replace(".", "")) + short
+    return ("cxv5032" if product == "agentx-community" else "cxv" + version.replace(".", "")) + short
 
 
 def classified_current_target() -> bool:

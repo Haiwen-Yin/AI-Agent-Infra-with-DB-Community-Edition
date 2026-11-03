@@ -1,4 +1,4 @@
-# Chuanxu Community Edition v5.0.2
+# Chuanxu Community Edition v5.0.3
 
 [简体中文](README_zh.md)
 
@@ -48,7 +48,7 @@ including `vendor/`. From the package root:
    and [minimum privileges](docs/minimum-privileges.md) before initialization.
 4. Store an initial administrator password in an owner-readable file (mode
    `0600`). Run `bash scripts/install_platform.sh initialize --database DB
-   --edition EDITION --version 5.0.2 --config /absolute/path/config.json
+   --edition EDITION --version 5.0.3 --config /absolute/path/config.json
    --admin-password-file /absolute/path/password-file`, replacing `DB` with a
    supported database key and `EDITION` with `community` or `enterprise`.
 5. Run `./start_web_server.sh start`. Dashboard: `/app/`; Portal: `/portal`.
@@ -83,6 +83,8 @@ driver; switching configuration is not a dependency or data migration.
 
 ## Operate and extend
 
+- [Optional platform learning content](docs/platform-learning-delivery.md)
+
 - [Deployment](docs/deployment.md) and [migration](docs/migration.md)
 - [Architecture](docs/architecture.md) and [API reference](docs/api-reference.md)
 - [Agent extensions](docs/agent-extensions.md) and [DB4A2A](docs/db4a2a.md)
@@ -93,7 +95,7 @@ driver; switching configuration is not a dependency or data migration.
 - [Security](docs/security.md) and [release verification](docs/release-signing.md)
 - [Native Agent offboarding and account-status prerequisites](docs/native-identity.md)
 - [Source IP access and local recovery](docs/source-ip-access.md)
-- [Release notes](RELEASE_NOTES_v5.0.2.md)
+- [Release notes](RELEASE_NOTES_v5.0.3.md)
 
 Model features are verified per provider and model. Controlled integrations keep
 their authorization, isolation, bounded execution and database audit checks.

@@ -1,4 +1,4 @@
-# Agent extensions — Chuanxu v5.0.2
+# Agent extensions — Chuanxu v5.0.3
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -97,7 +97,7 @@ unknown-send reconciliation; see [continuity operations](continuity-operations.m
 Start `scripts/agent_integration_worker.py` under the operator's service manager
 to deliver registered telemetry and reconcile uncertain calls. Prepare a new
 framework rootfs with `scripts/prepare_framework_rootfs.py --rootfs
-/var/lib/chuanxu/framework-v5.0.2`, then configure its verified Linux
+/var/lib/chuanxu/framework-v5.0.3`, then configure its verified Linux
 sandbox target. The framework receives bounded messages; platform entities remain
 the source of execution and authorization facts. Generic framework execution,
 live effect replay, live migration and global autonomy remain disabled.

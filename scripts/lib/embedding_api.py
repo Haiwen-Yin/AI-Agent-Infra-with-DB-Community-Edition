@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Embedding API
+"""AI Agent Infra v5.0.3 - Community Edition - Embedding API
 
 Generate, store, and search vector embeddings for entities.
 Uses external Embedding API (OpenAI-compatible) + Oracle TO_VECTOR() for storage.
@@ -12,15 +12,40 @@ import hashlib
 import logging
 import math
 import re
+import time
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
-from . import connection
+from . import connection, knowledge_retrieval_adapter
 from .connection import execute, execute_query, execute_query_one
 from . import embedding_governance as _embedding_governance
 from .config import get_config
 
 logger = logging.getLogger(__name__)
+_QUERY_SCOPE=ContextVar('knowledge_query_embedding_scope',default=None)
+
+
+@contextmanager
+def query_scope():
+    """A bounded per-retrieval cache, never a cross-request permission cache."""
+    state=dict(cache={},provider_attempts=0,provider_successes=0,provider_failures=0,cache_hits=0,
+        input_characters=0,input_bytes=0,elapsed_ms=0.0,reported_tokens=[])
+    token=_QUERY_SCOPE.set(state)
+    try:
+        yield state
+    finally:
+        _QUERY_SCOPE.reset(token)
+        state['cache'].clear()
+
+
+def query_usage(state):
+    reports=state['reported_tokens']
+    observed=len(reports)==state['provider_attempts'] and state['provider_attempts']>0 and all(value is not None for value in reports)
+    return {**{key:state[key] for key in ('provider_attempts','provider_successes','provider_failures','cache_hits','input_characters','input_bytes')},
+        'elapsed_ms':round(state['elapsed_ms'],3),'provider_input_tokens':sum(reports) if observed else None,
+        'token_observation':'PROVIDER_REPORTED' if observed else 'UNAVAILABLE','cache_scope':'CURRENT_RETRIEVAL_ONLY'}
 
 MODEL_DIMENSIONS = {
     "text-embedding-bge-m3": 1024,
@@ -80,14 +105,42 @@ def _query_embedding(text: str, *, agent_id: str = "") -> tuple[Dict[str, Any], 
     """Generate one query vector under the active verified Contract."""
     context = _governed_context(agent_id, require_platform_generation=True)
     profile = context["profile"]
+    state=_QUERY_SCOPE.get()
+    # Re-resolve current binding/readiness BEFORE cache lookup. Include the
+    # complete effective contract/profile/space and exact query identity so a
+    # revision, model, secret reference, metric or dimension cannot reuse it.
+    key=hashlib.sha256(json.dumps(dict(context=context,text=text),sort_keys=True,default=str,separators=(',',':')).encode()).hexdigest()
+    if state is not None and key in state['cache']:
+        state['cache_hits']+=1
+        return context,state['cache'][key]
     from .embedding_governance import _profile_api_key
-    vector = generate_embedding(
-        text, api_url=str(profile.get("provider_url") or ""), model=str(profile.get("model_id") or ""),
-        api_key=_profile_api_key(profile),
-    )
-    if len(vector) != int(context["contract"].get("dimension") or 0):
-        raise ValueError("Embedding provider response differs from the active Contract")
-    return context, json.dumps(vector)
+    started=time.monotonic()
+    if state is not None:
+        state['provider_attempts']+=1
+        state['input_characters']+=len(text)
+        state['input_bytes']+=len(text.encode('utf-8'))
+    try:
+        vector = generate_embedding(
+            text, api_url=str(profile.get("provider_url") or ""), model=str(profile.get("model_id") or ""),
+            api_key=_profile_api_key(profile),
+        )
+        if (not isinstance(vector,(list,tuple)) or len(vector)!=int(context['contract'].get('dimension') or 0)
+                or any(isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) for value in vector)
+                or not any(value!=0 for value in vector)):
+            raise ValueError('Embedding provider response differs from the active Contract')
+        encoded=json.dumps(vector,allow_nan=False)
+        if state is not None:
+            state['provider_successes']+=1
+            if len(state['cache'])<4:
+                state['cache'][key]=encoded
+        return context,encoded
+    except Exception:
+        if state is not None:
+            state['provider_failures']+=1
+        raise
+    finally:
+        if state is not None:
+            state['elapsed_ms']+=(time.monotonic()-started)*1000
 
 
 def _scope_params(context: Dict[str, Any]) -> Dict[str, str]:
@@ -149,6 +202,11 @@ def generate_embedding(
 
             if "data" in result and len(result["data"]) > 0:
                 embedding = result["data"][0]["embedding"]
+                state=_QUERY_SCOPE.get()
+                if state is not None:
+                    usage=result.get('usage') or {}
+                    count=usage.get('prompt_tokens') if isinstance(usage,dict) else None
+                    state['reported_tokens'].append(count if type(count) is int and count>=0 else None)
                 logger.debug(f"Generated embedding: {len(embedding)} dims for '{text[:50]}...'")
                 return embedding
             else:
@@ -676,14 +734,14 @@ def _authorized_search_denied(exc: Exception) -> bool:
 
 
 def search_authorized_knowledge(query: str, *, channel: str, actor: str, agent: str,
-                                limit: int = 40, entity_ids=None) -> List[Dict]:
+                                limit: int = 40, entity_ids=None,artifact_domain=None,candidate_scope=None) -> List[Dict]:
     """Return ID-only candidates under both current knowledge policies.
 
     This separate entry point intentionally has no unrestricted fallback and
     does not convert backend/provider failures into an empty successful search.
     Bodies and exact revisions are loaded and checked by knowledge_grounding.
     """
-    from . import knowledge_api, knowledge_grounding
+    from . import knowledge_api, knowledge_grounding, knowledge_candidates
     knowledge_grounding.require_reader(actor, agent)
     if channel not in {"fulltext", "vector"} or not isinstance(query, str) or not query.strip() or len(query) > 2000:
         raise ValueError("Authorized retrieval request is invalid")
@@ -699,13 +757,15 @@ def search_authorized_knowledge(query: str, *, channel: str, actor: str, agent: 
                   "(e.EXPIRES_AT IS NULL OR e.EXPIRES_AT>CURRENT_TIMESTAMP)",
                   knowledge_api.knowledge_access_predicate("e", ":actor"),
                   knowledge_api.knowledge_access_predicate("e", ":agent")]
+    predicates.extend(knowledge_grounding.artifact_domain_predicate('e',params,artifact_domain))
     if entity_ids is not None:
         predicates.append("e.ENTITY_ID IN (" + ",".join(f":source_id{i}" for i in range(len(entity_ids))) + ")")
         params.update({f"source_id{i}": key for i, key in enumerate(entity_ids)})
-    pg = str(connection.DATABASE_DIALECT).lower() in {"pg", "postgresql"}
-    suffix = " LIMIT :candidate_limit" if pg else " FETCH FIRST :candidate_limit ROWS ONLY"
+    suffix = knowledge_retrieval_adapter.limit_clause()
     tables = "ENTITIES e"
     try:
+        metric = "COSINE"
+        tokens = []
         if channel == "vector":
             context, vector = _query_embedding(query, agent_id=agent)
             params.update({"vec": vector, **_scope_params(context)})
@@ -715,32 +775,17 @@ def search_authorized_knowledge(query: str, *, channel: str, actor: str, agent: 
             metric = str(context["contract"].get("distance_metric") or "COSINE").upper()
             if metric not in {"COSINE", "EUCLIDEAN", "DOT_PRODUCT"}:
                 raise ValueError("Embedding distance metric is unsupported")
-            if pg:
-                operator = {"COSINE": "<=>", "EUCLIDEAN": "<->", "DOT_PRODUCT": "<#>"}[metric]
-                score = "em.EMBEDDING " + operator + " CAST(:vec AS vector)"
-            else:
-                native_metric = "DOT" if metric == "DOT_PRODUCT" else metric
-                score = "VECTOR_DISTANCE(em.EMBEDDING, TO_VECTOR(:vec), " + native_metric + ")"
-            ordering = "ASC"
         else:
             # Plain tokens only: user text is never a native query language.
             tokens = knowledge_grounding._search_terms(query)
             if not tokens or len(tokens) > 24:
                 return []
-            if pg:
-                params["fulltext_query"] = " ".join(tokens)
-                expression = "to_tsvector('simple', COALESCE(e.TITLE,'') || ' ' || COALESCE(e.CONTENT,''))"
-                match = "plainto_tsquery('simple', :fulltext_query)"
-                score = "ts_rank(" + expression + ", " + match + ")"
-                predicates.append(expression + " @@ " + match)
-            else:
-                params["fulltext_query"] = " OR ".join("{" + token + "}" for token in tokens)
-                score = "SCORE(1)"
-                predicates.append("CONTAINS(e.TITLE, :fulltext_query, 1)>0")
-            ordering = "DESC"
-        rows = execute_query("SELECT e.ENTITY_ID," + score + " AS CHANNEL_SCORE FROM " + tables
-                             + " WHERE " + " AND ".join(predicates)
-                             + " ORDER BY CHANNEL_SCORE " + ordering + ",e.ENTITY_ID" + suffix, params)
+        native = knowledge_retrieval_adapter.channel_sql(channel, tokens, metric)
+        params.update(native["params"])
+        predicates.extend(native["predicates"])
+        base = "SELECT e.ENTITY_ID," + native["score"] + " AS CHANNEL_SCORE FROM " + tables + " WHERE " + " AND ".join(predicates)
+        rows = execute_query(knowledge_candidates.query(base, params, ordering=native['ordering'],
+            suffix=suffix, bound=candidate_scope), params)
     except PermissionError:
         raise
     except Exception as exc:

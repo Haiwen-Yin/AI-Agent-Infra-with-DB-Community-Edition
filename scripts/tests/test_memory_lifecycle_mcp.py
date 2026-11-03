@@ -47,3 +47,24 @@ def test_lifecycle_create_rejects_non_agent_scope(monkeypatch):
         "title": "cross scope", "body": "not permitted", "memory_scope": "ENTERPRISE_KNOWLEDGE",
     }))
     assert "limited to Agent-owned scopes" in response[0].text
+
+
+def test_mcp_chain_uses_authorized_induced_subgraph(monkeypatch):
+    monkeypatch.setattr(mcp_server, "_authenticated_mcp_agent", lambda: "AGENT-CURRENT")
+    monkeypatch.setattr(mcp_server, "_owned_memory_version", lambda *_args: None)
+    monkeypatch.setattr(mcp_server.memory_lifecycle, "get_family", lambda *_args, **_kwargs: {
+        "current": {"version_id": "MV-CURRENT-1"}
+    })
+    seen = {}
+
+    def authorized(principal, version_id, **kwargs):
+        seen.update(principal=principal, version_id=version_id, kwargs=kwargs)
+        return {"nodes": [{"version_id": version_id}], "relations": []}
+
+    monkeypatch.setattr(mcp_server.memory_lifecycle, "authorized_chain", authorized)
+    response = asyncio.run(mcp_server.call_tool("memory_lifecycle_chain", {
+        "family_id": "MF-CURRENT", "hops": 2, "limit": 10,
+    }))
+    assert seen == {"principal": "AGENT-CURRENT", "version_id": "MV-CURRENT-1",
+                    "kwargs": {"hops": 2, "limit": 10}}
+    assert "MV-CURRENT-1" in response[0].text

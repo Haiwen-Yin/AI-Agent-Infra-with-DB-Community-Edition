@@ -277,6 +277,38 @@ def test_compatibility_digest_rejects_non_finite_decimal():
         _portable_digest({"budget": {"max_cost": Decimal("NaN")}})
 
 
+@pytest.mark.parametrize('active',[False,True])
+def test_unchanged_compatibility_topology_reuses_version_across_real_exchange_format(monkeypatch,active):
+    from lib import graph_compat as compat,graph_definition_api as definitions,graph_runtime
+    desired=task_plan_definition(dict(plan_id=122,goal='保留原图'),[dict(step_id=148,step_order=1,description='核对来源')])
+    binding=dict(graph_id='graph',graph_version_id='latest',graph_run_id='run' if active else None)
+    monkeypatch.setattr(compat,'graph_runtime_available',lambda:True)
+    monkeypatch.setattr(compat,'get_binding',lambda *_:binding)
+    monkeypatch.setattr(definitions,'get_graph',lambda *_:dict(graph_name='原生任务图'))
+    def get_version(version_id,**kwargs):
+        return dict(desired,graph_id='graph',graph_version_id=version_id,status='PUBLISHED',version_label='不同显示标签')
+    monkeypatch.setattr(definitions,'get_version',get_version)
+    monkeypatch.setattr(graph_runtime,'get_run',lambda *_:dict(status='RUNNING',graph_version_id='original'))
+    monkeypatch.setattr(definitions,'create_version',lambda *_a,**_k:pytest.fail('Unchanged topology must not create a new version'))
+    monkeypatch.setattr(compat,'_upsert_binding',lambda *a,**kw:kw)
+    result=compat.ensure_task_plan_graph(dict(plan_id=122,goal='保留原图'),[dict(step_id=148,step_order=1,description='核对来源')])
+    assert result['graph_version_id']==('original' if active else 'latest')
+    assert result['graph_run_id']==('run' if active else None)
+
+
+def test_active_compatibility_run_rejects_changed_topology_before_rebinding(monkeypatch):
+    from lib import graph_compat as compat,graph_definition_api as definitions,graph_runtime
+    old=task_plan_definition(dict(plan_id=122),[dict(step_id=148,step_order=1,description='原任务')])
+    monkeypatch.setattr(compat,'graph_runtime_available',lambda:True)
+    monkeypatch.setattr(compat,'get_binding',lambda *_:dict(graph_id='graph',graph_version_id='version',graph_run_id='run'))
+    monkeypatch.setattr(definitions,'get_graph',lambda *_:dict(graph_name='任务图'))
+    monkeypatch.setattr(definitions,'get_version',lambda *_a,**_k:dict(old,graph_id='graph',graph_version_id='version',status='PUBLISHED'))
+    monkeypatch.setattr(graph_runtime,'get_run',lambda *_:dict(status='RUNNING',graph_version_id='version'))
+    monkeypatch.setattr(compat,'_upsert_binding',lambda *_a,**_k:pytest.fail('An active run cannot be rebound to changed topology'))
+    with pytest.raises(ValueError,match='original unchanged topology'):
+        compat.ensure_task_plan_graph(dict(plan_id=122),[dict(step_id=148,step_order=1,description='替换任务')])
+
+
 def test_loop_wrapper_normalizes_driver_decimal_budgets_before_persistence():
     definition = loop_definition({
         "loop_id": "LOOP_DECIMAL",

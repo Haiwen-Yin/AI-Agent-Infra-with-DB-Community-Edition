@@ -358,7 +358,7 @@ def test_metadata_uses_portable_exact_binds_and_no_body_for_each_dialect(memory_
     assert any('CX_MEMORY_TIME_FACTS' in sql for sql in statements)
 
 
-@pytest.mark.parametrize('family', ['KNOWLEDGE', 'EXPERIENCE', 'SKILL'])
+@pytest.mark.parametrize('family', ['EXPERIENCE', 'SKILL'])
 @pytest.mark.parametrize('actor,scopes,allowed', [('owner', ['SELF'], True), ('agent', ['ASSIGNED'], False),
                                                ('agent', ['SELF'], False), ('agent', ['ALL'], True)])
 def test_nonmemory_owner_all_boundary_is_unchanged(monkeypatch, family, actor, scopes, allowed):
@@ -370,9 +370,28 @@ def test_nonmemory_owner_all_boundary_is_unchanged(monkeypatch, family, actor, s
         def query_one(self, sql, params):
             if sql.startswith('SELECT e.ENTITY_ID '):
                 return {'entity_id': 'entity'}
-            return {'title': 'Artifact', 'content_digest': 'a' * 64}
+            if sql.startswith('SELECT a.ARTIFACT_ID,'):
+                return None  # This owner/scope fixture has no candidate lineage.
+            return {'title': 'Artifact', 'content_digest': 'a' * 64, 'native_entity_id': 'entity'}
     if allowed:
         assert selection.metadata(Transaction(), actor, 'domain', value)['name'] == 'Artifact'
     else:
         with pytest.raises(PermissionError, match='Source access denied'):
             selection.metadata(Transaction(), actor, 'domain', value)
+
+
+@pytest.mark.parametrize('scopes',[['OWNED'],['ASSIGNED'],['ALL']])
+@pytest.mark.parametrize('shared',[False,True])
+def test_knowledge_metadata_requires_current_native_policy_for_every_scope(monkeypatch,scopes,shared):
+    monkeypatch.setattr(sources,'locate',lambda *a:dict(security_domain_id='domain',owner_principal_id='owner'))
+    monkeypatch.setattr(selection.work,'_authorize',lambda *a,**k:None)
+    monkeypatch.setattr(selection.identity_api,'effective_access',lambda *a,**k:dict(decision='ALLOW',scopes=scopes))
+    value=dict(family='KNOWLEDGE',entity_id='artifact',revision_id='revision',content_digest='a'*64)
+    class Transaction:
+        def query_one(self,sql,params):
+            if sql.startswith('SELECT e.ENTITY_ID '):return {'entity_id':'entity'} if shared else None
+            if sql.startswith('SELECT a.ARTIFACT_ID,'):return None
+            return {'title':'Artifact','content_digest':'a'*64,'native_entity_id':'entity'}
+    if shared:assert selection.metadata(Transaction(),'agent','domain',value)['name']=='Artifact'
+    else:
+        with pytest.raises(PermissionError):selection.metadata(Transaction(),'agent','domain',value)

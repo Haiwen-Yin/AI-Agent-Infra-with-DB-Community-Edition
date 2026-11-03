@@ -1,4 +1,4 @@
-# 川序社区版 v5.0.2
+# 川序社区版 v5.0.3
 
 [English](README.md)
 
@@ -43,7 +43,7 @@ v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观�
    [最小权限](docs/minimum-privileges_zh.md)完成核验。
 4. 将初始管理员密码存入权限为 `0600` 的文件。执行
    `bash scripts/install_platform.sh initialize --database DB --edition EDITION
-   --version 5.0.2 --config /绝对路径/config.json --admin-password-file
+   --version 5.0.3 --config /绝对路径/config.json --admin-password-file
    /绝对路径/password-file`。将 `DB` 替换为支持的数据库标识，将 `EDITION`
    替换为 `community` 或 `enterprise`。
 5. 执行 `./start_web_server.sh start`。Dashboard 入口为 `/app/`，Portal 入口
@@ -74,6 +74,8 @@ v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观�
 
 ## 使用与扩展
 
+- [平台学习知识的独立交付与导入](docs/platform-learning-delivery_zh.md)
+
 - [部署说明](docs/deployment_zh.md)与[迁移指南](docs/migration_zh.md)
 - [架构说明](docs/architecture_zh.md)与[API 参考](docs/api-reference_zh.md)
 - [Agent 扩展](docs/agent-extensions_zh.md)与[DB4A2A](docs/db4a2a_zh.md)
@@ -84,7 +86,7 @@ v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观�
 - [安全说明](docs/security_zh.md)与[交付验证](docs/release-signing_zh.md)
 - [原生 Agent 退役与账户状态前置](docs/native-identity_zh.md)
 - [访问 IP 配置与本机恢复](docs/source-ip-access_zh.md)
-- [版本说明](RELEASE_NOTES_v5.0.2.md)
+- [版本说明](RELEASE_NOTES_v5.0.3.md)
 
 模型能力按供应商与模型逐项验证。受控集成继续执行授权、隔离、运行限额及数据库
 审计检查。社区包不包含企业版专属代码和 SQL。人用户自助注册与外部 Agent 注册

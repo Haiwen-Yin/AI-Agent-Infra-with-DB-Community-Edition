@@ -1,4 +1,4 @@
-"""FastAPI/Uvicorn entrypoint for the v5.0.2 Chuanxu Web application.
+"""FastAPI/Uvicorn entrypoint for the v5.0.3 Chuanxu Web application.
 
 The database-backed services are the authoritative implementation.  This
 entrypoint intentionally contains only HTTP concerns and exposes the same
@@ -47,7 +47,7 @@ except ModuleNotFoundError as exc:
     from shared.lib import identity_api, external_identity_api, agent_gateway_api, compliance_api, connection, governed_contracts, security_lifecycle, organization_api, security_domain_api, platform_capabilities, native_agent_api, native_runtime, model_usage_api, model_governance_api, model_capability_api, deployment_adapters, runtime_isolation, db4a2a, embedding_governance, admin_management, cursor_pagination, task_plan_api, knowledge_api, memory_lifecycle, skill_api, tool_registry, spec_api, graph_production_profile, platform_agent_pool, host_provisioning, platform_governance_graph as governance_graph_module
 
 
-VERSION = "5.0.2"
+VERSION = "5.0.3"
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 if not WEB_ROOT.is_dir():
@@ -1104,6 +1104,11 @@ class BuiltinKnowledgePublishBody(BaseModel):
 class BuiltinKnowledgeWithdrawBody(BaseModel):
     model_config = {"extra": "forbid"}
     reason: str = Field(min_length=3, max_length=2000)
+
+
+class PlatformLearningImportBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    bundle_json: str = Field(min_length=2, max_length=4 * 1024 * 1024)
 
 
 class ComplianceControlBody(BaseModel):
@@ -3320,6 +3325,7 @@ def knowledge_organization_group(organization_id: str, limit: int = 100, session
 
 @app.put("/api/knowledge/{entity_id}/access-policy")
 def update_knowledge_access_policy(entity_id: str, body: Dict[str, Any], session: Dict[str, Any] = Depends(require_action("knowledge.write"))) -> Dict[str, Any]:
+    from lib.continuity_state import ContinuityConflict
     try:
         policy = knowledge_api.set_access_policy(
             entity_id, str(body.get("scope_type") or ""), str(session["principal_id"]),
@@ -3327,6 +3333,8 @@ def update_knowledge_access_policy(entity_id: str, body: Dict[str, Any], session
             hierarchy_depth=body.get("hierarchy_depth"), reason=str(body.get("reason") or ""),
         )
         return {"policy": policy}
+    except ContinuityConflict as exc:
+        raise HTTPException(status_code=409,detail={'code':exc.code,'message':str(exc)}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -6781,6 +6789,9 @@ def gateway_knowledge_create(body: GatewayKnowledgeBody, request: Request) -> Di
         raise HTTPException(status_code=403, detail="Company-wide Agent knowledge requires Human publication approval")
     if scope not in {"PRINCIPAL_PRIVATE", "ORGANIZATION_SUBTREE", "ORGANIZATION_LEVEL"}:
         raise HTTPException(status_code=422, detail="Knowledge sharing scope is invalid")
+    if scope != 'PRINCIPAL_PRIVATE':
+        raise HTTPException(status_code=409, detail={'code':'KNOWLEDGE_INTAKE_REQUIRED',
+            'message':'Submit shared knowledge through /api/agent-gateway/continuity/artifact-candidates with exact sources and guided intake, then obtain independent review and explicit promotion'})
     try:
         entity_id = knowledge_api.create_knowledge(
             body.title, body.content, domain=body.domain or None, topic=body.topic or None,
@@ -6917,6 +6928,24 @@ def builtin_knowledge_publish(body: BuiltinKnowledgePublishBody, session: Dict[s
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Built-in knowledge publication unavailable") from exc
+
+@app.post('/api/platform/learning/import')
+def platform_learning_import(body: PlatformLearningImportBody,
+                             session: Dict[str, Any] = Depends(require_action('platform.manage'))) -> Dict[str, Any]:
+    from lib import product_knowledge
+    try:
+        bundle = json.loads(body.bundle_json)
+        database = 'pg' if connection.DATABASE_DIALECT == 'postgresql' else connection.DATABASE_DIALECT
+        return product_knowledge.import_learning(str(session['principal_id']), database, bundle)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail='Platform learning import denied') from exc
+    except product_knowledge.builtin_knowledge.KnowledgeLifecycleError as exc:
+        raise HTTPException(status_code=409, detail='Platform learning version is unavailable or conflicts') from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='Platform learning file does not match this product, version or database') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail='Platform learning import unavailable') from exc
+
 
 @app.post("/api/platform/builtin-knowledge/reindex")
 def builtin_knowledge_reindex(session: Dict[str, Any] = Depends(require_action("platform.manage"))) -> Dict[str, Any]:

@@ -117,21 +117,25 @@ def test_explicit_attribute_conflicts_are_reported_and_not_synthesized(monkeypat
     assert result["answer_metadata"]["contradiction_count"] == 1
     prepared = planning.prepare("甲骨文公司总部", "p", {"mode": "KNOWLEDGE_FIRST",
         "allow_model_supplement": "Y", "disclosure_profiles": ["p"]}, result)
-    assert prepared["answer_source"] == "INSUFFICIENT_KNOWLEDGE"
-    assert prepared["knowledge_reply"] and "矛盾" in prepared["knowledge_reply"]
-    assert prepared["messages"] == []
+    assert prepared["answer_source"] == "KNOWLEDGE_GROUNDED"
+    assert prepared["knowledge_reply"] is None
+    prompt=json.loads(prepared['messages'][-1]['content'])
+    assert prompt['judgment_context']['conflicting_attributes']==['headquarters']
+    assert len(prompt['authorized_sources'])==2
+    assert "resolve a contradiction silently" in prepared['messages'][0]['content']
 
 
 def test_native_runtime_metadata_is_strictly_whitelisted():
     result = native_runtime._safe_answer_metadata({
         "policy_revision": "answer-evidence-v1", "requested_strategy": "HYBRID",
-        "actual_strategies": ["HYBRID", "evil"], "available_channels": ["FULLTEXT", "SECRET"],
+        "actual_strategies": ["HYBRID", "evil"],
+        "available_channels": ["FULLTEXT", "VECTOR", "KEYWORD", "RELATIONAL", "TAG", "GRAPH", "SECRET"],
         "degradations": [{"channel": "VECTOR", "reason": "PRIVATE_ENDPOINT"}],
         "evidence_status": "MATCHED", "subject_type": "COMPANY", "missing_parts_count": 2,
         "contradiction_count": 0, "rank_meaning": "PROBABILITY",
         "source_ids": ["secret"], "question": "private question"})
     assert result["actual_strategies"] == ["HYBRID"]
-    assert result["available_channels"] == ["FULLTEXT"]
+    assert result["available_channels"] == ["FULLTEXT", "VECTOR", "KEYWORD", "RELATIONAL", "TAG", "GRAPH"]
     assert result["degradations"] == [{"channel": "VECTOR", "reason": "CHANNEL_UNAVAILABLE"}]
     assert result["rank_meaning"] == "RECIPROCAL_RANK_NOT_PROBABILITY"
     assert "source_ids" not in result and "question" not in result

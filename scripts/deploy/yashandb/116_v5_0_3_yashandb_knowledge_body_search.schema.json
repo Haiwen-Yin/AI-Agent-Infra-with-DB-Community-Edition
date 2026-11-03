@@ -1,0 +1,12 @@
+{
+  "columns": [
+    "CONTENT"
+  ],
+  "database": "yashandb",
+  "existing_title_index": "PRESERVED",
+  "grants": "UNCHANGED",
+  "index": "CX503_KNOW_BODY_SEARCH",
+  "index_type": "SEARCH",
+  "schema": "v503-yashandb-knowledge-body-search/v1",
+  "table": "ENTITIES"
+}

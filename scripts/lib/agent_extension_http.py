@@ -14,6 +14,7 @@ from .model_endpoint_contracts import (CapacityAlias, CapacityCancellation, Capa
                                        CapacityOrigin, CapacityOriginState, CapacityRevision, NewCapacityGroup,
                                        OperatorCapacityResolution)
 from . import agent_assets, agent_source_sync, continuity_notes, continuity_retrospectives, memory_quality
+from . import knowledge_curated
 from .agent_extension_contracts import bounded_json
 from .continuity_contracts import AssemblyRequest, Contract
 from .continuity_state import ContinuityError
@@ -262,6 +263,10 @@ def install(app, require_action, schema_owner_context=nullcontext, *, prefix="/a
     @router.post(root + "/sources/{source_id}/sync")
     def source_sync(source_id: str, body: agent_source_sync.SyncRequest, session=Depends(require_action("agents.operate"))):
         return invoke(agent_source_sync.enqueue, session, source_id, body)
+
+    @router.post(root + "/sources/{source_id}/curated-import")
+    def source_curated_import(source_id: str, body: knowledge_curated.Import, session=Depends(require_action('knowledge.write'))):
+        return invoke(knowledge_curated.import_documents,session,source_id,body)
 
     @router.get(root + "/source-sync-jobs/{job_id}")
     def source_job(job_id: str, session=Depends(require_action("workspaces.read"))):

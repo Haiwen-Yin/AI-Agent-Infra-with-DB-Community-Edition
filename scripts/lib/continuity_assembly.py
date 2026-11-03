@@ -13,6 +13,7 @@ from .continuity_contracts import AssemblyRequest, request_digest
 from .continuity_sources import resolve,resolve_many
 from .continuity_state import ContinuityError, ContinuityConflict, require_not_expired, require_idempotent_request
 from . import context_selection
+from . import knowledge_applicability
 
 _logger = logging.getLogger(__name__)
 
@@ -66,6 +67,25 @@ def _render(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
 
 
+def _planned_policy(policy):
+    return policy.endswith(('QUERY_METADATA_BUDGET_V1','QUERY_METADATA_BUDGET_SOURCE_CONTEXT_V2',
+        'QUERY_HYBRID_BUDGET_SOURCE_CONTEXT_V3'))
+
+
+def _source_context_policy(policy):
+    return policy.endswith(('SOURCE_CONTEXT_V2','SOURCE_CONTEXT_V3'))
+
+
+def _source_text(resolved,*,include_context):
+    # Exact source bytes remain unchanged. New assemblies bind their separate
+    # applicability envelope into rendered text and budget/receipt digests.
+    # Historical assemblies retain their original rendering contract.
+    if include_context and resolved.get('source_context'):
+        return _render(dict(source=resolved['source'],source_context=resolved['source_context'],
+            content=resolved['text']))
+    return resolved['text']
+
+
 def _item(family,entity,revision,digest,text,domain):
     return dict(family=family,entity_id=entity,revision_id=str(revision),content_digest=digest,text=text,
                 authorized_scope=domain,rendered_digest=_digest(text),rendered_tokens=len(text.encode('utf-8')))
@@ -87,10 +107,12 @@ def _handoff_item(tx,actor,domain,handoff_id,revision=None):
     return _item('HANDOFF',handoff_id,record['revision_no'],record['content_digest'],resolved['text'],domain)
 
 
-def assemble(actor,value,*,transaction=None,_asset_scope=False):
+def assemble(actor,value,*,transaction=None,_asset_scope=False,_source_reader=None):
     request=value if isinstance(value,AssemblyRequest) else AssemblyRequest.model_validate(value)
     planned=bool(request.query_text or request.context_window or request.mandatory_sources or request.allow_partial or request.model_name
-                 or request.system_text or request.tool_text or request.output_reserve or request.byte_budget != 1048576)
+                 or request.system_text or request.tool_text or request.output_reserve or request.byte_budget != 1048576
+                 or request.applicability is not None or request.knowledge_retrieval is not None)
+    applicability=knowledge_applicability.constraints(request.query_text,request.applicability)
     operation='ASSET_CONTEXT_ASSEMBLE' if _asset_scope else 'CONTEXT_ASSEMBLE'
     def perform(tx):
         work._authorize(tx,actor,request.security_domain_id,write=False)
@@ -106,7 +128,8 @@ def assemble(actor,value,*,transaction=None,_asset_scope=False):
         if request.handoff_id:
             available.append({**_handoff_item(tx,actor,request.security_domain_id,request.handoff_id), 'mandatory': True})
         plan=context_selection.budget(request) if planned else None
-        candidates=context_selection.select_sources(tx,actor,request) if planned else [dict(source=source,mandatory=False,rank_score=1) for source in request.sources]
+        selection_options={'reader':_source_reader} if _source_reader is not None else {}
+        candidates=context_selection.select_sources(tx,actor,request,**selection_options) if planned else [dict(source=source,mandatory=False,rank_score=1) for source in request.sources]
         excluded=[];load_candidates=[]
         for candidate in candidates:
             source=candidate['source']
@@ -118,9 +141,18 @@ def assemble(actor,value,*,transaction=None,_asset_scope=False):
         resolved_sources=resolve_many(tx,actor,request.security_domain_id,[item['source'] for item in load_candidates],purpose=request.purpose)
         for candidate,resolved in zip(load_candidates,resolved_sources):
             source=candidate['source']
+            if (source.family.value in {'KNOWLEDGE','MEMORY','EXPERIENCE','SKILL','SOURCE'}
+                    and not knowledge_applicability.matches(dict(content=resolved['text'],source_context=resolved.get('source_context')),applicability)):
+                if candidate['mandatory']:
+                    raise ContinuityConflict('SOURCE_NOT_APPLICABLE','A mandatory source does not satisfy the requested applicability')
+                excluded.append(dict(family=source.family.value,entity_id=source.entity_id,revision_id=source.revision_id,
+                    content_digest=source.content_digest,representation='OMITTED',selection_reason='SOURCE_NOT_APPLICABLE',rank_score=candidate['rank_score']))
+                continue
             available.append(dict(_item(source.family.value,source.entity_id,source.revision_id,source.content_digest,
-                                   resolved['text'],request.security_domain_id),publication_id=resolved.get('publication_id'),
-                                   mandatory=candidate['mandatory'],rank_score=candidate['rank_score']))
+                                   _source_text(resolved,include_context=True),request.security_domain_id),
+                                   complete_required=bool(resolved.get('source_context')),publication_id=resolved.get('publication_id'),
+                                   mandatory=candidate['mandatory'],rank_score=candidate['rank_score'],
+                                   **({'selection_reason':candidate['selection_reason']} if 'selection_reason' in candidate else {})))
         selected=[]
         seen=set()
         used=0
@@ -137,7 +169,7 @@ def assemble(actor,value,*,transaction=None,_asset_scope=False):
                 raise ContinuityConflict('MANDATORY_CONTEXT_EXCEEDS_BUDGET','A mandatory Work or Handoff source does not fit the requested context budget')
             if len(selected)>=request.entry_limit or used+cost>limit or used_bytes+byte_cost>request.byte_budget:
                 excerpt=None
-                if planned and request.allow_partial and len(selected)<request.entry_limit:
+                if planned and request.allow_partial and not item.get('complete_required') and len(selected)<request.entry_limit:
                     excerpt=context_selection.partial(item['text'],count,limit-used-(count('\n\n') if selected else 0),
                                                        request.byte_budget-used_bytes-(2 if selected else 0))
                 if excerpt:
@@ -165,7 +197,8 @@ def assemble(actor,value,*,transaction=None,_asset_scope=False):
                     'policy':int(policy['permission_version']),'budget':request.token_budget,'entries':request.entry_limit,'digest':_digest(body),
                     'purpose':request.purpose,'expires':(datetime.now(timezone.utc)+timedelta(seconds=request.ttl_seconds)).replace(tzinfo=None),
                     'key':request.idempotency_key,'request_digest':request_digest(actor,operation,request),
-                    'retrieval_policy':('ASSET_' if _asset_scope else '')+('QUERY_METADATA_BUDGET_V1' if planned else 'EXPLICIT_ORDER_UTF8_UPPER_BOUND')})
+                    'retrieval_policy':('ASSET_' if _asset_scope else '')+('QUERY_HYBRID_BUDGET_SOURCE_CONTEXT_V3' if request.knowledge_retrieval else
+                        'QUERY_METADATA_BUDGET_SOURCE_CONTEXT_V2' if planned else 'EXPLICIT_SOURCE_CONTEXT_V2')})
         _write_batch(tx,"INSERT INTO CX_CONTEXT_ASSEMBLY_ITEMS(ASSEMBLY_ID,ITEM_NO,FAMILY,ENTITY_ID,REVISION_ID,CONTENT_DIGEST,RENDERED_DIGEST,"
                        "RENDERED_TOKENS,AUTHORIZED_SCOPE,SELECTION_REASON,RANK_SCORE,REDACTION_STATE) "
                        "VALUES(:assembly,:v_item_no,:family,:entity,:revision,:digest,:rendered,:tokens,:scope,'EXPLICIT_REQUEST',:v_rank_score,'NONE')",
@@ -214,7 +247,7 @@ def _read(tx,actor,assembly_id):
     if record['retrieval_policy'].startswith('ASSET_'):
         from .agent_assets import revalidate_assembly
         revalidate_assembly(tx,actor,assembly_id)
-    planned=record['retrieval_policy'].endswith('QUERY_METADATA_BUDGET_V1')
+    planned=_planned_policy(record['retrieval_policy'])
     budget=tx.query_one("SELECT * FROM CX_CONTEXT_BUDGETS WHERE ASSEMBLY_ID=:assembly",{'assembly':assembly_id}) if planned else None
     if planned and not budget:
         raise ContinuityError('INTEGRITY_ERROR','Stored context budget is missing')
@@ -243,7 +276,7 @@ def _read(tx,actor,assembly_id):
             resolved=_work_item(tx,actor,record['security_domain_id'],item['entity_id'],int(item['revision_id']))
         else:
             resolved=next(loaded)
-        text=resolved['text']
+        text=_source_text(resolved,include_context=_source_context_policy(record['retrieval_policy']))
         if planned and by_item[int(item['item_no'])]['representation']=='PARTIAL':
             try:
                 text=text.encode('utf-8')[:int(by_item[int(item['item_no'])]['byte_count'])].decode('utf-8')
@@ -312,7 +345,7 @@ def consume(actor,assembly_id,send,*,authorize=None,on_reserved=None):
                        {'assembly':assembly_id,'status':status})
             tx.execute("UPDATE CX_CONTEXT_INPUT_USES SET STATUS=:status,COMPLETED_AT=CURRENT_TIMESTAMP WHERE USE_ID=:use_id AND STATUS='SENDING'",
                        {'use_id':use_id,'status':status})
-            if record['retrieval_policy'].endswith('QUERY_METADATA_BUDGET_V1'):
+            if _planned_policy(record['retrieval_policy']):
                 tx.execute("UPDATE CX_CONTEXT_REPRESENTATIONS SET DELIVERY_STATUS=:delivery WHERE ASSEMBLY_ID=:assembly AND DELIVERY_STATUS='PREPARED'",
                            {'assembly':assembly_id,'delivery':'CONFIRMED' if status=='SENT' else 'UNOBSERVED'})
             identity_api._audit_tx(tx,actor,'CONTEXT_INPUT_'+status,'CONTEXT_ASSEMBLY',assembly_id,'ALLOW','Context delivery observation')

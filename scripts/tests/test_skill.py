@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Skill Tests"""
+"""AI Agent Infra v5.0.3 - Community Edition - Skill Tests"""
 
 import sys
 import os

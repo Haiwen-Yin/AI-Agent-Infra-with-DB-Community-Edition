@@ -6,6 +6,7 @@ import CatalogPicker from "./CatalogPicker";
 import PrincipalPicker from "./PrincipalPicker";
 import ToolsCatalog from "./ToolsCatalog";
 import ModelEndpointCapacity from "./ModelEndpointCapacity";
+import PlatformLearning from "./PlatformLearning";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -3346,6 +3347,7 @@ function DataPage({
         subtitle={text(config.subtitle[0], config.subtitle[1])}
         text={text}
       />
+      {page === 'knowledge' && <PlatformLearning request={api} text={text} />}
       {visual && (
         <ViewToggle
           value={view}

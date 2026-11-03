@@ -37,6 +37,7 @@ class Question:
     attributes: tuple[str, ...] = ()
     framed: bool = False
     frame_candidate: bool = False
+    requirements: tuple[str, ...] = ()
 
     @property
     def terms(self):
@@ -79,6 +80,35 @@ def _attributes(text,language):
     return tuple(dict.fromkeys(values)) if 1<=len(values)<=3 and all(values) else ()
 
 
+def claim_terms(text):
+    """Literal claim terms, without guessing synonyms or dropping constraints."""
+    return _literal_terms(_QUALIFIER.sub(' ',text))
+
+
+def _requirements(question):
+    # These explicit layouts accept arbitrary claim names. Unknown language
+    # outside them keeps the conservative original question, including all
+    # qualifiers, negation, numbers and additional subjects.
+    patterns=(
+        (re.compile(r'^(?:please\s+)?(?:explain|describe|state|list)\s+(?P<claims>.+?)\s+for\s+(?P<subject>[^:;\n]+?)[?.]?$',re.I),'en'),
+        (re.compile(r'^(?P<subject>[^:：;；\n]{1,256})[：:]\s*(?P<claims>[^:：\n]+?)[?？。]?$',re.I),'list'),
+        (re.compile(r'^(?:请)?(?:说明|介绍|列出|解释)?(?P<subject>[^的:：;；\n]{1,256})的(?P<claims>[^的:：;；\n]+?)(?:是什么|有哪些|[?？。])?$'),'zh'),
+    )
+    for pattern,language in patterns:
+        match=pattern.fullmatch(question.strip())
+        if not match:
+            continue
+        subject=match['subject'].strip()
+        raw=re.sub(r'^(?:the|its)\s+','',match['claims'].strip(),flags=re.I) if language=='en' else match['claims'].strip()
+        pieces=tuple(dict.fromkeys(item.strip() for item in re.split(r'\s+and\s+|以及|和|与|及|[、,，;；]',raw,flags=re.I) if item.strip()))
+        if ((2 if language=='list' else 1)<=len(pieces)<=4 and claim_terms(subject)
+                and not re.search(r'以及|和|与|[、,，;；]|\band\b',subject,re.I)
+                and all(claim_terms(item) and len(item)<=200 for item in pieces)
+                and not re.search(r'https?://|[\n`{}]',question,re.I)):
+            return subject,pieces
+    return question,()
+
+
 def interpret(question):
     subject=question;attributes=();framed=False;frame_candidate=False
     for language,pattern in (('zh',_ZH_FRAME),('en',_EN_FRAME)):
@@ -99,8 +129,21 @@ def interpret(question):
                 and not re.search(r'[;；\n]',focus)):
             subject=focus;attributes=parsed_attributes;framed=True
         break
+    requirements=()
+    if not frame_candidate:
+        subject,requirements=_requirements(question)
     subject_terms=_literal_terms(_QUALIFIER.sub(' ',subject))
-    return Question(subject,subject_terms,qualifiers(question),attributes,framed,frame_candidate)
+    return Question(subject,subject_terms,qualifiers(question),attributes,framed,frame_candidate,requirements)
+
+
+def requested_parts(question):
+    parsed=interpret(question)
+    if not parsed.requirements:
+        return ()
+    # Reuse exact query qualifiers in every recall request. A fact from a
+    # different release/date cannot satisfy a sibling claim through merging.
+    scope=' '.join(value.value for value in parsed.qualifiers)
+    return tuple(' '.join(part for part in (parsed.subject,scope,claim) if part) for claim in parsed.requirements)
 
 
 def supports_qualifier(text,qualifier):

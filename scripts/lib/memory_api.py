@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Memory API
+"""AI Agent Infra v5.0.3 - Community Edition - Memory API
 
 Unified memory management using oracledb with bind variables.
 Operates on the ENTITIES table (ENTITY_TYPE='MEMORY').
@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from . import connection
 from .connection import execute, execute_query, execute_query_one, execute_insert_returning_id
 from . import memory_lifecycle
+from .continuity_state import ContinuityConflict
 
 logger = logging.getLogger(__name__)
 
@@ -151,13 +152,35 @@ def search_memories(
     isolation_mode: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    principal_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     try:
-        return memory_lifecycle.current_memories(
+        values = memory_lifecycle.current_memories(
             keyword=keyword, memory_type=category, workspace_id=workspace_id,
             owner_agent_id=owned_by_agent, limit=limit, offset=offset,
         )
+        if principal_id:
+            from .continuity_promotions import require_memory_original_sources
+            authorized = []
+            for value in values:
+                try:
+                    memory_lifecycle._require_memory_access(principal_id, value, purpose="RUNTIME_CONTEXT")
+                    connection.execute_transaction_callback(
+                        lambda tx, item=value: require_memory_original_sources(
+                            tx, principal_id, str(item["family_id"]), str(item["version_id"]), item
+                        )
+                    )
+                except (PermissionError, memory_lifecycle.MemoryLifecycleError, ContinuityConflict):
+                    continue
+                authorized.append(value)
+            return authorized
+        return values
     except Exception:
+        if principal_id:
+            # An authenticated visualization request must fail closed when the
+            # governed lifecycle projection is unavailable. Falling back to the
+            # legacy ENTITIES query here would disclose unauthorized memory.
+            raise PermissionError("Governed memory projection is unavailable")
         # The legacy projection is retained only while an additive migration
         # has not yet completed.
         logger.debug("using pre-v4.3.2 memory search compatibility", exc_info=True)

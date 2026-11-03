@@ -144,10 +144,12 @@ def _payload(profile,payload):
             or not 1<=len(payload['messages'])<=100):raise ValueError('Unsupported exact coordinator Chat Completions request')
     stream=payload['stream']
     fields={key:payload[key] for key in ('response_format','tools','tool_choice','max_tokens','temperature') if key in payload}
-    if stream and (fields or payload.get('stream_options')!={'include_usage':True}):
+    if stream and (set(fields)-{'max_tokens'} or payload.get('stream_options')!={'include_usage':True}):
         raise ValueError('The enrolled streaming subset is the native text stream contract')
+    if 'max_tokens' in fields and (type(fields['max_tokens']) is not int or not 1<=fields['max_tokens']<=32768):
+        raise ValueError('The exact coordinator output limit is invalid')
     expected=probes.apply_parameters(profile,dict(model=profile['model_id'],messages=native_runtime._provider_messages(payload['messages']),
-        stream=stream,**({'stream_options':{'include_usage':True}} if stream else fields)))
+        stream=stream,**fields,**({'stream_options':{'include_usage':True}} if stream else {})))
     if digest(expected)!=digest(payload):raise PermissionError('Origin and coordinator exact model parameter contracts differ')
     kind='tool' if 'tools' in fields else 'structured' if 'response_format' in fields else 'text'
     return stream,fields,kind
@@ -226,7 +228,7 @@ def complete(raw,binding_id,proof_value,payload):
         with model_dispatch.authenticated_context(record['actor_id'],'GATEWAY',request_id,envelope.origin_receipt_id,
                 credential_digest=record['credential_digest'],reauthorize=reauthorize,worker_key='coord:'+request_id,
                 origin_id=origin_id,allow_wait=False):
-            parsed=native_runtime._stream_llm(current,payload['messages'],lambda _:None) if stream else native_runtime._call_llm(
+            parsed=native_runtime._stream_llm(current,payload['messages'],lambda _:None,request_fields=fields) if stream else native_runtime._call_llm(
                 current,payload['messages'],output_kind=kind,request_fields=fields,
                 managed_input=any(isinstance(item.get('content'),list) for item in payload['messages']))
         usage._write_usage(request_id,record['actor_id'],'',str(current.get('profile_key') or current['profile_id']),parsed['model'],

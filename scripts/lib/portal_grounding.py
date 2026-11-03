@@ -18,9 +18,10 @@ def _recheck_profile(tx, profile):
     return current
 
 
-def policy() -> dict[str, Any]:
+def policy(*, transaction=None) -> dict[str, Any]:
     mode_column = '"MODE"' if str(connection.DATABASE_DIALECT).lower() == "oracle" else "MODE"
-    raw = connection.execute_query_one(
+    query = transaction.query_one if transaction is not None else connection.execute_query_one
+    raw = query(
         "SELECT POLICY_ID," + mode_column + ",ALLOW_MODEL_SUPPLEMENT,DISCLOSURE_PROFILES_JSON,VERSION "
         "FROM CX_PORTAL_KNOWLEDGE_POLICY WHERE POLICY_ID='DEFAULT'", {})
     if not raw:
@@ -65,11 +66,12 @@ def set_policy(actor: str, mode: str, allow_model_supplement: bool, disclosure_p
 
 
 def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, supplement: bool = False,
-           entity_ids: list[str] | None = None, strategy: str = "hybrid") -> dict[str, Any]:
+           entity_ids: list[str] | None = None, strategy: str = "hybrid", applicability=None) -> dict[str, Any]:
     actor, agent = str(session.get("principal_id") or ""), str(session.get("agent_id") or "")
     content_security.enforce(message, "USER_INPUT")
     configured = policy()
-    result = answer_planning.retrieve(actor, agent, message, entity_ids=entity_ids, strategy=strategy)
+    result = answer_planning.retrieve(actor, agent, message, entity_ids=entity_ids, strategy=strategy,
+        **({'applicability':applicability} if applicability is not None else {}))
     sources = result["items"]
     effective_policy = dict(configured, allow_model_supplement=configured["allow_model_supplement"] if supplement else "N")
     planned = answer_planning.prepare(message, str(profile.get("profile_id") or ""), effective_policy, result)
@@ -99,11 +101,13 @@ def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, su
             if not allowed or digest(policy()) != frozen_policy:
                 raise PermissionError('The original Portal model or knowledge policy changed')
             for item in citations:
-                knowledge_grounding.citation(actor, agent, item['entity_id'], item['digest'])
+                knowledge_grounding.validate_citation(actor,agent,item,transaction=tx)
         with model_credentials.dispatch_context(binding, 'PORTAL', request_id, request_id,
                 reauthorize=reauthorize, worker_key='portal:' + request_id, allow_wait=True,
                 lock_principals=(actor, agent)):
-            completion = native_runtime._call_llm(profile, planned["messages"])
+            from . import answer_context
+            with answer_context.dispatch_budget(planned.get('context_selection')):
+                completion = native_runtime._call_llm(profile, planned["messages"])
             reply = completion["content"]
             model_request_id = completion.get("request_id")
         if binding is not None:
@@ -112,7 +116,7 @@ def answer(session: dict[str, Any], message: str, profile: dict[str, Any], *, su
     content_security.enforce(reply, "OUTPUT")
     knowledge_grounding.require_reader(actor, agent)
     for item in citations:
-        knowledge_grounding.citation(actor, agent, item["entity_id"], item["digest"])
+        knowledge_grounding.validate_citation(actor,agent,item)
     if policy()["version"] != configured["version"]:
         raise knowledge_grounding.GroundingError("Knowledge policy changed during answer generation")
     return {"reply": reply, "citations": citations, "answer_source": source,

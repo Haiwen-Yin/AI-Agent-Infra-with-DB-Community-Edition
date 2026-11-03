@@ -1,4 +1,4 @@
-# 迁移指南 v5.0.2
+# 迁移指南 v5.0.3
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -10,6 +10,25 @@
 v5.0.1 新增 103–105，分别提供记忆质量、上下文资产及最终回答验收，生成的目标终点
 为 105。这里说明目标合同，不表示数据库或发布验收已经完成。
 
+v5.0.2 新增 106–109；PostgreSQL 另需执行 110，修正历史审批约束。
+v5.0.3 保留各底座的前序链，新增下表所列脚本。PostgreSQL/YashanDB 终点为 117，Oracle 为 118，
+仍需逐项验证所选脚本及结构清单，不能只检查终点。
+
+| 底座 | v5.0.3 新增链 |
+|---|---|
+| PostgreSQL，包括 AgentX | 111–114，再执行 117 |
+| Oracle | 111–114，再执行 117–118 |
+| YashanDB | 111、115–117 |
+
+111 保存知识入库引导元数据。原生知识写入边界在 PostgreSQL/Oracle 使用
+112–114，在 YashanDB 使用 115；YashanDB 的 116 增加正文检索并保留标题索引。
+YashanDB 包内的历史 112–114 文件继续保留，以便核对历史及校验和，但不在所选
+执行链中。117 为 Task Step 增加可空的开始、完成时间，无默认值，也不回填历史。
+原有数据、授权及未知时间保持不变；历史时间为空不能作为步骤从未运行的证明。
+Oracle 118 为成员文档增加显式冗余唯一键，并按原有全部 JSON 字段重建协作组
+Duality View，保留原主键、数据及授权。新装遇到对应的 ORA-40609 时也只执行
+这份明确的新增修复；历史 SQL 及其校验和不改写。
+
 单后端基线位于 `scripts/deploy/baseline_v*.json`。在统一的 Community 包中，每个后端在 `scripts/deploy/<database>/` 下恰好有一个基线。仅使用所选后端的脚本、驱动和配置。OpenTenBase AgentX 只能使用 PostgreSQL 链。
 
 | 先前发布的版本 | 迁移终点 |
@@ -19,6 +38,8 @@ v5.0.1 新增 103–105，分别提供记忆质量、上下文资产及最终回
 | v4.5.1 | 100 |
 | v4.5.2 | 101 |
 | v5.0.0 | 102 |
+| v5.0.1 | 105 |
+| v5.0.2 | PostgreSQL 为 110；Oracle/YashanDB 为 109 |
 
 这些版本是常规发布。历史迁移文件名描述的是结构引入的时间，而不是传递给当前安装程序的目标版本。已撤回的 v4.4.8 和未知的部分架构不被假定为升级源。保留历史证据并在继续之前进行调查。
 
@@ -44,10 +65,15 @@ Oracle、YashanDB 升级至 v5.0.1 前，需由 SYS 在原有的确切应用 PDB
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
+  --from-version 5.0.2 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
+
+从 v5.0.2 升到 v5.0.3 时，`--from-version 5.0.2` 会先检查前序真实结构及
+APPLIED 校验和，再仅执行上表中的本底座新增链。续跑保留原日志声明的前序版本；
+旧的未声明日志不能重新标成已核验的升级。初始化和其他版本迁移不使用此参数。
 
 将数据库和社区版/企业版参数替换为此软件包支持的值。
 安装程序会验证基线、源状态、有序脚本摘要以及对象后置条件。仅当已应用条目的校验和与所需结构相匹配时，才会接受这些条目。后续迁移只有在自身绑定校验和的条目状态为 APPLIED 之后，才能满足较早的结构检查。
@@ -75,6 +101,11 @@ Oracle 任务迁移 85 使用可恢复的复制，并在最终切换前进行检
 | 103 | 记忆时间/协调/恢复事实、不可变工作便签及显式关联任务的复盘 |
 | 104 | 上下文预算/表示、Agent 资产绑定、配置来源修订及带栅栏的同步/导入检查点 |
 | 105 | 版本化回答标准、关联任务的运行、加密输入/输出、精确来源及独立人工审核 |
+| 106–109 | 模型容量、处理恢复、受控模型轮次及已观测回答审核 |
+| 110（PostgreSQL） | 修正历史审批约束，保留正常审批权限 |
+| 111–116（按底座选择） | 知识引导元数据、原生共享写入边界及底座特定的正文检索 |
+| 117 | 实际观测的步骤开始、完成时间，未知历史保持为空 |
+| 118（Oracle） | 显式子文档键，保留完整协作组 JSON 投影 |
 
 v5.0.1 目标需检查三项新脚本及结构清单，包括实际表、键、约束和原生保护。
 终点 105 账本成功不代表 103、104 对象存在。来源/模型作业复用既有任务连续性链，
@@ -90,10 +121,10 @@ PostgreSQL 在历史状态分区 Task Plan 表没有全局 PLAN_ID 键的情况�
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -103,7 +134,7 @@ bash scripts/install_platform.sh resume \
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.3 \
   --config /absolute/path/config.json
 ```
 

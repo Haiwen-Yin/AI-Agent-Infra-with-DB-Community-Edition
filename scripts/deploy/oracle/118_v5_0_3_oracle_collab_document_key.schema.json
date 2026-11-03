@@ -1,0 +1,18 @@
+{
+  "schema": "v503-oracle-collab-document-key/v1",
+  "database": "oracle",
+  "table": "COLLAB_GROUP_MEMBERS",
+  "primary_key": [
+    "MEMBER_ID"
+  ],
+  "unique_key": "CX503_CGM_DOCUMENT_KEY",
+  "unique_columns": [
+    "MEMBER_ID",
+    "GROUP_ID"
+  ],
+  "view": "COLLAB_GROUP_DV",
+  "view_sql_sha256": "58614a3771a1e6b27e8b889bb74427c45460ffb37d1c3202aa8fbed026661f53",
+  "data_mutation": false,
+  "grants_changed": false,
+  "json_fields": "PRESERVED"
+}

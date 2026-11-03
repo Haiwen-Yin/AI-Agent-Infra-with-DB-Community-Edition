@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - MCP Server
+"""AI Agent Infra v5.0.3 - MCP Server
 
 Exposes the system's tools, memory, knowledge, and search capabilities
 as an MCP (Model Context Protocol) server. Supports both stdio and SSE transport.
@@ -269,7 +269,7 @@ async def list_tools() -> List[Tool]:
     if "knowledge_create" in exposed:
         tools.append(Tool(
             name="knowledge_create",
-            description="Create a new knowledge entry.",
+            description="Create a private personal knowledge note. Shared knowledge uses governed artifact candidates with exact sources and guided intake; this tool never publishes shared knowledge.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -279,8 +279,8 @@ async def list_tools() -> List[Tool]:
                     "topic": {"type": "string"},
                     "importance": {"type": "integer", "default": 5},
                     "owned_by_agent": {"type": "string"},
-                    "visibility": {"type": "string", "default": "SHARED"},
-                    "sharing_scope": {"type": "string", "enum": ["PUBLIC_COMPANY", "ORGANIZATION_SUBTREE", "ORGANIZATION_LEVEL", "PRINCIPAL_PRIVATE"], "default": "ORGANIZATION_SUBTREE"},
+                    "visibility": {"type": "string", "enum": ["PRIVATE"], "default": "PRIVATE"},
+                    "sharing_scope": {"type": "string", "enum": ["PRINCIPAL_PRIVATE"], "default": "PRINCIPAL_PRIVATE"},
                     "organization_id": {"type": "string"},
                     "reason": {"type": "string"},
                 },
@@ -568,7 +568,12 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
             if not current:
                 raise ValueError("Memory Family is unavailable")
             _owned_memory_version(str(current["version_id"]), authenticated_agent)
-            result = memory_lifecycle.chain(
+            # The ownership check only authorizes the requested root. Resolve
+            # the complete induced chain through the live Memory authority so
+            # hidden related versions, revoked domains and derived-source
+            # lineage cannot leak through the MCP graph response.
+            result = memory_lifecycle.authorized_chain(
+                authenticated_agent,
                 str(current["version_id"]), hops=arguments.get("hops", 2), limit=arguments.get("limit", 100),
             )
             return [TextContent(type="text", text=json.dumps(result, default=str, ensure_ascii=False))]
@@ -601,8 +606,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
                 topic=arguments.get("topic"),
                 importance=arguments.get("importance", 5),
                 owned_by_agent=authenticated_agent,
-                visibility=arguments.get("visibility", "SHARED"),
-                sharing_scope=arguments.get("sharing_scope", "ORGANIZATION_SUBTREE"),
+                visibility=arguments.get("visibility", "PRIVATE"),
+                sharing_scope=arguments.get("sharing_scope", "PRINCIPAL_PRIVATE"),
                 organization_id=arguments.get("organization_id"),
                 creation_reason=arguments.get("reason", "Agent knowledge creation"),
             )

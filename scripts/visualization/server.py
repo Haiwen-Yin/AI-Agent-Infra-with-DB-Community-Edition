@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Web Visualization Server
+"""AI Agent Infra v5.0.3 - Community Edition - Web Visualization Server
 
 Lightweight HTTP server providing session-based auth, page routing,
 and JSON API endpoints for knowledge, memory, agents, tasks, workspaces,
@@ -58,7 +58,7 @@ if edition_features.has_feature('governance'):
 else:
     governance_api = None
 
-VERSION = "5.0.2"
+VERSION = "5.0.3"
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
@@ -751,8 +751,8 @@ def _knowledge_to_vis(principal_id=None):
     return {'nodes': nodes, 'edges': vis_edges}
 
 
-def _memory_to_vis():
-    items = memory_api.search_memories(limit=500)
+def _memory_to_vis(principal_id=None):
+    items = memory_api.search_memories(limit=500, principal_id=principal_id)
     version_ids = [str(i.get('version_id')) for i in items if i.get('version_id')]
     # Versioned families need not have a legacy ENTITIES row. Their family ID
     # is a display compatibility ID, never an entity_tags foreign key.
@@ -788,12 +788,38 @@ def _memory_to_vis():
         params = {f"v{i}": value for i, value in enumerate(sorted(endpoint_ids)[:250])}
         related_versions = connection.execute_query(
             "SELECT v.VERSION_ID,v.TITLE,v.VERSION_NUMBER,v.MEMORY_TYPE,v.MEMORY_SCOPE,v.LIFECYCLE_STATE,v.CLASSIFICATION,"
+            "v.OWNER_PRINCIPAL_ID,v.OWNER_AGENT_ID,v.SECURITY_DOMAIN_ID,v.VALID_UNTIL,"
             "f.FAMILY_ID,CASE WHEN f.CURRENT_VERSION_ID=v.VERSION_ID THEN 1 ELSE 0 END AS IS_CURRENT "
             "FROM CX_MEMORY_VERSIONS v LEFT JOIN CX_MEMORY_FAMILIES f ON f.FAMILY_ID=v.FAMILY_ID WHERE v.VERSION_ID IN ({})".format(
                 ','.join(f":v{i}" for i in range(len(params)))
             ),
             params,
         )
+    # Relation rows are only locators. Before exposing a historical endpoint
+    # or its edge, recheck the current reader and the candidate-derived source
+    # chain. A graph query must not disclose hidden version IDs by adjacency.
+    allowed_ids = set(version_ids)
+    authorized_related = []
+    if principal_id:
+        from lib.continuity_promotions import require_memory_original_sources
+        from lib.continuity_state import ContinuityConflict
+        for row in related_versions:
+            try:
+                memory_lifecycle._require_memory_access(principal_id, row, purpose="RUNTIME_CONTEXT")
+                connection.execute_transaction_callback(
+                    lambda tx, item=row: require_memory_original_sources(
+                        tx, principal_id, str(item.get("family_id") or ""),
+                        str(item.get("version_id") or ""), item,
+                    )
+                )
+            except (PermissionError, memory_lifecycle.MemoryLifecycleError, ContinuityConflict):
+                continue
+            authorized_related.append(row)
+            allowed_ids.add(str(row.get("version_id")))
+    related_versions = authorized_related
+    mem_edges = [edge for edge in mem_edges
+                 if str(edge.get("source_id")) in allowed_ids
+                 and str(edge.get("target_id")) in allowed_ids]
     nodes = []
     for item in items:
         nodes.append({
@@ -2297,7 +2323,11 @@ class VisHandler(BaseHTTPRequestHandler):
                 principal = self._authenticated_principal()
                 self._send_json(_knowledge_to_vis(principal.get('actor_id') if principal else None))
             elif path == '/api/memory':
-                self._send_json(_memory_to_vis())
+                principal = self._authenticated_principal()
+                if not principal:
+                    self._send_error(401, 'Authenticated principal required')
+                    return
+                self._send_json(_memory_to_vis(str(principal.get('actor_id') or '')))
             elif path == '/api/memory/jobs':
                 self._send_json({'jobs': memory_lifecycle.list_jobs(int(qs.get('limit', ['100'])[0]))})
             elif path == '/api/memory/projections/metrics':
@@ -2321,17 +2351,30 @@ class VisHandler(BaseHTTPRequestHandler):
                     {'lim': max(1, min(int(qs.get('limit', ['100'])[0]), 200))},
                 )})
             elif path.startswith('/api/memory/') and path.endswith('/chain'):
+                principal = self._authenticated_principal()
+                if not principal:
+                    self._send_error(401, 'Authenticated principal required')
+                    return
                 family_id = path.split('/')[3]
-                detail = memory_lifecycle.get_family(family_id)
+                detail = memory_lifecycle.get_family(family_id, principal_id=str(principal.get('actor_id') or ''))
                 if not detail or not detail.get('current'):
                     self._send_error(404, 'Memory family not found')
                     return
-                self._send_json(memory_lifecycle.chain(
+                self._send_json(memory_lifecycle.authorized_chain(
+                    str(principal.get('actor_id') or ''),
                     str(detail['current']['version_id']), hops=int(qs.get('hops', ['2'])[0]), limit=int(qs.get('limit', ['100'])[0]),
                 ))
             elif path.startswith('/api/memory/'):
+                principal = self._authenticated_principal()
+                if not principal:
+                    self._send_error(401, 'Authenticated principal required')
+                    return
                 family_id = path.split('/')[3]
-                detail = memory_lifecycle.get_family(family_id, include_history=qs.get('history', ['false'])[0].lower() == 'true')
+                detail = memory_lifecycle.get_family(
+                    family_id,
+                    include_history=qs.get('history', ['false'])[0].lower() == 'true',
+                    principal_id=str(principal.get('actor_id') or ''),
+                )
                 if not detail:
                     self._send_error(404, 'Memory family not found')
                     return
@@ -4319,7 +4362,8 @@ class VisHandler(BaseHTTPRequestHandler):
                 # policy permits model supplementation, clients need not opt
                 # in with a fragile transport flag; knowledge remains first.
                 answer = portal_grounding.answer(sess, message, selected_profile,
-                    supplement=True, entity_ids=data.get('knowledge_ids'))
+                    supplement=True, entity_ids=data.get('knowledge_ids'),
+                    applicability=data.get('knowledge_scope'))
                 if workspace_id:
                     workspace_api.save_context(
                         workspace_id=workspace_id, agent_id=agent_id or user_id,
@@ -4998,8 +5042,8 @@ class VisHandler(BaseHTTPRequestHandler):
             with open(filepath, 'r', encoding='utf-8') as f:
                 html = f.read()
             timeout = _session_timeout()
-            html = html.replace('5.0.2', VERSION)
-            html = html.replace('2026-11-01', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
+            html = html.replace('5.0.3', VERSION)
+            html = html.replace('2026-11-03', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
             html = html.replace('{{DB_DISPLAY}}', _product_database_display())
             html = html.replace('{{EDITION_TIER}}', _product_tier())
             html = html.replace(

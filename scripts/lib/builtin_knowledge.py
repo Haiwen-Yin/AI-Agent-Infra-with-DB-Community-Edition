@@ -49,11 +49,18 @@ def withdraw(actor: str, knowledge_id: str, reason: str) -> dict[str, Any]:
     if identity_api.effective_access(actor, "platform.manage").get("decision") != "ALLOW" or len(reason.strip()) < 3:
         raise PermissionError("knowledge withdrawal denied")
     def work(tx):
+        raw=tx.query_one("SELECT KNOWLEDGE_KEY,VERSION,KNOWLEDGE_KIND,AUDIENCE,SCOPE_TYPE,CONTENT_JSON,"
+            "CONTENT_DIGEST,SIGNATURE,SIGNATURE_STATUS,STATUS FROM CX_PLATFORM_KNOWLEDGE "
+            "WHERE KNOWLEDGE_ID=:id FOR UPDATE",{'id':knowledge_id})
+        if not raw or str(raw.get('status',raw.get('STATUS',''))).upper()!='PUBLISHED':
+            raise KnowledgeLifecycleError('knowledge package is unavailable or already withdrawn')
+        from . import product_knowledge
+        archived,preserved=product_knowledge.withdraw_projection(tx,actor,{str(key).lower():value for key,value in raw.items()})
         changed = tx.execute("UPDATE CX_PLATFORM_KNOWLEDGE SET STATUS='REVOKED',VALID_UNTIL=CURRENT_TIMESTAMP WHERE KNOWLEDGE_ID=:id AND STATUS='PUBLISHED'", {"id":knowledge_id})
         if changed != 1: raise KnowledgeLifecycleError("knowledge package is unavailable or already withdrawn")
         tx.execute("UPDATE CX_PLATFORM_KNOWLEDGE_CHUNKS SET STATUS='REVOKED' WHERE KNOWLEDGE_ID=:id AND STATUS='ACTIVE'", {"id":knowledge_id})
         identity_api._audit_tx(tx, actor, "BUILTIN_KNOWLEDGE_WITHDRAW", "PLATFORM_KNOWLEDGE", knowledge_id, "ALLOW", reason)
-        return {"knowledge_id":knowledge_id,"status":"REVOKED"}
+        return {"knowledge_id":knowledge_id,"status":"REVOKED",'archived_projections':archived,'preserved_modified_projections':preserved}
     return connection.execute_transaction_callback(work)
 
 def list_packages(actor: str, limit: int = 100) -> list[dict[str, Any]]:

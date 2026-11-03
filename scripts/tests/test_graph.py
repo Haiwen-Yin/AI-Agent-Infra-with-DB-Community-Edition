@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Property Graph API Tests"""
+"""AI Agent Infra v5.0.3 - Property Graph API Tests"""
 
 import sys
 import os
@@ -35,9 +35,10 @@ def test_graph_search():
 
 
 def test_neighbors():
-    m1 = create_memory("Neighbor Test A", "content a", category="graph-test", importance=8, owned_by_agent="graph-tester")
-    m2 = create_memory("Neighbor Test B", "content b", category="graph-test", importance=6, owned_by_agent="graph-tester")
-    k1 = create_knowledge("Neighbor Knowledge", "knowledge content", domain="test", topic="graph", difficulty="BEGINNER", owned_by_agent="graph-tester")
+    # Owner-level topology fixtures do not impersonate an unregistered Agent.
+    m1 = create_memory("Neighbor Test A", "content a", category="graph-test", importance=8)
+    m2 = create_memory("Neighbor Test B", "content b", category="graph-test", importance=6)
+    k1 = create_knowledge("Neighbor Knowledge", "knowledge content", domain="test", topic="graph", difficulty="BEGINNER")
     _test_ids.extend([m1, m2, k1])
 
     add_edge(m1, "MEMORY", k1, "DERIVED_FROM", 0.9, 0.85)

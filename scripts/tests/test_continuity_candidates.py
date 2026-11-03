@@ -1,4 +1,5 @@
 """Typed candidate transactions with actual relational writes in a unit DB."""
+import json
 import pytest
 
 from lib import continuity_candidates as candidates, continuity_promotions as promotions, continuity_handoff as handoff
@@ -22,12 +23,14 @@ def candidate_db(fixture,monkeypatch):
     monkeypatch.setattr(candidates.connection,'DATABASE_DIALECT','oracle')
     monkeypatch.setattr(candidates.identity_api,'effective_access',lambda *a,**k:{'decision':'ALLOW','scopes':['ALL']})
     db.execute("UPDATE CX_DOMAIN_MEMBERS SET MEMBERSHIP_TIER='ADMIN' WHERE PRINCIPAL_ID='agent'")
-    for statement in candidates.schema_statements('pg')+promotions.schema_statements('pg'):
+    from lib import knowledge_intake
+    monkeypatch.setattr(knowledge_intake.native,'limit_clause',lambda:' LIMIT :candidate_limit')
+    for statement in candidates.schema_statements('pg')+promotions.schema_statements('pg')+knowledge_intake.schema_statements('pg'):
         db.execute(statement)
     db.executescript('''
-        CREATE TABLE ENTITIES(ENTITY_ID TEXT PRIMARY KEY,ENTITY_TYPE TEXT,TITLE TEXT,CONTENT TEXT,STATUS TEXT,OWNED_BY_AGENT TEXT,VISIBILITY TEXT,EXPIRES_AT TIMESTAMP);
-        CREATE TABLE KNOWLEDGE_META(ENTITY_ID TEXT PRIMARY KEY REFERENCES ENTITIES(ENTITY_ID),ENTITY_TYPE TEXT,REVIEW_COUNT INTEGER);
-        CREATE TABLE CX_KNOWLEDGE_ACCESS_POLICIES(POLICY_ID TEXT,ENTITY_ID TEXT,SCOPE_TYPE TEXT,PRINCIPAL_ID TEXT,CREATED_BY TEXT,REASON TEXT,STATUS TEXT DEFAULT 'ACTIVE',VALID_FROM TIMESTAMP DEFAULT CURRENT_TIMESTAMP,VALID_UNTIL TIMESTAMP,ORGANIZATION_ID TEXT,HIERARCHY_DEPTH INTEGER);
+        CREATE TABLE ENTITIES(ENTITY_ID TEXT PRIMARY KEY,ENTITY_TYPE TEXT,TITLE TEXT,CONTENT TEXT,STATUS TEXT,OWNED_BY_AGENT TEXT,VISIBILITY TEXT,EXPIRES_AT TIMESTAMP,UPDATED_AT TIMESTAMP);
+        CREATE TABLE KNOWLEDGE_META(ENTITY_ID TEXT PRIMARY KEY REFERENCES ENTITIES(ENTITY_ID),ENTITY_TYPE TEXT,REVIEW_COUNT INTEGER,DOMAIN TEXT,TOPIC TEXT);
+        CREATE TABLE CX_KNOWLEDGE_ACCESS_POLICIES(POLICY_ID TEXT,ENTITY_ID TEXT,SCOPE_TYPE TEXT,PRINCIPAL_ID TEXT,CREATED_BY TEXT,REASON TEXT,STATUS TEXT DEFAULT 'ACTIVE',VALID_FROM TIMESTAMP DEFAULT CURRENT_TIMESTAMP,VALID_UNTIL TIMESTAMP,ORGANIZATION_ID TEXT,HIERARCHY_DEPTH INTEGER,UPDATED_AT TIMESTAMP);
         CREATE TABLE CX_ORGANIZATION_MEMBERS(PRINCIPAL_ID TEXT,ORGANIZATION_ID TEXT,STATUS TEXT,VALID_FROM TIMESTAMP,VALID_UNTIL TIMESTAMP);
         CREATE TABLE CX_ORGANIZATION_CLOSURE(ANCESTOR_ID TEXT,DESCENDANT_ID TEXT,DEPTH INTEGER);
         CREATE TABLE CX_ORGANIZATIONS(ORGANIZATION_ID TEXT,STATUS TEXT,VALID_FROM TIMESTAMP,VALID_UNTIL TIMESTAMP);
@@ -48,7 +51,13 @@ def candidate_db(fixture,monkeypatch):
 
 
 def new_candidate(source,content=PROPOSALS[0],key='candidate'):
-    return dict(security_domain_id='domain',content=content,sources=[source],reason='Verified proposal',idempotency_key=key)
+    value=dict(security_domain_id='domain',content=content,sources=[source],reason='Verified proposal',idempotency_key=key)
+    if content['family']=='KNOWLEDGE':
+        value['intake']=dict(purpose='Preserve a verified procedure',source_locator='source:handoff',
+            responsible_principal_id='owner',subject='Synthetic procedure',applicable_product='unified-community',
+            applicable_version='5.0.3',effective_from='2026-11-01T00:00:00Z',classification='INTERNAL',
+            audience='PRINCIPAL_PRIVATE',decision_status='CURRENT')
+    return value
 
 
 def approve(cid):
@@ -78,6 +87,9 @@ def test_all_families_promote_to_native_entities_and_replay(candidate_db,proposa
     ref=SourceRef(family=proposal['family'],entity_id=result['result_entity_id'],revision_id=result['result_revision_id'],content_digest=digest)
     resolved=candidates.connection.execute_transaction_callback(lambda tx:sources.resolve(tx,'owner','domain',ref))
     assert proposal['title'] in resolved['text']
+    if proposal['family']!='MEMORY':
+        assert json.loads(resolved['text'])==proposal
+        assert resolved['source_context']['candidate_id']==cid
 
 
 def test_self_approval_stale_content_and_post_review_mutation_denied(candidate_db):

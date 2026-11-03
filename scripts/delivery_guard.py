@@ -23,6 +23,24 @@ def validate_product(root: Path) -> list[str]:
         errors.append("package directory differs from the product name")
     if manifest.get("edition") != product.edition or manifest.get("license") != product.license:
         errors.append("product edition or license differs from its registry entry")
+    learning = manifest.get('platform_learning')
+    if learning is not None:
+        expected_delivery = 'bundled' if product.edition == 'Enterprise' else 'separate'
+        payload = root / 'scripts/lib/platform_learning_content.py'
+        if not isinstance(learning, dict) or learning.get('delivery') != expected_delivery:
+            errors.append('platform learning delivery differs from product policy')
+        elif expected_delivery == 'separate':
+            if payload.exists() or list(root.glob('**/*platform-learning-v*.json')):
+                errors.append('Community software contains optional complete learning content')
+            pins = learning.get('snapshots') or {}
+            import re
+            if not isinstance(pins, dict) or set(pins) != set(product.databases) or any(
+                    not isinstance(pin, dict) or set(pin) != {'revision', 'sha256'} or
+                    any(not re.fullmatch('[a-f0-9]{64}', str(pin.get(key, ''))) for key in ('revision', 'sha256'))
+                    for pin in pins.values()):
+                errors.append('optional platform learning references are invalid')
+        elif not payload.is_file():
+            errors.append('Enterprise complete platform learning content is missing')
     if product.key == "unified-community":
         adapter_root = root / "scripts/database_adapters"
         present = {path.name for path in adapter_root.iterdir() if path.is_dir()} if adapter_root.is_dir() else set()
@@ -87,6 +105,20 @@ def validate_delivery(root: Path, *, selected: tuple[str, ...] = ()) -> list[str
             errors.append(f"missing product: {product.package}")
         else:
             errors.extend(f"{product.key}: {item}" for item in validate_product(package))
+            manifest = json.loads((package / 'build-manifest.json').read_text())
+            policy = manifest.get('platform_learning') or {}
+            if policy.get('delivery') == 'separate':
+                companion = root / 'knowledge_packages' / f'{product.package}-platform-learning-v{manifest["version"]}.json'
+                try:
+                    bundle = json.loads(companion.read_text())
+                    from shared.lib.builtin_knowledge import _digest
+                    if (bundle.get('format') != 'platform-learning/1'
+                            or set(bundle['snapshots']) != set(product.databases)
+                            or any(_digest(content) != policy['snapshots'][database]['sha256']
+                                   for database, content in bundle['snapshots'].items())):
+                        errors.append(f'{product.key}: optional learning companion differs from its pins')
+                except (OSError, ValueError, KeyError, TypeError):
+                    errors.append(f'{product.key}: optional learning companion is unavailable')
     if not selected:
         actual = {path.name for path in root.iterdir() if path.is_dir() and (path / "build-manifest.json").is_file()}
         if actual != {item.package for item in products}:

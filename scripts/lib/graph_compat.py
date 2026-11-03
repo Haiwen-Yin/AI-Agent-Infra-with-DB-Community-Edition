@@ -544,12 +544,27 @@ def _ensure_wrapper(kind: str, legacy_id: str, name: str, owner_ref: str,
             metadata={"compatibility": COMPAT_SCHEMA, "legacy_kind": kind, "legacy_id": legacy_id, **(metadata or {})},
         )
     desired_digest = _portable_digest(definition)
+    def same_topology(version_id):
+        exported = graph_definition_api.export_version(version_id)['definition']
+        # Exchange digests also bind a display label. Compatibility compares
+        # executable topology with the same canonical contract on both sides.
+        return _portable_digest(dict(exported['version'],schema_version=exported['schema_version'])) == desired_digest
+    if binding and binding.get('graph_run_id'):
+        from . import graph_runtime
+        active = graph_runtime.get_run(str(binding['graph_run_id']))
+        if active and str(active.get('status') or '').upper() not in {'SUCCEEDED','FAILED','CANCELLED','REVIEW_REQUIRED'}:
+            active_version = str(active['graph_version_id'])
+            original = graph_definition_api.get_version(active_version,include_topology=True)
+            if not original or original.get('graph_id') != graph_id or not same_topology(active_version):
+                raise ValueError('An active compatibility run requires its original unchanged topology')
+            return _upsert_binding(kind,legacy_id,graph_id,graph_version_id=active_version,
+                graph_run_id=str(binding['graph_run_id']),metadata=metadata)
     current_version_id = (binding or {}).get("graph_version_id")
     if current_version_id:
         current = graph_definition_api.get_version(current_version_id, include_topology=True)
         if current and str(current.get("status") or "").upper() in {"PUBLISHED", "DEPRECATED"}:
             try:
-                if graph_definition_api.export_version(current_version_id)["definition"]["definition_digest"] == desired_digest:
+                if same_topology(current_version_id):
                     return _upsert_binding(kind, legacy_id, graph_id, graph_version_id=current_version_id,
                                             graph_run_id=(binding or {}).get("graph_run_id"), metadata=metadata)
             except Exception:

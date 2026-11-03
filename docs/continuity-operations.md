@@ -1,4 +1,4 @@
-# Work continuity operations v5.0.2
+# Work continuity operations v5.0.3
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -150,6 +150,16 @@ Gateway use their existing continuity prefixes. MCP/CLI operation
 `max_active_recipients`, `reason` and `idempotency_key`. Current owner, domain and
 resource authorization still apply. Stale versions and active handoffs return
 conflicts. Read an earlier Work revision to inspect its original policy.
+
+Submit a result through `POST /api/handoffs/{handoff_id}/outcome`, using the
+observed `expected_version`, `expected_revision_no`, `result`, `summary`,
+`satisfied_criteria`, exact `evidence`, `reason` and `idempotency_key`.
+`COMPLETED` belongs to the outcome contract; it is not a handoff decision.
+A completed outcome must account for every acceptance criterion from the
+offered Work revision. Reference actual execution/Step receipts and reviewed
+output; a nonempty model response alone does not establish task completion.
+Task Step start/completion times describe observed transitions. Unknown
+historical times remain empty after upgrade.
 
 Dynamic MCP calls require a Security Domain, an arguments object, a reason and
 an idempotency key. Configure the same instance-bound Gateway transport used by

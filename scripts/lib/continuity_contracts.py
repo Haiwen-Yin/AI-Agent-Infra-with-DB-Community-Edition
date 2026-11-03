@@ -178,6 +178,32 @@ class HandoffOutcome(Contract):
     idempotency_key: Identifier
 
 
+class KnowledgeRetrievalScope(Contract):
+    product: Identifier | None = None
+    version: Identifier | None = None
+    as_of: datetime | None = None
+    decision_statuses: tuple[Literal['CURRENT', 'PROPOSED', 'REJECTED', 'SUPERSEDED', 'HISTORICAL'], ...] = Field(default=(), max_length=5)
+
+    @field_validator('as_of', mode='before')
+    @classmethod
+    def explicit_instant(cls, value):
+        if value is not None and not isinstance(value, (str, datetime)):
+            raise ValueError('An applicability instant must be an explicit datetime')
+        return value
+
+    @field_validator('as_of')
+    @classmethod
+    def timezone_required(cls, value):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError('An applicability instant requires an explicit timezone')
+        return value
+
+    @field_validator('decision_statuses')
+    @classmethod
+    def unique_decisions(cls, values):
+        return tuple(dict.fromkeys(values))
+
+
 class AssemblyRequest(Contract):
     request_id: Identifier
     security_domain_id: Identifier
@@ -186,6 +212,8 @@ class AssemblyRequest(Contract):
     sources: Annotated[tuple[SourceRef, ...], Field(max_length=100)] = ()
     mandatory_sources: Annotated[tuple[SourceRef, ...], Field(max_length=100)] = ()
     query_text: Annotated[str, StringConstraints(strict=True, max_length=4000)] = ''
+    knowledge_retrieval: Literal['hybrid'] | None = Field(default=None, exclude_if=lambda value: value is None)
+    applicability: KnowledgeRetrievalScope | None = Field(default=None, exclude_if=lambda value: value is None)
     context_window: Annotated[StrictInt, Field(ge=1, le=1000000)] | None = None
     output_reserve: Annotated[StrictInt, Field(ge=0, le=999999)] = 0
     system_text: Annotated[str, StringConstraints(strict=True, max_length=16000)] = ''
@@ -198,6 +226,12 @@ class AssemblyRequest(Contract):
     ttl_seconds: Annotated[StrictInt, Field(ge=30, le=3600)] = 300
     purpose: Reason
     idempotency_key: Identifier
+
+    @model_validator(mode='after')
+    def knowledge_query(self):
+        if self.knowledge_retrieval is not None and (not self.query_text.strip() or len(self.query_text)>2000):
+            raise ValueError('Hybrid Knowledge context needs an explicit query of at most 2000 characters')
+        return self
 
 
 class MemoryProposal(Contract):
@@ -261,6 +295,42 @@ class SkillProposal(Contract):
 Proposal = Annotated[MemoryProposal | KnowledgeProposal | ExperienceProposal | SkillProposal, Field(discriminator='family')]
 
 
+class KnowledgeIntake(Contract):
+    """Declared applicability, never inferred from ingestion time or a manual."""
+    purpose: Text | None = None
+    source_locator: Text | None = None
+    responsible_principal_id: Identifier | None = None
+    subject: Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=256)] | None = None
+    applicable_product: Identifier | None = None
+    applicable_version: Identifier | None = None
+    effective_from: datetime | None = None
+    effective_until: datetime | None = None
+    classification: Literal['PUBLIC', 'INTERNAL', 'CONFIDENTIAL', 'RESTRICTED'] | None = None
+    audience: Literal['PRINCIPAL_PRIVATE', 'DOMAIN', 'ORGANIZATION', 'PUBLIC'] | None = None
+    decision_status: Literal['CURRENT', 'PROPOSED', 'REJECTED', 'SUPERSEDED', 'HISTORICAL'] = 'PROPOSED'
+
+    @field_validator('effective_from', 'effective_until')
+    @classmethod
+    def explicit_timezone(cls, value):
+        return NewHandoff.explicit_timezone(value) if value is not None else None
+
+    @model_validator(mode='after')
+    def valid_interval(self):
+        if self.effective_until and (not self.effective_from or self.effective_until <= self.effective_from):
+            raise ValueError('Effective end requires a later time than effective start')
+        return self
+
+
+class LearningDiscovery(Contract):
+    role: Literal['HUMAN', 'ADMIN', 'AGENT'] | None = None
+    goal: Literal['onboarding', 'collaboration', 'access', 'tasks', 'workflow', 'knowledge', 'memory',
+                  'integration', 'capabilities', 'handoff', 'answers', 'recovery', 'models'] | None = None
+
+
+class LearningRead(Contract):
+    expected_digest: Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
+
+
 class NewCandidate(Contract):
     security_domain_id: Identifier
     content: Proposal
@@ -268,11 +338,15 @@ class NewCandidate(Contract):
     replaces: SourceRef | None = None
     reason: Reason
     idempotency_key: Identifier
+    # Absent intake must preserve exact historical request/content digests.
+    intake: KnowledgeIntake | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode='after')
     def replacement_family(self):
         if self.replaces and self.replaces.family.value != self.content.family:
             raise ValueError('replacement must belong to the same artifact family')
+        if self.intake is not None and self.content.family != 'KNOWLEDGE':
+            raise ValueError('Knowledge intake belongs to Knowledge candidates')
         return self
 
 
@@ -288,6 +362,7 @@ class CandidatePayload(Contract):
     content: Proposal
     sources: Annotated[tuple[SourceRef, ...], Field(min_length=1, max_length=100)]
     replaces: SourceRef | None = None
+    intake: KnowledgeIntake | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class CandidateRevision(NewCandidate):

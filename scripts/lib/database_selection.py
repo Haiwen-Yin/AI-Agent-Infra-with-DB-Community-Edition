@@ -15,7 +15,7 @@ from .product_identity import package_root, read_manifest
 
 _ALIASES = {"pg": "pg", "postgres": "pg", "postgresql": "pg",
             "oracle": "oracle", "yashandb": "yashandb"}
-_MODULES = frozenset({"config", "connection", "agent_api", "graph_adapter"})
+_MODULES = frozenset({"config", "connection", "agent_api", "graph_adapter", "knowledge_retrieval_adapter"})
 _DRIVERS = {"oracle": "oracledb", "pg": "psycopg2-binary", "yashandb": "yaspy"}
 
 

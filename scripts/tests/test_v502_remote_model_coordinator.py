@@ -133,7 +133,7 @@ def peer(tmp_path,monkeypatch):
     # This synthetic installation has no native business projections. Its
     # original durable SOURCE_AUTH row is also the trusted current read policy.
     monkeypatch.setattr(origin,'authorize_receipt_read',_authorize_synthetic_receipt)
-    state=SimpleNamespace(paths=paths,db=db,install=install,hold=Event(),entered=Event(),lock=Lock(),sends=0,active=0,maximum=0,mode='complete',failures=[],transaction_depth=transaction_depth)
+    state=SimpleNamespace(paths=paths,db=db,install=install,hold=Event(),entered=Event(),lock=Lock(),sends=0,active=0,maximum=0,mode='complete',failures=[],payloads=[],transaction_depth=transaction_depth)
     failed=model_usage_api._forward_failure
     def observe_failure(*args,**kwargs):
         state.failures.append((type(args[-1]).__name__,str(args[-1])))
@@ -145,6 +145,7 @@ def peer(tmp_path,monkeypatch):
         def log_message(self,*args):pass
         def do_POST(self):
             body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            state.payloads.append(body)
             with state.lock:state.sends+=1;state.active+=1;state.maximum=max(state.maximum,state.active)
             state.entered.set()
             try:
@@ -215,9 +216,10 @@ def peer(tmp_path,monkeypatch):
                 installation_key='product-'+name,coordinator_profile_id='provider',coordinator_profile_version=1,
                 reason='Explicit immutable local route',idempotency_key='route'))
     @contextmanager
-    def context(name,attempt='first',*,stream=False):
+    def context(name,attempt='first',*,stream=False,output_limit=None):
         messages=[dict(role='user',content='Read the approved synthetic fact.')]
         payload=dict(model='model',messages=messages,stream=stream,**({'stream_options':{'include_usage':True}} if stream else {}))
+        if output_limit is not None:payload['max_tokens']=output_limit
         with install(name):
             with db() as conn:
                 conn.execute("INSERT OR IGNORE INTO SOURCE_AUTH VALUES(?,?,?,?,'ACTIVE')",
@@ -230,9 +232,13 @@ def peer(tmp_path,monkeypatch):
             with model_dispatch.authenticated_context('local-user-'+name,'NATIVE','execution-'+name,'attempt-'+name+'-'+attempt,
                     credential_digest=name*64,reauthorize=reauthorize,worker_key='worker-'+name,allow_wait=False):
                 yield payload
-    def call(name,attempt='first',*,stream=False):
-        with context(name,attempt,stream=stream) as payload:
-            return native_runtime._stream_llm(profile=state.profiles[name],messages=payload['messages'],on_delta=lambda _:None) if stream else native_runtime._call_llm(state.profiles[name],payload['messages'])
+    def call(name,attempt='first',*,stream=False,budgeted=False):
+        from lib import answer_context
+        selection=dict(policy_revision='whole-reference-v1',stage='PREPARED_ANSWER_MESSAGES',
+            budget=dict(token_budget=32768,byte_budget=131072,output_reserve=4096)) if budgeted else None
+        with context(name,attempt,stream=stream,output_limit=4096 if budgeted else None) as payload:
+            with answer_context.dispatch_budget(selection):
+                return native_runtime._stream_llm(profile=state.profiles[name],messages=payload['messages'],on_delta=lambda _:None) if stream else native_runtime._call_llm(state.profiles[name],payload['messages'])
     def stage(name='a'):
         with context(name) as payload:
             route=origin.selected_route(state.profiles[name])
@@ -288,6 +294,20 @@ def test_remote_origin_stream_uses_existing_native_complete_stream_contract(peer
     except Exception:pytest.fail(repr(peer.failures))
     assert result['content']=='A synthetic approved fact.'
     assert peer.sends==1 and rows(peer,'a','CX_MODEL_ORIGIN_RECEIPTS')[0]['status']=='COMPLETED'
+
+
+@pytest.mark.parametrize('stream',[False,True])
+def test_answer_budget_and_exact_output_limit_survive_actual_coordinator_http(peer,stream):
+    result=peer.call('a',stream=stream,budgeted=True)
+    assert peer.sends==1 and peer.payloads[0]['max_tokens']==4096
+    assert peer.payloads[0]['stream'] is stream
+    receipt=result['provider_input_budget']
+    import hashlib
+    raw=json.dumps(peer.payloads[0],ensure_ascii=False).encode()
+    assert receipt['input_digest']==hashlib.sha256(raw).hexdigest()
+    assert receipt['input_bytes']==len(raw)
+    assert result['usage_observation']=='PROVIDER_REPORTED'
+    assert receipt['scope']=='SERIALIZED_INPUT_NOT_PROVIDER_REPORTED_USAGE'
 
 
 @pytest.mark.parametrize('mutation',[

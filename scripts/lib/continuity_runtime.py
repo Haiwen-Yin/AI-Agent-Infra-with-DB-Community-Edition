@@ -96,9 +96,11 @@ def enqueue(actor,value):
                 raise ContinuityConflict('IDEMPOTENCY_CONFLICT','The runtime request key has different content')
             _requester_context(tx,actor,request.agent_id,request.context.security_domain_id,prior['assembly_id'])
             return {'execution_id':prior['execution_id'],'assembly_id':prior['assembly_id'],'replayed':True}
-        context=assembly.assemble(request.agent_id,request.context,transaction=tx)
+        context=assembly.assemble(request.agent_id,request.context,transaction=tx,
+            **({'_source_reader':actor} if request.context.knowledge_retrieval else {}))
         if context['status']!='PREPARED' or tx.query_one('SELECT EXECUTION_ID FROM CX_RUNTIME_CONTEXT_BINDINGS WHERE ASSEMBLY_ID=:assembly',{'assembly':context['assembly_id']}):
             raise ContinuityConflict('CONTEXT_ALREADY_USED','The assembly already belongs to an execution')
+        _requester_context(tx,actor,request.agent_id,request.context.security_domain_id,context['assembly_id'])
         execution=native_agent_api._id('EXE')
         input_digest=native_agent_api._digest(payload)
         tx.execute("INSERT INTO CX_RUNTIME_EXECUTIONS(EXECUTION_ID,AGENT_ID,TARGET_ID,ISOLATION_LEVEL,STATUS,INPUT_JSON,CONTEXT_DIGEST) "
@@ -182,7 +184,8 @@ def _requester_context(tx,actor,agent_id,domain,assembly_id):
             grant=tx.query_one('SELECT PUBLICATION_ID FROM CX_CONTEXT_ITEM_GRANTS WHERE ASSEMBLY_ID=:assembly AND ITEM_NO=:item_no',
                                {'assembly':assembly_id,'item_no':item['item_no']})
             resolved=assembly.resolve(tx,actor,domain,source,purpose=current['purpose'],publication_id=grant['publication_id'] if grant else None)
-        if resolved['content_digest']!=item['content_digest'] or assembly._digest(resolved['text'])!=item['rendered_digest']:
+        rendered=assembly._source_text(resolved,include_context=assembly._source_context_policy(current['retrieval_policy']))
+        if resolved['content_digest']!=item['content_digest'] or assembly._digest(rendered)!=item['rendered_digest']:
             raise PermissionError('Requester context source changed')
     return current
 

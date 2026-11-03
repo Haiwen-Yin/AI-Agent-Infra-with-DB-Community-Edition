@@ -1,4 +1,4 @@
-# Versioned Memory Lifecycle - AI Agent Infra with DB v5.0.2
+# Versioned Memory Lifecycle - AI Agent Infra with DB v5.0.3
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -112,7 +112,7 @@ or hidden Dashboard control does not grant access.
 Run the journaled upgrade with a recoverable backup record:
 
 ```bash
-bash scripts/install_platform.sh upgrade --version 5.0.2 \
+bash scripts/install_platform.sh upgrade --version 5.0.3 \
   --edition community --database pg --config config.json \
   --confirm-database-backup
 ```

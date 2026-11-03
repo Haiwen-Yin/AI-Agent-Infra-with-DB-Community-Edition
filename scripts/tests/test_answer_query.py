@@ -1,13 +1,31 @@
 """Offline question framing, exact qualifiers and unchanged authority gates."""
 import json
+import importlib.util
+from pathlib import Path
 import socket
 import sqlite3
+from . import candidate_sqlite
 import subprocess
 from unittest.mock import Mock
 
 import pytest
 
 from lib import answer_query, answer_evidence, answer_planning, knowledge_grounding as knowledge, embedding_api
+
+_PACKAGE_DIALECT = knowledge.connection.DATABASE_DIALECT
+
+
+def sql_adapter(database):
+    path = Path(__file__).resolve().parents[2] / 'adapters' / database / 'knowledge_retrieval_adapter.py'
+    if not path.is_file():
+        if database != ('pg' if _PACKAGE_DIALECT in {'pg', 'postgresql'} else _PACKAGE_DIALECT):
+            pytest.skip('Other native SQL adapters are checked in the source suite')
+        from lib import knowledge_retrieval_adapter
+        return knowledge_retrieval_adapter
+    spec = importlib.util.spec_from_file_location('test_knowledge_sql_' + database, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 ZH='根据这份冻结的 v2.4.7 产品资料说明其身份和版本：海岚 NOTE_42'
@@ -133,6 +151,10 @@ def test_requested_version_remains_missing_without_a_version_claim():
 
 @pytest.fixture
 def authorized_store(monkeypatch):
+    from lib import knowledge_signals
+    from lib import knowledge_candidates
+    monkeypatch.setattr(knowledge_candidates, 'native', candidate_sqlite.adapter())
+    monkeypatch.setattr(knowledge_signals.native, 'limit_clause', lambda: ' LIMIT :candidate_limit')
     db=sqlite3.connect(':memory:');db.row_factory=sqlite3.Row
     db.create_function('TO_CHAR',2,lambda value,_fmt:value)
     db.executescript('''CREATE TABLE ENTITIES (ENTITY_ID TEXT,ENTITY_TYPE TEXT,STATUS TEXT,EXPIRES_AT TEXT,
@@ -152,6 +174,7 @@ def authorized_store(monkeypatch):
         db.execute('INSERT INTO ENTITIES VALUES (?,?,?,?,?,?,?,?,?,?,?)',
             (key,'KNOWLEDGE',status,expiry,title,summary,content,'2026-10-23','PRIVATE',human,agent))
         db.execute('INSERT INTO KNOWLEDGE_META VALUES (?,?,?)',(key,'KNOWLEDGE','scope'))
+    candidate_sqlite.schema(db)
     monkeypatch.setattr(knowledge,'require_reader',lambda actor,agent:None)
     monkeypatch.setattr(knowledge.knowledge_api,'knowledge_access_predicate',
         lambda alias,principal:alias+('.ALLOW_HUMAN=1' if principal==':actor' else '.ALLOW_AGENT=1'))
@@ -192,15 +215,25 @@ def test_failed_framing_or_claims_cannot_use_conjunction_to_restore_rejected_sou
 
 @pytest.mark.parametrize('dialect',['pg','oracle','yashandb'])
 def test_fulltext_uses_shared_lexical_terms_and_keeps_both_authority_predicates(monkeypatch,dialect):
+    from lib import knowledge_candidates
     monkeypatch.setattr(knowledge,'require_reader',Mock())
     monkeypatch.setattr(knowledge.connection,'DATABASE_DIALECT',dialect)
+    monkeypatch.setattr(embedding_api, 'knowledge_retrieval_adapter', sql_adapter(dialect))
+    monkeypatch.setattr(knowledge_candidates, 'native', sql_adapter(dialect))
     query=Mock(return_value=[]);monkeypatch.setattr(embedding_api,'execute_query',query)
     assert embedding_api.search_authorized_knowledge(EN,channel='fulltext',actor='human',agent='agent',entity_ids=['allowed'])==[]
     sql,params=query.call_args.args
     assert 'kap.PRINCIPAL_ID=:actor' in sql and 'kap.PRINCIPAL_ID=:agent' in sql
     assert params['actor']=='human' and params['agent']=='agent' and params['source_id0']=='allowed'
-    assert '2.4.7' in params['fulltext_query'] and 'note_42' in params['fulltext_query']
-    assert not any(word in params['fulltext_query'] for word in ('using','supplied','documentation','identity','version'))
+    if dialect == 'yashandb':
+        # The verified YashanDB CONTAINS workaround uses an escaped constant
+        # expression in separate title/body branches, without a query bind.
+        assert 'fulltext_query' not in params
+        assert "CONTAINS(ft.CONTENT, '{boreal} OR {note_42} OR {2.4.7}')" in sql
+        assert "CONTAINS(ft.TITLE, '{boreal} OR {note_42} OR {2.4.7}')" in sql
+    else:
+        assert '2.4.7' in params['fulltext_query'] and 'note_42' in params['fulltext_query']
+        assert not any(word in params['fulltext_query'] for word in ('using','supplied','documentation','identity','version'))
     assert 'e.STATUS=\'ACTIVE\'' in sql and 'e.EXPIRES_AT>CURRENT_TIMESTAMP' in sql
 
 

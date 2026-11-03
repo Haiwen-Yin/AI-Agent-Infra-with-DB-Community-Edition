@@ -177,7 +177,8 @@ def test_orchestrator_passes_selected_version_to_successor_recovery(monkeypatch,
     monkeypatch.setattr(runner, 'MIGRATION_EDITION', 'community')
     monkeypatch.setattr(deployment, '_package_deploy_dir', lambda *_: deploy)
 
-    def release_script_names(version, selected_database, path, edition):
+    def release_script_names(version, selected_database, path, edition, *, from_version=None):
+        assert from_version is None
         assert (version, selected_database, path, edition) == (
             selected_version, database, config_path, 'enterprise')
         return names

@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased - v5.0.2
+## v5.0.3 - 2026-11-03
+
+- Combine authorized relational, vector, full-text, tag and graph signals in
+  Portal, Channel and task-context retrieval without extra generation calls
+  for ranking. Preserve exact sources, versions, applicability and constraints.
+- Guide shared knowledge intake through source and responsibility metadata,
+  chunk previews, quality checks, candidates, independent review and publication.
+  Keep private notes separate and make private knowledge creation atomic.
+- Deliver bilingual, role-based platform learning for people and Agents with
+  metadata-first discovery, exact reads and incremental source snapshots that
+  preserve historical records and user edits.
+- Carry goals, approved decisions, authorized context and real outcome receipts
+  through Task, Graph, Work and handoff workflows. Leave unknown historical
+  step times unknown and recheck sources before dispatch and publication.
+- Reduce redundant source reads and PostgreSQL candidate-query work while
+  retaining authenticated integrity and current authorization. Model reasoning,
+  wording and deployment capacity remain subject to the selected environment.
+- Add explicit upgrade migrations and database-specific compatibility fixes;
+  retain the five-product, seven-target installation and upgrade matrix.
+
+## v5.0.2 - 2026-11-01
 
 - Use one bounded model-result contract for complete answers, structured tool
   proposals, refusals, truncation and interrupted streams across supported

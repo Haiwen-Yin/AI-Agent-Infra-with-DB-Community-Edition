@@ -201,6 +201,14 @@ def assess(case, rubric, prepared, retrieval, answer, generation_kind):
 def _sources(tx, actor, record):
     for source in tx.query("SELECT ENTITY_ID,CONTENT_DIGEST FROM CX_ANSWER_QUALITY_SOURCES WHERE RUN_ID=:run_id ORDER BY ITEM_NO", {"run_id": record["run_id"]}):
         knowledge_grounding.citation(actor, record["agent_id"], source["entity_id"], source["content_digest"])
+    frozen=row(tx.query_one('SELECT INPUT_CIPHER,INPUT_DIGEST FROM CX_ANSWER_QUALITY_INPUTS WHERE RUN_ID=:run_id',{'run_id':record['run_id']}))
+    if frozen:
+        value=decrypt_section(frozen['input_cipher'])
+        if digest(value)!=frozen['input_digest']:
+            raise PermissionError('The original evaluation input integrity check failed')
+        for source in value.get('prepared',{}).get('citations',[]):
+            if source.get('relationship_evidence'):
+                knowledge_grounding.validate_citation(actor,record['agent_id'],source,transaction=tx)
 
 
 def execute(actor, run_id, *, worker_id="answer-quality-worker"):
@@ -276,7 +284,7 @@ def execute(actor, run_id, *, worker_id="answer-quality-worker"):
                     'chain': record['continuity_id'], 'cipher': saved['input_cipher'], 'digest': saved['input_digest']})
                 return True
             for number, source in enumerate(prepared["citations"], 1):
-                knowledge_grounding.citation(actor, record["agent_id"], source["entity_id"], source["digest"])
+                knowledge_grounding.validate_citation(actor,record['agent_id'],source,transaction=tx)
                 tx.execute("INSERT INTO CX_ANSWER_QUALITY_SOURCES(RUN_ID,ITEM_NO,ENTITY_ID,CONTENT_DIGEST) VALUES(:run_id,:v_item_no,:entity,:digest)",
                     {"run_id": run_id, "v_item_no": number, "entity": source["entity_id"], "digest": source["digest"]})
             tx.execute("INSERT INTO CX_ANSWER_QUALITY_INPUTS(RUN_ID,ATTEMPT_ID,INPUT_CIPHER,INPUT_DIGEST) VALUES(:run_id,:attempt,:cipher,:digest)",
@@ -317,13 +325,17 @@ def execute(actor, run_id, *, worker_id="answer-quality-worker"):
             with model_credentials.dispatch_context(binding, 'EVALUATION', run_id, attempt['attempt_id'],
                     reauthorize=reauthorize, worker_key=worker_id, allow_wait=False,
                     lock_principals=(actor, record['agent_id'])):
-                result = native_runtime._call_llm(profile, prepared["messages"])
+                from . import answer_context
+                with answer_context.dispatch_budget(prepared.get('context_selection')):
+                    result = native_runtime._call_llm(profile, prepared["messages"])
         generation_kind = "REAL_MODEL" if sent else "DETERMINISTIC"
         answer = answer_planning.render_reply(str(result["content"]), prepared)
         assessment = assess(case, rubric, prepared, retrieval, answer, generation_kind)
         output = {"answer": answer, "answer_source": prepared["answer_source"], "retrieval_status": retrieval["status"],
                   "citations": prepared["citations"], "assessment": assessment, "model": result.get("model"),
                   "usage": result.get("usage"), "usage_observation": result.get("usage_observation", "UNAVAILABLE")}
+        if result.get('provider_input_budget'):
+            output['provider_input_budget']=result['provider_input_budget']
         bounded_json(output, maximum=1024 * 1024)
         def finish(tx):
             if binding is not None:

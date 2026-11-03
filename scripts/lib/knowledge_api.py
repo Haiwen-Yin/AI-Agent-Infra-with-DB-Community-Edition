@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Community Edition - Knowledge API
+"""AI Agent Infra v5.0.3 - Community Edition - Knowledge API
 
 Knowledge CRUD, graph edges, spaced-review, and tagging.
 Operates on ENTITIES (ENTITY_TYPE='KNOWLEDGE') + KNOWLEDGE_META + ENTITY_EDGES.
@@ -23,7 +23,7 @@ def _json_value(value: Any) -> str:
     return json.dumps(value or [], ensure_ascii=False, separators=(",", ":"))
 
 
-def get_agent_knowledge_context(agent_id: str) -> Dict[str, Any]:
+def get_agent_knowledge_context(agent_id: str, *, transaction=None) -> Dict[str, Any]:
     """Resolve the current relational and graph context for an Agent.
 
     The database is authoritative: the Agent is mapped to its active Human
@@ -35,7 +35,9 @@ def get_agent_knowledge_context(agent_id: str) -> Dict[str, Any]:
     agent = str(agent_id or "").strip()
     if not agent:
         raise ValueError("agent_id is required")
-    owner = execute_query_one(
+    query_one = transaction.query_one if transaction is not None else execute_query_one
+    query = transaction.query if transaction is not None else execute_query
+    owner = query_one(
         "SELECT r.PRINCIPAL_ID, r.RESPONSIBLE_GROUP_ID FROM CX_AGENT_RELATIONSHIPS r "
         "JOIN CX_PRINCIPALS h ON h.PRINCIPAL_ID=r.PRINCIPAL_ID "
         "WHERE r.AGENT_ID=:agent_id AND r.RELATIONSHIP_ROLE='PRIMARY_OWNER' AND r.STATUS='ACTIVE' "
@@ -44,7 +46,7 @@ def get_agent_knowledge_context(agent_id: str) -> Dict[str, Any]:
         {"agent_id": agent},
     ) or {}
     principal_id = str(owner.get("principal_id") or "")
-    org_rows = execute_query(
+    org_rows = query(
         "SELECT o.ORGANIZATION_ID, o.ORGANIZATION_NAME, o.PARENT_ID, c.DEPTH "
         "FROM CX_ORGANIZATION_MEMBERS m "
         "JOIN CX_ORGANIZATION_CLOSURE c ON c.DESCENDANT_ID=m.ORGANIZATION_ID "
@@ -62,7 +64,7 @@ def get_agent_knowledge_context(agent_id: str) -> Dict[str, Any]:
         for r in org_rows
     ]
     org_id = organization_chain[-1]["organization_id"] if organization_chain else None
-    responsible = execute_query(
+    responsible = query(
         "SELECT g.GROUP_ID, g.GROUP_NAME, g.SECURITY_DOMAIN_ID, m.MEMBER_ROLE "
         "FROM CX_RESPONSIBLE_GROUPS g JOIN CX_RESPONSIBLE_GROUP_MEMBERS m ON m.GROUP_ID=g.GROUP_ID "
         "WHERE m.PRINCIPAL_ID=:principal_id AND m.STATUS='ACTIVE' AND g.STATUS='ACTIVE' "
@@ -71,14 +73,14 @@ def get_agent_knowledge_context(agent_id: str) -> Dict[str, Any]:
     ) if principal_id else []
     relation_group = str(owner.get("responsible_group_id") or "")
     if relation_group and not any(str(r.get("group_id")) == relation_group for r in responsible):
-        row = execute_query_one(
+        row = query_one(
             "SELECT GROUP_ID, GROUP_NAME, SECURITY_DOMAIN_ID, 'AGENT_RELATION' AS MEMBER_ROLE "
             "FROM CX_RESPONSIBLE_GROUPS WHERE GROUP_ID=:group_id AND STATUS='ACTIVE'",
             {"group_id": relation_group},
         )
         if row:
             responsible.append(row)
-    execution = execute_query(
+    execution = query(
         "SELECT g.GROUP_ID, g.GROUP_NAME, g.GROUP_TYPE, g.SHARING_POLICY, m.ROLE "
         "FROM COLLAB_GROUPS g JOIN COLLAB_GROUP_MEMBERS m ON m.GROUP_ID=g.GROUP_ID "
         "WHERE m.AGENT_ID=:agent_id AND m.STATUS='ACTIVE' AND g.STATUS='ACTIVE' "
@@ -99,7 +101,7 @@ def get_knowledge_context(entity_id: str, *, transaction=None) -> Optional[Dict[
         "SELECT CONTEXT_ID, ENTITY_ID, AGENT_ID, PRINCIPAL_ID, ORGANIZATION_ID, "
         "ORGANIZATION_CHAIN_JSON, RESPONSIBLE_GROUPS_JSON, EXECUTION_GROUPS_JSON, "
         "SHARING_SCOPE, GRAPH_SNAPSHOT_DIGEST FROM CX_KNOWLEDGE_CONTEXTS WHERE ENTITY_ID=:entity_id",
-        {"entity_id": entity_id},
+        {"entity_id": str(entity_id)},
     )
     if not row:
         return None
@@ -116,9 +118,11 @@ def get_knowledge_context(entity_id: str, *, transaction=None) -> Optional[Dict[
 def capture_agent_knowledge_context(entity_id: str, agent_id: str, *, sharing_scope: str = "ORGANIZATION_SUBTREE",
                                     organization_id: Optional[str] = None, hierarchy_depth: Optional[int] = None,
                                     reason: str = "Agent knowledge creation",
-                                    context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                                    context: Optional[Dict[str, Any]] = None, transaction=None) -> Dict[str, Any]:
     entity_id = str(entity_id)
-    context = context or get_agent_knowledge_context(agent_id)
+    context = context or get_agent_knowledge_context(agent_id, transaction=transaction)
+    write = transaction.execute if transaction is not None else execute
+    policy_options = {'transaction': transaction} if transaction is not None else {}
     selected_org = organization_id or context.get("organization_id")
     scope = str(sharing_scope or "ORGANIZATION_SUBTREE").upper()
     if scope not in {"PUBLIC_COMPANY", "ORGANIZATION_SUBTREE", "ORGANIZATION_LEVEL", "PRINCIPAL_PRIVATE"}:
@@ -128,7 +132,7 @@ def capture_agent_knowledge_context(entity_id: str, agent_id: str, *, sharing_sc
     if scope == "ORGANIZATION_LEVEL" and (hierarchy_depth is None or int(hierarchy_depth) < 0):
         raise ValueError("organization level requires a non-negative hierarchy depth")
     digest = __import__("hashlib").sha256(_json_value({"agent": context, "scope": scope, "org": selected_org}).encode()).hexdigest()
-    execute(
+    write(
         "INSERT INTO CX_KNOWLEDGE_CONTEXTS (CONTEXT_ID,ENTITY_ID,AGENT_ID,PRINCIPAL_ID,ORGANIZATION_ID,"
         "ORGANIZATION_CHAIN_JSON,RESPONSIBLE_GROUPS_JSON,EXECUTION_GROUPS_JSON,SHARING_SCOPE,GRAPH_SNAPSHOT_DIGEST,REASON) "
         "VALUES (:context_id,:entity_id,:agent_id,:principal_id,:organization_id,:organization_chain,:responsible,:execution,:scope,:digest,:reason)",
@@ -142,17 +146,17 @@ def capture_agent_knowledge_context(entity_id: str, agent_id: str, *, sharing_sc
         # Agent-private knowledge belongs to the producing Agent identity. The
         # Human owner remains provenance/context, not an implicit reader.
         target_principal = agent_id
-        set_access_policy(entity_id, scope, target_principal, principal_id=target_principal, reason=reason)
+        set_access_policy(entity_id, scope, target_principal, principal_id=target_principal, reason=reason, **policy_options)
     else:
         set_access_policy(entity_id, scope, context.get("principal_id") or agent_id,
-                          organization_id=selected_org, hierarchy_depth=hierarchy_depth, reason=reason)
+                          organization_id=selected_org, hierarchy_depth=hierarchy_depth, reason=reason, **policy_options)
     return {"entity_id": entity_id, "sharing_scope": scope, "organization_id": selected_org,
             "organization_chain": context["organization_chain"], "responsible_groups": context["responsible_groups"],
             "execution_groups": context["execution_groups"], "graph_snapshot_digest": digest}
 
 def set_access_policy(entity_id: str, scope_type: str, actor_id: str, *, organization_id: Optional[str] = None,
                       principal_id: Optional[str] = None, hierarchy_depth: Optional[int] = None,
-                      reason: str = "policy change") -> Dict[str, Any]:
+                      reason: str = "policy change", transaction=None) -> Dict[str, Any]:
     entity_id = str(entity_id)
     allowed = {"PUBLIC_COMPANY", "ORGANIZATION_SUBTREE", "ORGANIZATION_LEVEL", "PRINCIPAL_PRIVATE"}
     if scope_type not in allowed or not reason.strip():
@@ -163,14 +167,52 @@ def set_access_policy(entity_id: str, scope_type: str, actor_id: str, *, organiz
         raise ValueError("organization subtree requires organization")
     if scope_type == "PRINCIPAL_PRIVATE" and not principal_id:
         raise ValueError("private policy requires principal")
-    execute("UPDATE CX_KNOWLEDGE_ACCESS_POLICIES SET STATUS='RETIRED', UPDATED_AT=CURRENT_TIMESTAMP WHERE ENTITY_ID=:eid AND STATUS='ACTIVE'", {"eid": entity_id})
-    policy_id = str(uuid.uuid4())
-    execute("INSERT INTO CX_KNOWLEDGE_ACCESS_POLICIES (POLICY_ID,ENTITY_ID,SCOPE_TYPE,ORGANIZATION_ID,PRINCIPAL_ID,HIERARCHY_DEPTH,REASON,CREATED_BY) VALUES (:pid,:eid,:scope,:org,:principal,:depth,:reason,:actor)",
+    if scope_type not in {'ORGANIZATION_SUBTREE','ORGANIZATION_LEVEL'} and (organization_id is not None or hierarchy_depth is not None):
+        raise ValueError('organization target is only valid for an organization policy')
+    if scope_type != 'PRINCIPAL_PRIVATE' and principal_id is not None:
+        raise ValueError('principal target is only valid for a private policy')
+    def change(tx):
+        from . import continuity_work, knowledge_intake
+        continuity_work._lock_actor(tx,actor_id)
+        access=identity_api.effective_access(actor_id,'knowledge.write')
+        if access.get('decision')!='ALLOW':
+            raise PermissionError('Knowledge policy change denied')
+        if scope_type!='PRINCIPAL_PRIVATE':
+            knowledge_intake.require_reviewed_projection(tx,actor_id,entity_id)
+        native_id=int(entity_id) if connection.DATABASE_DIALECT in {'pg','postgresql'} else entity_id
+        entity=tx.query_one("SELECT e.OWNED_BY_AGENT FROM ENTITIES e WHERE e.ENTITY_ID=:entity "
+            "AND e.ENTITY_TYPE='KNOWLEDGE' AND "+knowledge_access_predicate('e',':actor')+' FOR UPDATE',{'entity':native_id,'actor':actor_id})
+        if entity is None:
+            raise PermissionError('Knowledge policy change denied')
+        policy=tx.query_one("SELECT PRINCIPAL_ID FROM CX_KNOWLEDGE_ACCESS_POLICIES WHERE ENTITY_ID=:entity "
+            "AND SCOPE_TYPE='PRINCIPAL_PRIVATE' AND STATUS='ACTIVE'",{'entity':entity_id})
+        if ('ALL' not in access.get('scopes',[]) and entity['owned_by_agent']!=actor_id
+                and (not policy or policy['principal_id']!=actor_id)):
+            raise PermissionError('Knowledge policy requires ownership or an explicit management scope')
+        if scope_type=='PRINCIPAL_PRIVATE' and principal_id!=actor_id:
+            raise PermissionError('Private policy cannot transfer content to another principal')
+        if scope_type in {'ORGANIZATION_SUBTREE','ORGANIZATION_LEVEL'}:
+            from . import organization_api
+            # knowledge.write alone does not grant access to every tenant's
+            # organization. Reuse its effective management scope and current
+            # organization facts inside the policy/audit transaction.
+            clause,params=organization_api._scope_clause(actor_id,'o','knowledge.write')
+            target=tx.query_one("SELECT o.ORGANIZATION_ID FROM CX_ORGANIZATIONS o "
+                "WHERE o.ORGANIZATION_ID=:organization_id AND o.STATUS='ACTIVE' "
+                "AND o.VALID_FROM<=CURRENT_TIMESTAMP AND (o.VALID_UNTIL IS NULL OR o.VALID_UNTIL>CURRENT_TIMESTAMP) "
+                "AND "+clause+' FOR UPDATE',dict(params,organization_id=organization_id))
+            if target is None:
+                raise PermissionError('Knowledge policy organization is unavailable')
+        tx.execute("UPDATE CX_KNOWLEDGE_ACCESS_POLICIES SET STATUS='RETIRED', UPDATED_AT=CURRENT_TIMESTAMP WHERE ENTITY_ID=:eid AND STATUS='ACTIVE'", {"eid": entity_id})
+        policy_id = str(uuid.uuid4())
+        tx.execute("INSERT INTO CX_KNOWLEDGE_ACCESS_POLICIES (POLICY_ID,ENTITY_ID,SCOPE_TYPE,ORGANIZATION_ID,PRINCIPAL_ID,HIERARCHY_DEPTH,REASON,CREATED_BY) VALUES (:pid,:eid,:scope,:org,:principal,:depth,:reason,:actor)",
             {"pid": policy_id, "eid": entity_id, "scope": scope_type, "org": organization_id, "principal": principal_id, "depth": hierarchy_depth, "reason": reason[:2000], "actor": actor_id})
-    return {"policy_id": policy_id, "entity_id": entity_id, "scope_type": scope_type, "organization_id": organization_id, "principal_id": principal_id, "hierarchy_depth": hierarchy_depth}
+        identity_api._audit_tx(tx,actor_id,'KNOWLEDGE_POLICY_CHANGE','ENTITY',entity_id,'ALLOW',reason)
+        return {"policy_id": policy_id, "entity_id": entity_id, "scope_type": scope_type, "organization_id": organization_id, "principal_id": principal_id, "hierarchy_depth": hierarchy_depth}
+    return change(transaction) if transaction is not None else connection.execute_transaction_callback(change)
 
 def get_access_policy(entity_id: str) -> Optional[Dict[str, Any]]:
-    row = execute_query_one("SELECT POLICY_ID,ENTITY_ID,SCOPE_TYPE,ORGANIZATION_ID,PRINCIPAL_ID,HIERARCHY_DEPTH,STATUS,REASON FROM CX_KNOWLEDGE_ACCESS_POLICIES WHERE ENTITY_ID=:eid AND STATUS='ACTIVE'", {"eid": entity_id})
+    row = execute_query_one("SELECT POLICY_ID,ENTITY_ID,SCOPE_TYPE,ORGANIZATION_ID,PRINCIPAL_ID,HIERARCHY_DEPTH,STATUS,REASON FROM CX_KNOWLEDGE_ACCESS_POLICIES WHERE ENTITY_ID=:eid AND STATUS='ACTIVE'", {"eid": str(entity_id)})
     return {str(key).lower(): value for key, value in dict(row).items()} if row else None
 
 def list_organization_policies(organization_id: str, limit: int = 100) -> List[Dict[str, Any]]:
@@ -244,59 +286,44 @@ def create_knowledge(
     hierarchy_depth: Optional[int] = None,
     creation_reason: str = "Agent knowledge creation",
 ) -> str:
-    # Resolve and validate the Agent's organization context before any row is
-    # written. This keeps organization-scoped creation fail-closed without
-    # leaving an entity/meta orphan when the Agent has no active owner chain.
-    agent_context = None
-    if owned_by_agent:
-        requested_scope = sharing_scope or (
-            "PRINCIPAL_PRIVATE" if str(visibility).upper() == "PRIVATE" else "ORGANIZATION_SUBTREE"
-        )
-        agent_context = get_agent_knowledge_context(owned_by_agent)
-        normalized_scope = str(requested_scope).upper()
-        if normalized_scope in {"ORGANIZATION_SUBTREE", "ORGANIZATION_LEVEL"} and not (
-            organization_id or agent_context.get("organization_id")
-        ):
-            raise ValueError("Agent has no active organization for organization-scoped knowledge")
-    entity_sql = """
-        INSERT INTO ENTITIES (ENTITY_ID, ENTITY_TYPE, TITLE, CONTENT, SUMMARY, CATEGORY,
-                              IMPORTANCE, STATUS, OWNED_BY_AGENT, SOURCE_AGENT, VISIBILITY,
-                              WORKSPACE_ID)
-        VALUES (AI_NEW_ID(), 'KNOWLEDGE', :title, :content, :summary, :category,
-                :importance, 'ACTIVE', :owned_by_agent, NULL, :visibility,
-                :wsid)
-        RETURNING ENTITY_ID INTO :ret_id
-    """
-    params = {
-        "title": title[:500],
-        "content": content,
-        "summary": summary,
-        "category": category,
-        "importance": importance,
-        "owned_by_agent": owned_by_agent,
-        "visibility": visibility,
-        "wsid": workspace_id,
-    }
-    entity_id = execute_insert_returning_id(entity_sql, params)
-
-    next_review = "CURRENT_TIMESTAMP + INTERVAL '7 days'" if DATABASE_DIALECT == "postgresql" else "CURRENT_TIMESTAMP + 7"
-    meta_sql = f"""
-        INSERT INTO KNOWLEDGE_META (ENTITY_ID, ENTITY_TYPE, DOMAIN, TOPIC, DIFFICULTY,
-                                    REVIEW_COUNT, NEXT_REVIEW)
-        VALUES (:eid, 'KNOWLEDGE', :domain, :topic, :difficulty, 0, {next_review})
-    """
-    execute(meta_sql, {
-        "eid": entity_id,
-        "domain": domain,
-        "topic": topic,
-        "difficulty": difficulty,
-    })
-    if owned_by_agent:
-        capture_agent_knowledge_context(entity_id, owned_by_agent, sharing_scope=sharing_scope or (
-            "PRINCIPAL_PRIVATE" if str(visibility).upper() == "PRIVATE" else "ORGANIZATION_SUBTREE"
-        ), organization_id=organization_id, hierarchy_depth=hierarchy_depth,
-            reason=creation_reason, context=agent_context)
-    return entity_id
+    # Direct creation remains a personal-note contract. Formal shared content
+    # must use exact-source candidates, independent review and promotion. There
+    # is intentionally no caller-supplied trusted-publication flag.
+    if str(visibility).upper() != 'PRIVATE' or sharing_scope not in {None, 'PRINCIPAL_PRIVATE'}:
+        from .continuity_state import ContinuityConflict
+        raise ContinuityConflict('KNOWLEDGE_INTAKE_REQUIRED',
+            'Shared knowledge requires /api/artifact-candidates with guided intake, independent review and explicit promotion')
+    def create(tx):
+        # Entity, metadata, source context, policy and audit commit together.
+        # Validate and lock the producing identity before inserting anything.
+        agent_context = None
+        if owned_by_agent:
+            from . import continuity_work
+            continuity_work._lock_actor(tx, owned_by_agent)
+            if identity_api.effective_access(owned_by_agent, 'knowledge.write').get('decision') != 'ALLOW':
+                raise PermissionError('Knowledge creation denied')
+            agent_context = get_agent_knowledge_context(owned_by_agent, transaction=tx)
+        params = dict(title=title[:500], content=content, summary=summary, category=category,
+            importance=importance, owned_by_agent=owned_by_agent, visibility=visibility, wsid=workspace_id)
+        columns = 'ENTITY_TYPE,TITLE,CONTENT,SUMMARY,CATEGORY,IMPORTANCE,STATUS,OWNED_BY_AGENT,SOURCE_AGENT,VISIBILITY,WORKSPACE_ID'
+        values = "'KNOWLEDGE',:title,:content,:summary,:category,:importance,'ACTIVE',:owned_by_agent,NULL,:visibility,:wsid"
+        postgres = DATABASE_DIALECT in {'pg', 'postgresql'}
+        if postgres:
+            entity_id = tx.query_one('INSERT INTO ENTITIES ('+columns+') VALUES ('+values+') RETURNING ENTITY_ID',params)['entity_id']
+        else:
+            entity_id = uuid.uuid4().hex.upper()
+            tx.execute('INSERT INTO ENTITIES (ENTITY_ID,'+columns+') VALUES (:entity_id,'+values+')',
+                       dict(params,entity_id=entity_id))
+        next_review = "CURRENT_TIMESTAMP + INTERVAL '7 days'" if postgres else 'CURRENT_TIMESTAMP + 7'
+        tx.execute('INSERT INTO KNOWLEDGE_META (ENTITY_ID,ENTITY_TYPE,DOMAIN,TOPIC,DIFFICULTY,REVIEW_COUNT,NEXT_REVIEW) '
+            "VALUES (:eid,'KNOWLEDGE',:domain,:topic,:difficulty,0,"+next_review+')',
+            dict(eid=entity_id,domain=domain,topic=topic,difficulty=difficulty))
+        if owned_by_agent:
+            capture_agent_knowledge_context(entity_id, owned_by_agent, sharing_scope='PRINCIPAL_PRIVATE',
+                organization_id=organization_id, hierarchy_depth=hierarchy_depth,
+                reason=creation_reason, context=agent_context, transaction=tx)
+        return entity_id
+    return connection.execute_transaction_callback(create)
 
 
 def get_knowledge(entity_id: str, principal_id: Optional[str] = None, *, transaction=None) -> Optional[Dict[str, Any]]:
@@ -320,12 +347,30 @@ def get_knowledge(entity_id: str, principal_id: Optional[str] = None, *, transac
     row = query(sql, {"id": entity_id, "principal_id": principal_id})
     if row is None:
         return None
+    source_context=None
+    if principal_id:
+        from .continuity_promotions import require_original_sources
+        def authorize(tx):
+            return require_original_sources(tx,principal_id,entity_id)
+        try:
+            if transaction is not None:
+                source_context=authorize(transaction)
+            else:
+                source_context=connection.execute_transaction_callback(authorize)
+        except PermissionError:
+            return None
     result = _row_to_dict(row)
+    if source_context:
+        result['source_context']=source_context
     result["knowledge_context"] = get_knowledge_context(entity_id, **({"transaction": transaction} if transaction is not None else {}))
     return result
 
 
 def update_knowledge(entity_id: str, **kwargs) -> bool:
+    normalized={key.lower():value for key,value in kwargs.items()}
+    from .continuity_state import ContinuityConflict
+    if 'visibility' in normalized and str(normalized['visibility']).upper()!='PRIVATE':
+        raise ContinuityConflict('KNOWLEDGE_INTAKE_REQUIRED','Shared knowledge requires reviewed intake and an explicit access policy')
     entity_fields = {"title", "content", "summary", "category", "importance",
                      "status", "visibility", "expires_at"}
     meta_fields = {"domain", "topic", "difficulty"}
@@ -340,31 +385,47 @@ def update_knowledge(entity_id: str, **kwargs) -> bool:
         elif lk in meta_fields:
             meta_updates[lk] = v
 
-    affected = 0
-
-    if entity_updates:
-        set_parts = [f"{k} = :{k}" for k in entity_updates]
-        set_parts.append("UPDATED_AT = CURRENT_TIMESTAMP")
-        entity_updates["id"] = entity_id
-        sql = f"UPDATE ENTITIES SET {', '.join(set_parts)} WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'"
-        affected += execute(sql, entity_updates)
-
-    if meta_updates:
-        set_clause = ", ".join(f"{k} = :{k}" for k in meta_updates)
-        meta_updates["eid"] = entity_id
-        sql = f"UPDATE KNOWLEDGE_META SET {set_clause} WHERE ENTITY_ID = :eid AND ENTITY_TYPE = 'KNOWLEDGE'"
-        affected += execute(sql, meta_updates)
-
-    return affected > 0
+    def change(tx):
+        current=tx.query_one("SELECT VISIBILITY FROM ENTITIES WHERE ENTITY_ID=:entity AND ENTITY_TYPE='KNOWLEDGE' FOR UPDATE",{'entity':entity_id})
+        if current is None:
+            return False
+        if set(normalized)&{'title','content','summary','domain','topic','difficulty','category','status'}:
+            # Serialize with sharing so a concurrent private edit cannot become
+            # an unreviewed shared body between validation and policy commit.
+            formal=tx.query_one("SELECT ARTIFACT_ID FROM CX_CONTINUITY_ARTIFACT_REVS WHERE NATIVE_ENTITY_ID=:entity",{'entity':str(entity_id)})
+            shared=tx.query_one("SELECT POLICY_ID FROM CX_KNOWLEDGE_ACCESS_POLICIES WHERE ENTITY_ID=:entity "
+                "AND STATUS='ACTIVE' AND SCOPE_TYPE<>'PRINCIPAL_PRIVATE'",{'entity':str(entity_id)})
+            if formal or shared or current['visibility']!='PRIVATE':
+                raise ContinuityConflict('KNOWLEDGE_INTAKE_REQUIRED','Revise shared or reviewed knowledge through an exact-source replacement candidate')
+        affected=0
+        if entity_updates:
+            set_parts = [f"{k} = :{k}" for k in entity_updates]
+            set_parts.append("UPDATED_AT = CURRENT_TIMESTAMP")
+            affected+=tx.execute(f"UPDATE ENTITIES SET {', '.join(set_parts)} WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'",dict(entity_updates,id=entity_id))
+        if meta_updates:
+            set_clause = ", ".join(f"{k} = :{k}" for k in meta_updates)
+            affected+=tx.execute(f"UPDATE KNOWLEDGE_META SET {set_clause} WHERE ENTITY_ID = :eid AND ENTITY_TYPE = 'KNOWLEDGE'",dict(meta_updates,eid=entity_id))
+        return affected>0
+    return connection.execute_transaction_callback(change)
 
 
 def delete_knowledge(entity_id: str) -> bool:
-    execute("DELETE FROM ENTITY_TAGS WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'", {"id": entity_id})
-    execute("DELETE FROM KNOWLEDGE_META WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'", {"id": entity_id})
-    execute("DELETE FROM ENTITY_EDGES WHERE (SOURCE_ID = :id AND SOURCE_TYPE = 'KNOWLEDGE') OR TARGET_ID = :id", {"id": str(entity_id)})
-    execute("DELETE FROM ENTITY_EMBEDDINGS WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'", {"id": entity_id})
-    sql = "DELETE FROM ENTITIES WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'"
-    return execute(sql, {"id": entity_id}) > 0
+    def remove(tx):
+        from .continuity_state import ContinuityConflict
+        row=tx.query_one("SELECT VISIBILITY FROM ENTITIES WHERE ENTITY_ID=:entity AND ENTITY_TYPE='KNOWLEDGE' FOR UPDATE",{'entity':entity_id})
+        if row is None:
+            return False
+        formal=tx.query_one('SELECT ARTIFACT_ID FROM CX_CONTINUITY_ARTIFACT_REVS WHERE NATIVE_ENTITY_ID=:entity',{'entity':str(entity_id)})
+        shared=tx.query_one("SELECT POLICY_ID FROM CX_KNOWLEDGE_ACCESS_POLICIES WHERE ENTITY_ID=:entity AND STATUS='ACTIVE' AND SCOPE_TYPE<>'PRINCIPAL_PRIVATE'",{'entity':str(entity_id)})
+        if formal or shared or row['visibility']!='PRIVATE':
+            raise ContinuityConflict('KNOWLEDGE_INTAKE_REQUIRED','Preserve reviewed/shared knowledge history; use its governed lifecycle')
+        tx.execute("DELETE FROM ENTITY_TAGS WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'", {"id": entity_id})
+        tx.execute("DELETE FROM KNOWLEDGE_META WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'", {"id": entity_id})
+        tx.execute("DELETE FROM ENTITY_EDGES WHERE (SOURCE_ID = :id AND SOURCE_TYPE = 'KNOWLEDGE') OR TARGET_ID = :id", {"id": str(entity_id)})
+        tx.execute("DELETE FROM ENTITY_EMBEDDINGS WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'", {"id": entity_id})
+        tx.execute("DELETE FROM CX_KNOWLEDGE_ACCESS_POLICIES WHERE ENTITY_ID=:id",{'id':str(entity_id)})
+        return tx.execute("DELETE FROM ENTITIES WHERE ENTITY_ID = :id AND ENTITY_TYPE = 'KNOWLEDGE'", {"id": entity_id})>0
+    return connection.execute_transaction_callback(remove)
 
 
 def search_knowledge(
@@ -442,7 +503,19 @@ def search_knowledge(
         ORDER BY {order}
         OFFSET :off ROWS FETCH NEXT :lim ROWS ONLY
     """
-    return [_row_to_dict(r) for r in execute_query(sql, params)]
+    return _authorized_inventory_rows(execute_query(sql,params),principal_id)
+
+
+def _authorized_inventory_rows(rows,principal_id):
+    values=[_row_to_dict({str(key).lower():value for key,value in row.items()}) for row in rows]
+    if not principal_id or not values:
+        return values
+    from .continuity_promotions import original_source_contexts
+    contexts={}
+    for start in range(0,len(values),500):
+        contexts.update(original_source_contexts((principal_id,),[item['entity_id'] for item in values[start:start+500]]))
+    return [dict(item,**({'source_context':contexts[str(item['entity_id'])]} if contexts.get(str(item['entity_id'])) else {}))
+        for item in values if str(item['entity_id']) not in contexts or contexts[str(item['entity_id'])] is not None]
 
 
 def search_knowledge_cursor(
@@ -501,20 +574,14 @@ def search_knowledge_cursor(
         "FROM ENTITIES e JOIN KNOWLEDGE_META km ON km.ENTITY_ID=e.ENTITY_ID AND km.ENTITY_TYPE='KNOWLEDGE' "
         "WHERE " + " AND ".join(conditions) + " ORDER BY e.ENTITY_ID FETCH FIRST :lim ROWS ONLY", params,
     )
-    values = [_row_to_dict(row) for row in rows]
-    result = cursor_pagination.page(values, context, lambda item: {"entity_id": str(item["entity_id"])})
-    count_conditions = [condition for condition in conditions if condition != "e.ENTITY_ID > :after"]
-    count_params = {key: value for key, value in params.items() if key not in {"lim", "after"}}
-    try:
-        total = execute_query_one(
-            "SELECT COUNT(*) AS CNT FROM ENTITIES e JOIN KNOWLEDGE_META km "
-            "ON km.ENTITY_ID=e.ENTITY_ID AND km.ENTITY_TYPE='KNOWLEDGE' WHERE " +
-            " AND ".join(count_conditions),
-            count_params,
-        )
-        result["total_items"] = int((total or {}).get("cnt") or 0)
-    except Exception:
-        pass
+    # The opaque cursor advances over the bounded native candidate page, even
+    # when current original-source authority removes all its entries. This
+    # avoids a dead-end at a withdrawn derived row. Counts describe returned
+    # authorized entries only; a raw SQL total would disclose revoked sources.
+    values=[_row_to_dict({str(key).lower():value for key,value in row.items()}) for row in rows]
+    result=cursor_pagination.page(values,context,lambda item:{'entity_id':str(item['entity_id'])})
+    result['items']=_authorized_inventory_rows(result['items'],principal_id)
+    result['count']=len(result['items'])
     return result
 
 

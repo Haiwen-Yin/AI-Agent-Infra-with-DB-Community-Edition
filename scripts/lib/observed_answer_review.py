@@ -157,7 +157,7 @@ def _authorize(tx, actor, value):
     for citation in value.observed.get('citations', []):
         if not isinstance(citation, dict) or not citation.get('entity_id') or not citation.get('digest'):
             raise ValueError('An exact original knowledge citation is required')
-        knowledge_grounding.citation(actor, value.agent_id, citation['entity_id'], citation['digest'], transaction=tx)
+        knowledge_grounding.validate_citation(actor,value.agent_id,citation,transaction=tx)
     for item in value.observed.get('context_sources', []):
         source = SourceRef.model_validate(item.get('source', item) if isinstance(item, dict) else item)
         continuity_sources.resolve(tx, actor, value.security_domain_id, source)

@@ -1,4 +1,4 @@
-# Framework-Neutral Agent Gateway Adapter - AI Agent Infra with DB v5.0.2
+# Framework-Neutral Agent Gateway Adapter - AI Agent Infra with DB v5.0.3
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 

@@ -6,9 +6,9 @@
   "technical_project": "AI Agent Infra with DB",
   "database": "Oracle / PostgreSQL / YashanDB",
   "edition": "Community",
-  "version": "5.0.2",
-  "release_date": "2026-11-01",
-  "source_commit": "eae197d43576dac246a93b4d032fbde557015934",
+  "version": "5.0.3",
+  "release_date": "2026-11-03",
+  "source_commit": "8b1ef26d6d4d47c52e41ab92ddd12bc14b3e6d6d",
   "assets": {
     "chuanxu-mark.svg": "20740b21f737fa9ca677486fabdd5d5b7875cd5f5bd98e8295304cc4674a5318",
     "chuanxu-mark.png": "f3f5bd568299d394ffed81dcce303de069d5a1809e5b25815e0d993c6a8a3757",

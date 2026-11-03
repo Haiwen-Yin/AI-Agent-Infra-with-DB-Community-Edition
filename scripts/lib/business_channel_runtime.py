@@ -4,13 +4,15 @@ from typing import Any, Dict
 from . import connection, identity_api, native_agent_api, knowledge_grounding, answer_planning
 
 
-def _policy():
+def _policy(*, transaction=None):
     from . import portal_grounding
-    return portal_grounding.policy()
+    return portal_grounding.policy(**({'transaction':transaction} if transaction is not None else {}))
 
 
-def _audience(dispatch):
-    rows = connection.execute_query(
+def _audience(dispatch, *, transaction=None):
+    query=transaction.query if transaction is not None else connection.execute_query
+    options={'transaction':transaction} if transaction is not None else {}
+    rows = query(
         "SELECT PRINCIPAL_ID FROM CX_CHANNEL_MEMBERS WHERE CHANNEL_ID=:channel "
         "AND STATUS='ACTIVE' AND (VALID_UNTIL IS NULL OR VALID_UNTIL>CURRENT_TIMESTAMP)",
         {'channel': dispatch['channel_id']})
@@ -18,9 +20,9 @@ def _audience(dispatch):
     for raw in rows:
         principal = str(native_agent_api._row(raw)['principal_id'])
         try:
-            identity_api._assert_channel_member(principal, dispatch['channel_id'])
+            identity_api._assert_channel_member(principal, dispatch['channel_id'],**options)
             if dispatch.get('thread_id'):
-                identity_api._assert_thread_member(principal, dispatch['thread_id'])
+                identity_api._assert_thread_member(principal, dispatch['thread_id'],**options)
         except PermissionError:
             continue
         readers.add(principal)
@@ -30,15 +32,15 @@ def _audience(dispatch):
 def _check_sources(agent_id, dispatch, citations, readers, *, transaction=None):
     options = {"transaction": transaction} if transaction is not None else {}
     for item in citations:
-        knowledge_grounding.citation(dispatch['requester_principal_id'], agent_id,
-                                     item['entity_id'], item['digest'], **options)
+        knowledge_grounding.validate_citation(dispatch['requester_principal_id'],agent_id,item,**options)
         for reader in readers:
-            knowledge_grounding.citation(reader, agent_id, item['entity_id'], item['digest'], **options)
+            knowledge_grounding.validate_citation(reader,agent_id,item,**options)
 
 
-def validate_grounding(agent_id, payload):
+def validate_grounding(agent_id, payload, *, transaction=None):
     """Reject stale queued contexts before disclosure and before publishing."""
-    configured = _policy()
+    options={'transaction':transaction} if transaction is not None else {}
+    configured = _policy(**options)
     contract = payload.get('knowledge_contract')
     if not isinstance(contract, dict) or contract.get('policy_version') != configured['version']:
         raise PermissionError('Channel knowledge policy changed; submit a new request')
@@ -54,13 +56,13 @@ def validate_grounding(agent_id, payload):
     if source in {'MODEL_SUPPLEMENT', 'MIXED_SOURCES'} and not may_supplement:
         raise PermissionError('Channel model supplementation is no longer permitted')
     dispatch = payload['channel_dispatch']
-    agent = validate(agent_id, dispatch)['agent']
+    agent = validate(agent_id, dispatch,**options)['agent']
     if agent['llm_profile_id'] != contract.get('profile_id'):
         raise PermissionError('Channel model profile changed')
     citations = payload.get('knowledge_citations') or []
     if citations and not payload.get('knowledge_reply') and agent['llm_profile_id'] not in configured['disclosure_profiles']:
         raise PermissionError('Channel model knowledge disclosure is not approved')
-    _check_sources(agent_id, dispatch, citations, _audience(dispatch) if citations else set())
+    _check_sources(agent_id, dispatch, citations, _audience(dispatch,**options) if citations else set(),**options)
 
 
 def require_result_reader(principal, agent_id, execution_id, *, transaction=None):
@@ -118,13 +120,15 @@ def filter_messages(principal, messages):
     return messages
 
 
-def validate(agent_id: str, dispatch: Dict[str, Any]) -> Dict[str, Any]:
+def validate(agent_id: str, dispatch: Dict[str, Any], *, transaction=None) -> Dict[str, Any]:
     """Recheck the persisted source and current authority before reading/replying."""
     channel_id = str(dispatch.get("channel_id") or "")
     actor = str(dispatch.get("requester_principal_id") or "")
     if channel_id == "CH_PLATFORM_ADMINISTRATION" or dispatch.get("kind") != "BUSINESS_MENTION":
         raise PermissionError("business Channel dispatch contract is invalid")
-    source = native_agent_api._row(connection.execute_query_one(
+    query=transaction.query_one if transaction is not None else connection.execute_query_one
+    options={'transaction':transaction} if transaction is not None else {}
+    source = native_agent_api._row(query(
         "SELECT m.PRINCIPAL_ID,m.BODY_TEXT,m.THREAD_TYPE,m.THREAD_ID,m.REFERENCE_JSON "
         "FROM CX_CHANNEL_MESSAGES m JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID=m.PRINCIPAL_ID "
         "WHERE m.MESSAGE_ID=:message AND m.CHANNEL_ID=:channel AND m.REDACTED_AT IS NULL "
@@ -140,14 +144,14 @@ def validate(agent_id: str, dispatch: Dict[str, Any]) -> Dict[str, Any]:
             or source['thread_type'] != dispatch.get('thread_type')):
         raise PermissionError("business Channel thread binding is invalid")
     for principal in (actor, agent_id):
-        identity_api._assert_channel_member(principal, channel_id, 'channels.write')
+        identity_api._assert_channel_member(principal, channel_id, 'channels.write',**options)
         if source.get('thread_id'):
-            thread = identity_api._assert_thread_member(principal, source['thread_id'], 'channels.write')
+            thread = identity_api._assert_thread_member(principal, source['thread_id'], 'channels.write',**options)
             if thread['channel_id'] != channel_id or thread['thread_type'] != source['thread_type']:
                 raise PermissionError("business Channel thread binding is invalid")
         elif source['thread_type'] != 'CHANNEL':
             raise PermissionError("business Channel thread is required")
-    agent = native_agent_api._row(connection.execute_query_one(
+    agent = native_agent_api._row(query(
         "SELECT AGENT_ID,STATUS,ACTIVATION_STATE,LLM_PROFILE_ID,DEPLOYMENT_TARGET_ID,TEMPLATE_ID "
         "FROM CX_NATIVE_AGENTS WHERE AGENT_ID=:agent AND SOURCE='PLATFORM_CREATED' "
         "AND AGENT_KIND='BUSINESS' AND IS_PROTECTED='N'", {'agent': agent_id},
@@ -216,6 +220,7 @@ def enqueue(actor: str, channel_id: str, message_id: str, agent_id: str,
         payload['answer_metadata'] = planned['answer_metadata']
         payload['answer_source_scope'] = planned['answer_source_scope']
         payload['knowledge_citations'] = planned['citations']
+        payload['answer_context_selection'] = planned['context_selection']
         if planned['knowledge_reply'] is not None:
             payload['knowledge_reply'] = planned['knowledge_reply']
         elif planned['answer_source'] == 'MODEL_SUPPLEMENT':
@@ -238,16 +243,18 @@ def enqueue(actor: str, channel_id: str, message_id: str, agent_id: str,
 
 
 def validate_response(agent_id: str, channel_id: str, execution_id: str,
-                      thread_type: str = '', thread_id: str = '') -> None:
+                      thread_type: str = '', thread_id: str = '', *, transaction=None) -> None:
+    query=transaction.query_one if transaction is not None else connection.execute_query_one
+    options={'transaction':transaction} if transaction is not None else {}
     try:
-        execution = native_agent_api._row(connection.execute_query_one(
+        execution = native_agent_api._row(query(
             'SELECT STATUS,INPUT_JSON FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution AND AGENT_ID=:agent '
             'AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP',
             {'execution': execution_id, 'agent': agent_id}))
     except Exception as exc:
         if 'LEASE_EXPIRES_AT' not in str(exc):
             raise
-        execution = native_agent_api._row(connection.execute_query_one(
+        execution = native_agent_api._row(query(
             'SELECT STATUS,INPUT_JSON FROM CX_RUNTIME_EXECUTIONS WHERE EXECUTION_ID=:execution AND AGENT_ID=:agent',
             {'execution': execution_id, 'agent': agent_id}))
     if not execution or execution['status'] != 'CLAIMED':
@@ -258,5 +265,5 @@ def validate_response(agent_id: str, channel_id: str, execution_id: str,
         raise PermissionError('business Agent response Channel binding is invalid')
     if thread_type and (dispatch.get('thread_type') != thread_type or str(dispatch.get('thread_id') or '') != thread_id):
         raise PermissionError('business Agent response thread binding is invalid')
-    validate(agent_id, dispatch)
-    validate_grounding(agent_id, payload)
+    validate(agent_id, dispatch,**options)
+    validate_grounding(agent_id, payload,**options)

@@ -160,6 +160,7 @@ def _scope_clause(actor: str, alias: str = "o", action: str = READ_ACTION) -> tu
                 "AND actor_membership.PRINCIPAL_ID = :actor_principal_id "
                 "AND actor_membership.MEMBERSHIP_KIND = 'PRIMARY' "
                 "AND actor_membership.STATUS = 'ACTIVE' "
+                "AND actor_membership.VALID_FROM <= CURRENT_TIMESTAMP "
                 "AND (actor_membership.VALID_UNTIL IS NULL OR actor_membership.VALID_UNTIL > CURRENT_TIMESTAMP))"
             )
         else:
@@ -169,6 +170,7 @@ def _scope_clause(actor: str, alias: str = "o", action: str = READ_ACTION) -> tu
                 "AND actor_membership.PRINCIPAL_ID = :actor_principal_id "
                 "AND actor_membership.MEMBERSHIP_KIND = 'PRIMARY' "
                 "AND actor_membership.STATUS = 'ACTIVE' "
+                "AND actor_membership.VALID_FROM <= CURRENT_TIMESTAMP "
                 "AND (actor_membership.VALID_UNTIL IS NULL OR actor_membership.VALID_UNTIL > CURRENT_TIMESTAMP))"
             )
     if "DIRECT_REPORTS" in scopes:
@@ -180,6 +182,8 @@ def _scope_clause(actor: str, alias: str = "o", action: str = READ_ACTION) -> tu
             "AND direct_report.MANAGER_PRINCIPAL_ID = :actor_principal_id "
             "AND direct_report.RELATIONSHIP_TYPE = 'DIRECT' "
             "AND direct_report.STATUS = 'ACTIVE' AND report_membership.STATUS = 'ACTIVE' "
+            "AND direct_report.VALID_FROM <= CURRENT_TIMESTAMP AND report_membership.VALID_FROM <= CURRENT_TIMESTAMP "
+            "AND (report_membership.VALID_UNTIL IS NULL OR report_membership.VALID_UNTIL > CURRENT_TIMESTAMP) "
             "AND (direct_report.VALID_UNTIL IS NULL OR direct_report.VALID_UNTIL > CURRENT_TIMESTAMP))"
         )
     scope_clause = "(" + " OR ".join(clauses) + ")" if clauses else "1 = 0"

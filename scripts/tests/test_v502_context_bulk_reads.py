@@ -128,6 +128,16 @@ def measured(state,operation):
         writes=sum(item['method']!='query' for item in calls),total=len(calls),calls=calls)
 
 
+def equivalent_unenveloped_context(actual,old):
+    # These fixtures are ordinary, noncandidate Memory. V5.0.3 names its new
+    # rendering policy explicitly, while all original bytes, budgets, digests,
+    # item order and representation receipts must remain exactly equivalent.
+    prefix='ASSET_' if old['retrieval_policy'].startswith('ASSET_') else ''
+    assert old['retrieval_policy']==prefix+'QUERY_METADATA_BUDGET_V1'
+    assert actual['retrieval_policy']==prefix+'QUERY_METADATA_BUDGET_SOURCE_CONTEXT_V2'
+    return dict(actual,retrieval_policy=old['retrieval_policy'])==old
+
+
 @pytest.mark.parametrize('count',[1,8,32])
 def test_original501_prepare_and_consumption_have_exact_outputs_and_current_read_counts(relational,count,record_property):
     state=relational;frozen=memories(state,count)
@@ -137,7 +147,7 @@ def test_original501_prepare_and_consumption_have_exact_outputs_and_current_read
         return stable(module.read_assembly('owner',built['assembly_id']))
     old,serial=measured(state,lambda:run(state.old.continuity_assembly,'original501'))
     actual,batch=measured(state,lambda:run(assembly,'current502'))
-    assert actual==old and actual['item_count']==count
+    assert equivalent_unenveloped_context(actual,old) and actual['item_count']==count
     assert [item['entity_id'] for item in actual['items']]==[item['entity_id'] for item in frozen]
     if count==32:assert batch['reads']<serial['reads'] and batch['total']<serial['total']
     assert all(len(item.get('params',{}))<=100 for item in batch['calls'])
@@ -187,7 +197,8 @@ def test_original501_assets_directory_assembly_and_consumption_have_exact_output
         return dict(directory=directory,assembly=stable(assembly_module.read_assembly('owner',built['assembly_id'])))
     old,serial=measured(state,lambda:run(state.old.agent_assets,state.old.continuity_assembly,'asset-original501'))
     actual,batch=measured(state,lambda:run(assets,assembly,'asset-current502'))
-    assert actual==old and actual['assembly']['item_count']==count
+    assert actual['directory']==old['directory']
+    assert equivalent_unenveloped_context(actual['assembly'],old['assembly']) and actual['assembly']['item_count']==count
     assert [item['entity_id'] for item in actual['assembly']['items']]==[item['entity_id'] for item in frozen]
     assert len(actual['directory']['items'])==count
     if count==80:assert batch['reads']<serial['reads'] and batch['total']<serial['total']

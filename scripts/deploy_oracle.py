@@ -13,6 +13,28 @@ Example:
 import sys
 import os
 import re
+from pathlib import Path
+
+
+def repair_collab_document_key(conn, sql_file, statement, error):
+    """Use only the shipped additive repair for the exact legacy view failure."""
+    if Path(sql_file).name!='1_schema.sql' or 'ORA-40609' not in str(error):
+        return False
+    match=re.fullmatch(r'CREATE\s+JSON\s+RELATIONAL\s+DUALITY\s+VIEW\s+COLLAB_GROUP_DV\s+AS\s+(.*)',statement,re.S|re.I)
+    if not match:return False
+    from lib.oracle_collab_document import render,sql_identity,VIEW_SQL
+    name,sql,facts=render()
+    repair=Path(sql_file).with_name(name)
+    import json
+    if (not repair.is_file() or repair.read_text()!=sql
+            or not repair.with_suffix('.schema.json').is_file()
+            or json.loads(repair.with_suffix('.schema.json').read_text())!=facts
+            or sql_identity(match[1])!=sql_identity(VIEW_SQL.split(' AS\n',1)[1])):
+        return False
+    if not execute_sql_file(conn,repair,verbose=False):
+        raise RuntimeError('The exact Oracle child document key repair failed') from None
+    print('    Oracle child document key prepared; original JSON fields preserved')
+    return True
 
 
 def parse_defines(content):
@@ -231,8 +253,10 @@ def execute_sql_file(conn, sql_file, verbose=True, define_overrides=None):
                 print(f"    [{i}/{len(statements)}] OK: {first_line}")
         except Exception as e:
             err = str(e).replace('\n', ' ')[:120]
+            if repair_collab_document_key(conn,sql_file,stmt,e):
+                success += 1
             # Skip "already exists" errors (expected during re-deployment)
-            if "ORA-00955" in str(e) or "already exists" in str(e).lower():
+            elif "ORA-00955" in str(e) or "already exists" in str(e).lower():
                 if verbose:
                     print(f"    [{i}/{len(statements)}] SKIP (exists): {first_line}")
                 success += 1

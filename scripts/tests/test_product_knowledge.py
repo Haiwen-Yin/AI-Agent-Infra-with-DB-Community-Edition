@@ -74,30 +74,30 @@ def test_unauthorized_publication_does_not_open_transaction(publication, monkeyp
 @pytest.fixture
 def lifecycle(publication, monkeypatch):
     root, _, _ = publication
-    db = sqlite3.connect(":memory:")
+    db = sqlite3.connect(":memory:", check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.executescript("""
         CREATE TABLE CX_PLATFORM_KNOWLEDGE (
             KNOWLEDGE_ID TEXT PRIMARY KEY, KNOWLEDGE_KEY TEXT, VERSION INTEGER,
             KNOWLEDGE_KIND TEXT, AUDIENCE TEXT, SCOPE_TYPE TEXT, CLASSIFICATION TEXT,
             CONTENT_JSON TEXT, CONTENT_DIGEST TEXT, SIGNATURE TEXT, SIGNATURE_STATUS TEXT,
-            STATUS TEXT, VALID_FROM TEXT, CREATED_BY TEXT);
+            STATUS TEXT, VALID_FROM TEXT, VALID_UNTIL TEXT, CREATED_BY TEXT);
         CREATE TABLE CX_PLATFORM_KNOWLEDGE_CHUNKS (
             CHUNK_ID TEXT PRIMARY KEY, KNOWLEDGE_ID TEXT, CHUNK_NO INTEGER, CHUNK_TEXT TEXT,
             CHUNK_DIGEST TEXT, AUDIENCE TEXT, SCOPE_TYPE TEXT, CLASSIFICATION TEXT, STATUS TEXT);
         CREATE TABLE ENTITIES (
             ENTITY_ID TEXT PRIMARY KEY, ENTITY_TYPE TEXT, TITLE TEXT, CONTENT TEXT,
             SUMMARY TEXT, CATEGORY TEXT, IMPORTANCE INTEGER, STATUS TEXT, VISIBILITY TEXT,
-            UPDATED_AT TEXT);
+            UPDATED_AT TEXT, EXPIRES_AT TEXT);
         CREATE TABLE KNOWLEDGE_META (
             ENTITY_ID TEXT PRIMARY KEY, ENTITY_TYPE TEXT, DOMAIN TEXT, TOPIC TEXT, DIFFICULTY TEXT);
     """)
     class Transaction:
         def execute(self, sql, params):
-            return db.execute(sql.replace(" FOR UPDATE", "").replace("OVERRIDING SYSTEM VALUE ", ""), params)
+            return db.execute(sql.replace(" FOR UPDATE", "").replace("OVERRIDING SYSTEM VALUE ", ""), params).rowcount
 
         def query(self, sql, params):
-            return [dict(row) for row in self.execute(sql, params).fetchall()]
+            return [dict(row) for row in db.execute(sql.replace(" FOR UPDATE", ""), params).fetchall()]
 
         def query_one(self, sql, params):
             rows = self.query(sql, params)
@@ -189,3 +189,40 @@ def test_entity_conflict_rolls_back_old_projection_retirement(lifecycle, monkeyp
         knowledge.publish("admin", "pg", root)
     assert db.execute("SELECT COUNT(*) FROM ENTITIES WHERE STATUS='ARCHIVED'").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM CX_PLATFORM_KNOWLEDGE").fetchone()[0] == 1
+
+
+def test_withdraw_archives_exact_projections_preserves_edits_and_cannot_republish(lifecycle):
+    from lib import builtin_knowledge
+    root,db=lifecycle
+    result=knowledge.publish('admin','pg',root)
+    edited=result['knowledge_ids'][0]
+    db.execute("UPDATE ENTITIES SET CONTENT='User-authored addition' WHERE ENTITY_ID=?",(edited,));db.commit()
+    snapshot=db.execute('SELECT KNOWLEDGE_ID,CONTENT_JSON,CONTENT_DIGEST FROM CX_PLATFORM_KNOWLEDGE').fetchone()
+    withdrawn=builtin_knowledge.withdraw('admin',snapshot['knowledge_id'],'Retire current guide')
+    assert set(withdrawn['archived_projections'])==set(result['knowledge_ids'])-{edited}
+    assert withdrawn['preserved_modified_projections']==[edited]
+    assert db.execute('SELECT COUNT(*) FROM ENTITIES WHERE STATUS=\'ACTIVE\'').fetchone()[0]==1
+    assert db.execute('SELECT COUNT(*) FROM CX_PLATFORM_KNOWLEDGE_CHUNKS WHERE STATUS=\'ACTIVE\'').fetchone()[0]==0
+    assert tuple(db.execute('SELECT CONTENT_JSON,CONTENT_DIGEST FROM CX_PLATFORM_KNOWLEDGE').fetchone())==tuple(snapshot)[1:]
+    with pytest.raises(builtin_knowledge.KnowledgeLifecycleError,match='cannot be republished'):
+        knowledge.publish('admin','pg',root)
+    assert db.execute('SELECT COUNT(*) FROM ENTITIES WHERE STATUS=\'ACTIVE\'').fetchone()[0]==1
+
+
+def test_withdraw_bad_snapshot_and_audit_failure_roll_back_entities_and_snapshot(lifecycle,monkeypatch):
+    from lib import builtin_knowledge
+    root,db=lifecycle
+    knowledge.publish('admin','pg',root)
+    snapshot=db.execute('SELECT KNOWLEDGE_ID,SIGNATURE FROM CX_PLATFORM_KNOWLEDGE').fetchone()
+    db.execute("UPDATE CX_PLATFORM_KNOWLEDGE SET SIGNATURE='tampered'");db.commit()
+    with pytest.raises(ValueError,match='verification failed'):
+        builtin_knowledge.withdraw('admin',snapshot['knowledge_id'],'Retire current guide')
+    assert db.execute('SELECT COUNT(*) FROM ENTITIES WHERE STATUS=\'ACTIVE\'').fetchone()[0]==4
+    db.execute('UPDATE CX_PLATFORM_KNOWLEDGE SET SIGNATURE=?',(snapshot['signature'],));db.commit()
+    def fail(*args):
+        raise RuntimeError('Audit failed')
+    monkeypatch.setattr(builtin_knowledge.identity_api,'_audit_tx',fail)
+    with pytest.raises(RuntimeError,match='Audit failed'):
+        builtin_knowledge.withdraw('admin',snapshot['knowledge_id'],'Retire current guide')
+    assert db.execute('SELECT STATUS FROM CX_PLATFORM_KNOWLEDGE').fetchone()[0]=='PUBLISHED'
+    assert db.execute('SELECT COUNT(*) FROM ENTITIES WHERE STATUS=\'ACTIVE\'').fetchone()[0]==4

@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.2 - Skill Storage & Distribution API
+"""AI Agent Infra v5.0.3 - Skill Storage & Distribution API
 
 Supports direct database access and Admin API mode for Business Agents.
 """
@@ -113,7 +113,7 @@ def register_skill(
 
 def get_skill(skill_id: str) -> Optional[Dict[str, Any]]:
     sql = """
-        SELECT e.ENTITY_ID, e.TITLE, e.CATEGORY, e.STATUS, e.VISIBILITY,
+        SELECT e.ENTITY_ID, e.TITLE, e.CATEGORY, e.STATUS, e.VISIBILITY, e.OWNED_BY_AGENT,
                e.WORKSPACE_ID,
                TO_CHAR(e.CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
                TO_CHAR(e.UPDATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS UPDATED_AT,

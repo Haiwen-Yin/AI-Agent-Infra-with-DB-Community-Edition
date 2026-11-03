@@ -11,6 +11,7 @@ export default function ContinuityRuntime({ request, text, domain, workId, sourc
   const [progress, setProgress] = useState<Row | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [knowledgeSearch, setKnowledgeSearch] = useState(false);
   const lock = useRef(false);
   const pending = useRef(new Map<string, Row>());
   const run = async (operation: () => Promise<void>) => {
@@ -33,7 +34,9 @@ export default function ContinuityRuntime({ request, text, domain, workId, sourc
       e.preventDefault(); const form = new FormData(e.currentTarget);
       void run(async () => {
         const body = { agent_id: String(form.get("agent")), messages: [{ role: "user", content: String(form.get("prompt")) }], reason: String(form.get("reason")),
-          context: { security_domain_id: domain, work_contract_id: form.get("work") ? workId : null, sources, purpose: String(form.get("reason")), token_budget: Number(form.get("budget")), entry_limit: 100, ttl_seconds: 900 } };
+          context: { security_domain_id: domain, work_contract_id: form.get("work") ? workId : null, sources,
+            ...(knowledgeSearch ? { query_text: String(form.get("knowledge_query")), knowledge_retrieval: "hybrid" } : {}),
+            purpose: String(form.get("reason")), token_budget: Number(form.get("budget")), entry_limit: 100, ttl_seconds: 900 } };
         const signature = JSON.stringify(body), id = crypto.randomUUID();
         const payload = pending.current.get(signature) || { ...body, idempotency_key: id, context: { ...body.context, request_id: id, idempotency_key: id } };
         pending.current.set(signature, payload);
@@ -44,6 +47,8 @@ export default function ContinuityRuntime({ request, text, domain, workId, sourc
       <label className="workbench-field"><span>{text("执行 Agent", "Execution Agent")}</span><select name="agent" required><option value="">{text("选择已加载的 Agent", "Select a loaded Agent")}</option>{agents.map(agent => <option key={agent.agent_id} value={agent.agent_id}>{agent.display_name || agent.agent_id}</option>)}</select></label>
       {workId && <label key={workId}><input type="checkbox" name="work" defaultChecked />{text("使用当前工作契约", "Use selected work contract")}</label>}
       <label className="workbench-field"><span>{text("给 Agent 的任务", "Task for the Agent")}</span><textarea name="prompt" required maxLength={32768} rows={3} /></label>
+      <label><input type="checkbox" checked={knowledgeSearch} onChange={e => setKnowledgeSearch(e.target.checked)} />{text("检索本安全域的已审核知识", "Retrieve reviewed Knowledge in this Security Domain")}</label>
+      {knowledgeSearch && <label className="workbench-field"><span>{text("知识检索问题", "Knowledge query")}</span><textarea name="knowledge_query" required maxLength={2000} rows={2} /></label>}
       <label className="workbench-field"><span>{text("上下文预算上限", "Context budget")}</span><input type="number" name="budget" min={1} max={131072} defaultValue={4096} required /></label>
       <label className="workbench-field"><span>{text("操作原因与用途", "Reason and purpose")}</span><input name="reason" required maxLength={1000} /></label>
       <p>{text("上下文有效期为 15 分钟。排队超时或权限变化会阻止发送；结果不确定时不会自动重试。", "Context is valid for 15 minutes. Expiry or permission changes block sending; uncertain sends are not retried automatically.")}</p>

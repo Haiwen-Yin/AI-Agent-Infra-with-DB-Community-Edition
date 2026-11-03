@@ -127,14 +127,15 @@ def resolve_many(tx,actor,domain,values,*,purpose=None,publication_ids=None,
     memory_policy=identity_api.effective_access_many(actor,{'memory.read'})
     located=locate_many(tx,memories,lock=True)
     same=[source for source in memories if (located.get(('MEMORY',source.entity_id,source.revision_id)) or {}).get('security_domain_id')==domain]
-    records=_memory_inputs(tx,same);allowed={}
+    records=_memory_inputs(tx,same);allowed={};source_contexts={}
     for source in same:
         key=(source.entity_id,source.revision_id)
         try:
             record=records.get(key)
             with _resolution(source):
-                _authorize_memory(tx,actor,domain,source,record,
-                    {'lifecycle_state':record['batch_current_state']} if record else None)
+                source_contexts[key]=_authorize_memory(tx,actor,domain,source,record,
+                    {'lifecycle_state':record['batch_current_state']} if record else None,
+                    purpose=purpose)
             allowed[key]=source
         except PermissionError:
             if not omit_denied:raise
@@ -152,7 +153,14 @@ def resolve_many(tx,actor,domain,values,*,purpose=None,publication_ids=None,
             body=bodies.get(key)
             if not body:raise PermissionError('Source access denied')
             with _resolution(source):
-                result.append(_memory_value(source,body,domain))
+                # Read original source authority again after loading bodies.
+                # Family/domain/principal inputs are already batch-rechecked
+                # below; do not repeat all of those SQL reads per source.
+                from .continuity_promotions import require_memory_original_sources
+                context=require_memory_original_sources(tx,actor,source.entity_id,source.revision_id,body)
+                if context!=source_contexts[key]:
+                    raise ContinuityConflict('STALE_CONTENT','Memory source lineage changed during body loading')
+                result.append(_memory_value(source,body,domain,source_context=context))
         else:
             _logger.debug('context_read method=serial_fallback family=%s reason=original_source_authority',source.family.value)
             result.append(serial(source,publication))
@@ -186,12 +194,32 @@ def resolve(tx, actor, domain, value, *, purpose=None, publication_id=None, requ
                         require_publication_binding=require_publication_binding)
 
 
-def _authorize_memory(tx,actor,domain,source,record,current):
+def _authorize_memory(tx,actor,domain,source,record,current,*,purpose=None):
     from . import memory_lifecycle as memory
+    requested_purpose=str(purpose or 'RUNTIME_CONTEXT').upper()
+    historical_state=str((record or {}).get('lifecycle_state') or '').upper()
+    # Historical successors remain immutable evidence, but a superseded
+    # source may be re-read only while validating a candidate or performing a
+    # formally requested retirement.  Runtime context and ordinary reads keep
+    # the existing fail-closed boundary.
+    historical_read = historical_state == 'SUPERSEDED' and requested_purpose in {
+        'CANDIDATE_REVIEW', 'ARTIFACT_RETIRE'
+    }
     if not record or not current or current['lifecycle_state'] not in memory.ORDINARY_VISIBLE_STATES:
         raise PermissionError('Source access denied')
+    if historical_state not in memory.ORDINARY_VISIBLE_STATES and not historical_read:
+        raise PermissionError('Source access denied')
     try:
-        memory._require_memory_access(actor,record,purpose='RUNTIME_CONTEXT')
+        # _require_memory_access deliberately rejects historical lifecycle
+        # states for every ordinary caller.  For the two narrowly scoped
+        # lineage operations above, preserve all identity/domain/lease checks
+        # while presenting an immutable historical row as an authorized
+        # review input.  The actual row and digest remain unchanged.
+        access_record=record
+        if historical_read:
+            access_record=dict(record)
+            access_record['lifecycle_state']='ACTIVE'
+        memory._require_memory_access(actor,access_record,purpose=requested_purpose)
     except memory.MemoryLifecycleError as exc:
         raise PermissionError('Source access denied') from exc
     if record.get('security_domain_id')!=domain:
@@ -201,16 +229,19 @@ def _authorize_memory(tx,actor,domain,source,record,current):
     require_applicable(tx,source.revision_id)
     if record['content_digest']!=source.content_digest:
         raise ContinuityConflict('STALE_CONTENT','The referenced content digest does not match')
+    from .continuity_promotions import require_memory_original_sources
+    return require_memory_original_sources(tx,actor,source.entity_id,source.revision_id,record)
 
 
-def _memory_value(source,record,domain):
+def _memory_value(source,record,domain,*,source_context=None):
     from . import memory_lifecycle as memory
     def text(value):return value.read() if hasattr(value,'read') else value
     fields={name:text(record[name]) for name in ['title','body_text','memory_type','memory_scope','classification']}
     actual=memory._digest(*(fields[name] for name in ['title','body_text','memory_type','memory_scope','classification']))
     if actual!=source.content_digest or record['content_digest']!=source.content_digest:
         raise ContinuityError('INTEGRITY_ERROR','Stored source failed integrity validation')
-    return {'source':source.model_dump(mode='json'),'text':_render(fields),'content_digest':actual,'authorized_scope':domain}
+    return {'source':source.model_dump(mode='json'),'text':_render(fields),'content_digest':actual,'authorized_scope':domain,
+        **({'source_context':source_context} if source_context else {})}
 
 
 def _resolve(tx,actor,domain,source,*,purpose=None,publication_id=None,require_publication_binding=False):
@@ -270,8 +301,8 @@ def _resolve(tx,actor,domain,source,*,purpose=None,publication_id=None,require_p
             raise PermissionError('Source access denied')
         current=tx.query_one("SELECT v.LIFECYCLE_STATE FROM CX_MEMORY_FAMILIES f JOIN CX_MEMORY_VERSIONS v "
                              "ON v.VERSION_ID=f.CURRENT_VERSION_ID WHERE f.FAMILY_ID=:family",{'family':source.entity_id})
-        _authorize_memory(tx,actor,domain,source,record,current)
-        return _memory_value(source,record,domain)
+        source_context=_authorize_memory(tx,actor,domain,source,record,current,purpose=purpose)
+        return _memory_value(source,record,domain,source_context=source_context)
     if source.family.value in {'KNOWLEDGE','EXPERIENCE','SKILL'}:
         from .continuity_promotions import resolve_artifact
         return resolve_artifact(tx,actor,domain,source)
@@ -356,6 +387,9 @@ def publication_payload(tx,source,domain,*,actor):
         digest=memory._digest(*(fields[key] for key in ['title','body_text','memory_type','memory_scope','classification']))
         if digest!=source.content_digest or record['content_digest']!=source.content_digest:
             raise ContinuityError('INTEGRITY_ERROR','Published source failed integrity validation')
-        return {'source':source.model_dump(mode='json'),'text':_render(fields),'content_digest':digest,'authorized_scope':domain}
+        from .continuity_promotions import require_memory_original_sources
+        source_context=require_memory_original_sources(tx,actor,source.entity_id,source.revision_id,record)
+        return {'source':source.model_dump(mode='json'),'text':_render(fields),'content_digest':digest,'authorized_scope':domain,
+            **({'source_context':source_context} if source_context else {})}
     from .continuity_promotions import _artifact_payload
-    return _artifact_payload(tx,source,domain)
+    return _artifact_payload(tx,source,domain,actor=actor)

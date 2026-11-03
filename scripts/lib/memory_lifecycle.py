@@ -359,17 +359,39 @@ def current_memories_cursor(
     return result
 
 
-def get_family(family_id: str, *, include_history: bool = False) -> Optional[dict[str, Any]]:
+def get_family(family_id: str, *, include_history: bool = False,
+               principal_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     family = execute_query_one("SELECT * FROM CX_MEMORY_FAMILIES WHERE FAMILY_ID = :family_id", {"family_id": family_id})
     if not family:
         return None
     current = execute_query_one("SELECT * FROM CX_MEMORY_VERSIONS WHERE VERSION_ID = :version_id", {"version_id": family["current_version_id"]}) if family.get("current_version_id") else None
+    if principal_id and current:
+        _require_memory_access(principal_id, current, purpose="RUNTIME_CONTEXT")
+        from .continuity_promotions import require_memory_original_sources
+        try:
+            connection.execute_transaction_callback(
+                lambda tx: require_memory_original_sources(
+                    tx, principal_id, str(family_id), str(current["version_id"]), current
+                )
+            )
+        except (PermissionError, ContinuityConflict):
+            raise PermissionError("Memory source access denied")
     result = {"family": dict(family), "current": _version_row(current) if current else None}
     if include_history:
-        result["history"] = [_version_row(row) for row in execute_query(
+        history = [_version_row(row) for row in execute_query(
             "SELECT * FROM CX_MEMORY_VERSIONS WHERE FAMILY_ID = :family_id ORDER BY VERSION_NUMBER DESC FETCH FIRST :lim ROWS ONLY",
             {"family_id": family_id, "lim": 100},
         )]
+        if principal_id:
+            visible = []
+            for row in history:
+                try:
+                    _require_memory_access(principal_id, row, purpose="AUDIT")
+                except MemoryLifecycleError:
+                    continue
+                visible.append(row)
+            history = visible
+        result["history"] = history
     return result
 
 
@@ -485,9 +507,43 @@ def quarantine_family(family_id: str, *, actor: str, reason: str, expected_versi
 
 def create_representation(version_id: str, representation_type: str, body: str, *, generator_version: str = "deterministic-v1", source_version_ids: Optional[Iterable[str]] = None) -> str:
     kind = _normal(representation_type, REPRESENTATION_TYPES, "representation_type")
+    # Every derived representation must retain an explicit source lineage.
+    # Older callers omitted the optional argument; binding the represented
+    # version keeps those calls compatible while preventing an unbound summary
+    # from becoming a readable context artifact.
+    source_ids = list(dict.fromkeys(str(value) for value in (source_version_ids or []) if str(value)))
+    if kind != "SOURCE" and not source_ids:
+        source_ids = [str(version_id)]
+    if len(source_ids) > 64:
+        raise MemoryLifecycleError("INVALID_ARGUMENT", "representation source lineage is too large")
     representation_id, digest = _id("MR"), _digest(version_id, kind, body)
-    execute("INSERT INTO CX_MEMORY_REPRESENTATIONS (REPRESENTATION_ID,VERSION_ID,REPRESENTATION_TYPE,BODY_TEXT,CONTENT_DIGEST,TOKEN_COUNT,GENERATION_METHOD,GENERATOR_VERSION,SOURCE_VERSION_IDS_JSON) VALUES (:representation_id,:version_id,:representation_type,:body,:digest,:token_count,'DETERMINISTIC',:generator_version,:source_versions)", {"representation_id": representation_id, "version_id": version_id, "representation_type": kind, "body": body, "digest": digest, "token_count": max(0, len(body) // 4), "generator_version": generator_version, "source_versions": _json(list(source_version_ids or []))})
+    execute("INSERT INTO CX_MEMORY_REPRESENTATIONS (REPRESENTATION_ID,VERSION_ID,REPRESENTATION_TYPE,BODY_TEXT,CONTENT_DIGEST,TOKEN_COUNT,GENERATION_METHOD,GENERATOR_VERSION,SOURCE_VERSION_IDS_JSON) VALUES (:representation_id,:version_id,:representation_type,:body,:digest,:token_count,'DETERMINISTIC',:generator_version,:source_versions)", {"representation_id": representation_id, "version_id": version_id, "representation_type": kind, "body": body, "digest": digest, "token_count": max(0, len(body) // 4), "generator_version": generator_version, "source_versions": _json(source_ids)})
     return representation_id
+
+
+def _representation_source_ids(value: Any, *, representation_type: Optional[str] = None) -> Optional[list[str]]:
+    """Decode a representation's immutable source-version envelope.
+
+    ``None`` means a pre-lineage reader did not return the column and is kept
+    only for compatibility fixtures.  A stored empty list on a derived
+    representation is invalid and therefore fails closed.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "read"):
+        value = value.read()
+    try:
+        parsed = value if isinstance(value, list) else json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list) or len(parsed) > 64:
+        return []
+    result = [str(item).strip() for item in parsed if isinstance(item, (str, int)) and str(item).strip()]
+    if len(result) != len(parsed) or len(set(result)) != len(result):
+        return []
+    if str(representation_type or "").upper() != "SOURCE" and not result:
+        return []
+    return result
 
 
 def register_content_artifact(*, content: str | bytes, owner_ref: str, classification: str = "INTERNAL",
@@ -532,7 +588,7 @@ def _representation_metadata(reader,version_ids,*,limit,snapshot=False):
     order=("CASE REPRESENTATION_TYPE WHEN 'SHORT_SUMMARY' THEN 1 WHEN 'ATOMIC_FACT' THEN 2 ELSE 3 END"
            if snapshot else 'CREATED_AT DESC')
     def original(version):
-        fields='REPRESENTATION_ID,REPRESENTATION_TYPE,TOKEN_COUNT' if snapshot else '*'
+        fields='REPRESENTATION_ID,REPRESENTATION_TYPE,TOKEN_COUNT,SOURCE_VERSION_IDS_JSON' if snapshot else '*'
         statement="SELECT "+fields+" FROM CX_MEMORY_REPRESENTATIONS WHERE VERSION_ID=:version_id AND VALIDATION_STATE='VALID' "
         statement+="AND INDEX_STATE='HOT' ORDER BY "+order+" FETCH FIRST :lim ROWS ONLY"
         return reader.query(statement,{'version_id':version,'lim':limit})
@@ -540,7 +596,7 @@ def _representation_metadata(reader,version_ids,*,limit,snapshot=False):
         _logger.debug('context_read method=serial_fallback reason=legacy_representation_reader')
         return {version:original(version) for version in version_ids}
     rows=read_ids(reader,"SELECT * FROM (SELECT r.REPRESENTATION_ID,r.VERSION_ID,r.REPRESENTATION_TYPE,r.TOKEN_COUNT,"
-        "r.CONTENT_DIGEST,r.CREATED_AT,ROW_NUMBER() OVER (PARTITION BY r.VERSION_ID ORDER BY "+order+") AS BATCH_POSITION "
+        "r.CONTENT_DIGEST,r.CREATED_AT,r.SOURCE_VERSION_IDS_JSON,ROW_NUMBER() OVER (PARTITION BY r.VERSION_ID ORDER BY "+order+") AS BATCH_POSITION "
         "FROM CX_MEMORY_REPRESENTATIONS r WHERE r.VERSION_ID IN ({ids}) AND r.VALIDATION_STATE='VALID' AND r.INDEX_STATE='HOT') "
         "cx_ranked WHERE BATCH_POSITION<="+str(limit+1)+" ORDER BY VERSION_ID,BATCH_POSITION",version_ids)
     grouped={version:[] for version in version_ids}
@@ -561,7 +617,7 @@ def _version_metadata(reader,version_ids):
     from .continuity_sources import read_ids
     rows=read_ids(reader,"SELECT VERSION_ID,FAMILY_ID,LIFECYCLE_STATE,CLASSIFICATION,SECURITY_DOMAIN_ID,OWNER_PRINCIPAL_ID "
         "FROM CX_MEMORY_VERSIONS WHERE VERSION_ID IN ({ids}) ORDER BY VERSION_ID FOR UPDATE",version_ids)
-    return {row['version_id']:row for row in rows}
+    return {str(row['version_id']):row for row in rows}
 
 
 def select_representations(principal_id: str, version_ids: Iterable[str], *, purpose: str = "RUNTIME_CONTEXT",
@@ -581,6 +637,41 @@ def select_representations(principal_id: str, version_ids: Iterable[str], *, pur
                 _authorized_version(principal_id,version_id,purpose=purpose,_version=versions[version_id],
                     agent_instance_id=agent_instance_id,agent_fencing_token=agent_fencing_token)
             representations=_representation_metadata(tx,identifiers,limit=20)
+            lineage_ids=[]
+            for rows in representations.values():
+                for representation in rows:
+                    source_ids=_representation_source_ids(representation.get('source_version_ids_json'),
+                        representation_type=representation.get('representation_type'))
+                    if source_ids is not None:
+                        lineage_ids.extend(source_ids)
+            lineage_ids=list(dict.fromkeys(lineage_ids))[:500]
+            lineage_versions=_version_metadata(tx,lineage_ids) if lineage_ids else {}
+            # A representation is usable only when every declared source
+            # version is still readable by this principal. The source checks
+            # happen before selecting a body, so an unauthorized summary can
+            # never consume token budget or influence ordering.
+            valid_representations={}
+            for version_id, rows in representations.items():
+                valid=[]
+                for representation in rows:
+                    source_ids=_representation_source_ids(representation.get('source_version_ids_json'),
+                        representation_type=representation.get('representation_type'))
+                    if source_ids is None:
+                        # Legacy readers/fixtures without the additive column
+                        # retain their existing behavior until migration.
+                        valid.append(representation); continue
+                    try:
+                        for source_id in source_ids:
+                            source=lineage_versions.get(source_id)
+                            if source is None:
+                                raise _safe_error()
+                            _authorized_version(principal_id,source_id,purpose=purpose,_version=source,
+                                agent_instance_id=agent_instance_id,agent_fencing_token=agent_fencing_token)
+                        valid.append(representation)
+                    except (MemoryLifecycleError, PermissionError):
+                        continue
+                valid_representations[version_id]=valid
+            representations=valid_representations
             remaining=max(0,min(int(token_budget),100000));selected=[];families=set();digests=set()
             order=SAFE_REPRESENTATION_ORDER.get(str(purpose).upper(),SAFE_REPRESENTATION_ORDER['RUNTIME_CONTEXT'])
             for version_id in identifiers:
@@ -691,7 +782,11 @@ def create_deterministic_representations(version_id: str, *, token_budget: int =
     ]
 
 
-def _select_snapshot_members(reader: Any, *, token_budget: int, limit: int = 200) -> list[dict[str, Any]]:
+def _select_snapshot_members(reader: Any, *, token_budget: int, limit: int = 200,
+                             principal_id: Optional[str] = None,
+                             purpose: str = "RUNTIME_CONTEXT",
+                             agent_instance_id: Optional[str] = None,
+                             agent_fencing_token: Optional[int] = None) -> list[dict[str, Any]]:
     """Select a bounded, reproducible context set through one DB reader.
 
     ``reader`` is either an adapter transaction or the module-level connection
@@ -707,11 +802,61 @@ def _select_snapshot_members(reader: Any, *, token_budget: int, limit: int = 200
         "ORDER BY v.CREATED_AT DESC FETCH FIRST :lim ROWS ONLY",
         {"lim": max(1, min(int(limit), 500))},
     )
+    authorized_versions = None
+    if principal_id and versions:
+        from .continuity_promotions import require_memory_original_sources
+        from .continuity_state import ContinuityConflict, ContinuityError
+        authorized_versions = {}
+        metadata = _version_metadata(reader, [str(item["version_id"]) for item in versions])
+        for item in versions:
+            version_id = str(item["version_id"])
+            record = metadata.get(version_id)
+            if record is None:
+                continue
+            try:
+                _authorized_version(principal_id, version_id, purpose=purpose, _version=record,
+                                    agent_instance_id=agent_instance_id,
+                                    agent_fencing_token=agent_fencing_token)
+                require_memory_original_sources(reader, principal_id, str(record["family_id"]), version_id, record)
+            except (MemoryLifecycleError, PermissionError, ContinuityConflict, ContinuityError):
+                continue
+            authorized_versions[version_id] = record
+        versions = [item for item in versions if str(item["version_id"]) in authorized_versions]
     remaining = max(0, min(int(token_budget), 100000))
     members = []
     by_version=_representation_metadata(reader,[version['version_id'] for version in versions],limit=10,snapshot=True)
     for rank, version in enumerate(versions):
         representations=by_version[version['version_id']]
+        if authorized_versions is not None:
+            from .continuity_promotions import require_memory_original_sources
+            from .continuity_state import ContinuityConflict, ContinuityError
+            lineage_ids=[]
+            for representation in representations:
+                source_ids=_representation_source_ids(representation.get('source_version_ids_json'),
+                    representation_type=representation.get('representation_type'))
+                if source_ids is not None:
+                    lineage_ids.extend(source_ids)
+            lineage_versions=_version_metadata(reader,list(dict.fromkeys(lineage_ids))[:500]) if lineage_ids else {}
+            valid=[]
+            for representation in representations:
+                source_ids=_representation_source_ids(representation.get('source_version_ids_json'),
+                    representation_type=representation.get('representation_type'))
+                if source_ids is None:
+                    valid.append(representation); continue
+                try:
+                    for source_id in source_ids:
+                        source=lineage_versions.get(source_id)
+                        if source is None:
+                            raise _safe_error()
+                        _authorized_version(principal_id, source_id, purpose=purpose, _version=source,
+                                            agent_instance_id=agent_instance_id,
+                                            agent_fencing_token=agent_fencing_token)
+                        require_memory_original_sources(reader, principal_id, str(source["family_id"]),
+                                                        source_id, source)
+                    valid.append(representation)
+                except (MemoryLifecycleError, PermissionError, ContinuityConflict, ContinuityError):
+                    continue
+            representations=valid
         representation = next((item for item in representations if int(item.get("token_count") or 0) <= remaining), None)
         if not representation:
             continue
@@ -781,7 +926,9 @@ def create_snapshot(run_id: str, *, actor: str, purpose: str = "RUNTIME_CONTEXT"
         return _insert_snapshot(
             tx, snapshot_id=snapshot_id, run_id=run_id, actor=actor, purpose=purpose,
             query_version=query_version, idempotency_key=idempotency_key,
-            members=_select_snapshot_members(tx, token_budget=token_budget),
+            members=_select_snapshot_members(tx, token_budget=token_budget, principal_id=principal_id,
+                                              purpose=purpose, agent_instance_id=agent_instance_id,
+                                              agent_fencing_token=agent_fencing_token),
             subject=_snapshot_subject(tx, principal_id, agent_instance_id, agent_fencing_token),
         )
     return execute_transaction_callback(commit)
@@ -834,7 +981,13 @@ def refresh_snapshot(snapshot_id: str, *, actor: str, token_budget: int = 2048,
         result = _insert_snapshot(
             tx, snapshot_id=_id("MSNAP"), run_id=str(prior["run_id"]), actor=actor,
             purpose=str(prior.get("purpose") or "RUNTIME_CONTEXT"), query_version="v4.3.2",
-            idempotency_key=next_key, members=_select_snapshot_members(tx, token_budget=token_budget),
+            idempotency_key=next_key,
+            members=_select_snapshot_members(
+                tx, token_budget=token_budget, principal_id=prior.get("principal_id"),
+                purpose=str(prior.get("purpose") or "RUNTIME_CONTEXT"),
+                agent_instance_id=prior.get("agent_instance_id"),
+                agent_fencing_token=prior.get("agent_fencing_token"),
+            ),
             subject=_snapshot_subject(tx, prior.get("principal_id"), prior.get("agent_instance_id"), prior.get("agent_fencing_token")),
         )
         changed = tx.execute(
@@ -1019,7 +1172,7 @@ def chain(version_id: str, *, hops: int = 2, limit: int = 100) -> dict[str, list
                     seen.add(candidate); next_frontier.append(candidate)
         frontier = next_frontier
     for item in seen:
-        row = execute_query_one("SELECT VERSION_ID,TITLE,MEMORY_TYPE,MEMORY_SCOPE,LIFECYCLE_STATE,CLASSIFICATION,CREATED_AT FROM CX_MEMORY_VERSIONS WHERE VERSION_ID = :version_id", {"version_id": item})
+        row = execute_query_one("SELECT VERSION_ID,FAMILY_ID,TITLE,MEMORY_TYPE,MEMORY_SCOPE,LIFECYCLE_STATE,CLASSIFICATION,OWNER_PRINCIPAL_ID,OWNER_AGENT_ID,SECURITY_DOMAIN_ID,VALID_UNTIL,CREATED_AT FROM CX_MEMORY_VERSIONS WHERE VERSION_ID = :version_id", {"version_id": item})
         if row:
             nodes.append(dict(row))
     return {"nodes": nodes, "relations": relations[:max_nodes]}
@@ -1033,11 +1186,19 @@ def authorized_chain(principal_id: str, version_id: str, *, purpose: str = "RUNT
                         agent_fencing_token=agent_fencing_token)
     raw = chain(version_id, hops=hops, limit=limit)
     nodes, allowed_ids = [], set()
+    from .continuity_state import ContinuityConflict, ContinuityError
+    from .continuity_promotions import require_memory_original_sources
     for node in raw["nodes"]:
         try:
             _require_memory_access(principal_id, node, purpose=purpose, agent_instance_id=agent_instance_id,
                                    agent_fencing_token=agent_fencing_token)
-        except MemoryLifecycleError:
+            if node.get("family_id"):
+                connection.execute_transaction_callback(
+                    lambda tx, item=node: require_memory_original_sources(
+                        tx, principal_id, str(item["family_id"]), str(item["version_id"]), item,
+                    )
+                )
+        except (MemoryLifecycleError, PermissionError, ContinuityConflict, ContinuityError):
             continue
         nodes.append(node)
         allowed_ids.add(str(node.get("version_id")))

@@ -1,4 +1,4 @@
-# Agent assets and query-aware context v5.0.2
+# Agent assets and query-aware context v5.0.3
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -46,6 +46,11 @@ Denied, blocked, expired or not-yet-applicable entries are hidden from the
 binding inventory; an existing binding or prepared assembly cannot restore
 withdrawn access. Other source families retain their existing ownership/scope
 rules.
+
+Knowledge metadata and body reads use the current native Knowledge sharing
+policy, checking each reader's `knowledge.read`, Domain membership and original
+sources. Explicitly shared Knowledge does not require authorship or an `ALL`
+scope. Private, revoked or expired original sources remain unavailable.
 
 1. Search metadata with `GET /directory?security_domain_id=DOMAIN_ID&family=SKILL&query=QUERY`.
    Use `after` and `limit` to page; results do not contain an execution grant.
@@ -125,12 +130,53 @@ recognized tokenizer may provide the count; otherwise `UTF8_UPPER_BOUND` counts
 UTF-8 bytes conservatively. It is an estimate, not measured model usage.
 No tokenizer download or caller-supplied counting code is performed.
 
+If the required content cannot fit, preparation returns
+`MANDATORY_CONTEXT_EXCEEDS_BUDGET` (HTTP 409), without creating an execution or
+sending a model request. Increase the approved budget or select fewer optional
+sources; keep mandatory conditions, negations and exceptions. Do not substitute
+a source's creation time for a missing applicability time, or treat a summary
+as a complete source without verifying its required content.
+
 Representation (`COMPLETE`, `PARTIAL`, `OMITTED`) and delivery (`PREPARED`,
 `CONFIRMED`, `UNOBSERVED`, `OMITTED`) are separate persisted facts. Preparing an
 assembly does not prove that a model received it. The existing input-receipt
 path must confirm the exact rendered digest and entry count. Source revocation,
 expiry or changed current authority blocks later reads despite a pinned ID.
 See [continuity operations](continuity-operations.md) for execution receipts.
+
+## Find reviewed Knowledge for a task
+
+In **Context assembly and evidence**, select **Find Knowledge in this Security
+Domain for the task**, enter a query and purpose, and retain entry/token limits.
+**Execute with context** offers the same explicit option and checks the selected
+Agent as well as the requester. Preparation records short-lived context. After
+submission, read actual Worker status and input receipts to establish execution.
+
+Dashboard `POST /api/context/assemble` accepts the following request. This is an
+absolute path and still requires the current session and `X-CSRF-Token`:
+
+```json
+{
+  "request_id": "task-knowledge-001",
+  "security_domain_id": "DOMAIN_ID",
+  "query_text": "Which reviewed steps and constraints apply to this task?",
+  "knowledge_retrieval": "hybrid",
+  "token_budget": 4096,
+  "entry_limit": 20,
+  "ttl_seconds": 300,
+  "purpose": "Read reviewed procedures in this Security Domain",
+  "idempotency_key": "task-knowledge-001"
+}
+```
+
+Discovery selects current reviewed Knowledge in the same Domain, pins exact
+revisions/digests, and retains original sources, applicability and budgets.
+Explicit `sources` and `mandatory_sources` can accompany discovery. Omit
+`knowledge_retrieval` to retain explicit selection. Empty matches are valid;
+expired sources or withdrawn permissions cannot reuse an earlier grant. Replay
+retains the original record and rechecks authority when read or sent. Ranking
+adds no generation call; the vector channel may use the configured Embedding
+service, whose costs are separate from ranking.
 
 ## Configure and synchronize a source
 

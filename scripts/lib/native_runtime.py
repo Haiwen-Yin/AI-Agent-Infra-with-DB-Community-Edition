@@ -130,6 +130,8 @@ def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, manage
             headers["Authorization"] = "Bearer " + secret
     from .provider_capability_probes import apply_parameters
     request_payload = apply_parameters(profile, {"model": model, "messages": messages, "stream": False, **fields})
+    from . import answer_context
+    request_payload,input_budget=answer_context.final_payload(request_payload)
     payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     with model_dispatch.dispatch(profile, request_payload) as ticket:
@@ -155,10 +157,11 @@ def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, manage
             exc.model_observation = {key: parsed[key] for key in ("model", "usage", "usage_observation", "usage_field_provenance", "request_complete")}
             raise
         return {key: parsed[key] for key in ("content", "model", "finish_reason", "request_complete", "structured", "tool_calls",
-                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id}
+                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id} | (
+                                               {'provider_input_budget':input_budget} if input_budget else {})
 
 
-def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delta: Any) -> Dict[str, Any]:
+def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delta: Any, *, request_fields=None) -> Dict[str, Any]:
     """Stream OpenAI-compatible deltas without retaining or logging prompts."""
     content_security.inspect_messages(messages)
     messages = _provider_messages(messages)
@@ -177,8 +180,14 @@ def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delt
         if secret:
             headers["Authorization"] = "Bearer " + secret
     from .provider_capability_probes import apply_parameters
+    fields=dict(request_fields or {})
+    if (set(fields)-{'max_tokens'} or 'max_tokens' in fields and
+            (type(fields['max_tokens']) is not int or not 1<=fields['max_tokens']<=32768)):
+        raise ValueError('Unsupported streaming text request fields')
     request_payload = apply_parameters(profile, {"model": model, "messages": messages, "stream": True,
-                                                "stream_options": {"include_usage": True}})
+                                                "stream_options": {"include_usage": True},**fields})
+    from . import answer_context
+    request_payload,input_budget=answer_context.final_payload(request_payload)
     payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(provider_url + "/chat/completions", data=payload, headers=headers, method="POST")
     content = ""
@@ -226,7 +235,8 @@ def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delt
         if not content:
             raise RuntimeError("LLM provider returned no content")
         return {key: parsed[key] for key in ("content", "model", "finish_reason", "request_complete",
-                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id}
+                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id} | (
+                                               {'provider_input_budget':input_budget} if input_budget else {})
 
 
 def _set_profile_health(profile_id: str, state: str, expected_version: Optional[int] = None) -> None:
@@ -408,9 +418,9 @@ def _runtime_model_authority(tx, execution, profile, receipt, binding, target_sn
             raise PermissionError('The original Channel requester changed')
         if dispatch.get('kind') == 'BUSINESS_MENTION':
             from . import business_channel_runtime
-            if payload.get('knowledge_citations') and tuple(sorted(business_channel_runtime._audience(dispatch))) != audience:
+            if payload.get('knowledge_citations') and tuple(sorted(business_channel_runtime._audience(dispatch,transaction=tx))) != audience:
                 raise PermissionError('The original Channel disclosure audience changed')
-            business_channel_runtime.validate_response(live['agent_id'], dispatch['channel_id'], execution_id)
+            business_channel_runtime.validate_response(live['agent_id'], dispatch['channel_id'], execution_id,transaction=tx)
         else:
             from . import admin_management
             if identity_api.effective_access(binding.actor, 'platform.manage').get('decision') != 'ALLOW':
@@ -850,12 +860,12 @@ def _safe_answer_metadata(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     strategies = {"KEYWORD", "FULLTEXT", "VECTOR", "HYBRID", "SUBJECT_CLARIFICATION"}
-    channels = {"KEYWORD", "FULLTEXT", "VECTOR"}
+    channels = {"KEYWORD", "FULLTEXT", "VECTOR", "RELATIONAL", "TAG", "GRAPH"}
     statuses = {"MATCHED", "PARTIAL_MATCH", "NO_MATCH", "AMBIGUOUS", "UNAVAILABLE"}
     subjects = {"COMPANY", "DATABASE", "QUERY_TERMS", "MIXED"}
     def selected_list(key: str, permitted: set[str]) -> list[str]:
         raw = value.get(key)
-        return [item for item in raw[:4] if isinstance(item, str) and item in permitted] if isinstance(raw, list) else []
+        return list(dict.fromkeys(item for item in raw[:16] if isinstance(item, str) and item in permitted)) if isinstance(raw, list) else []
     requested = value.get("requested_strategy")
     status = value.get("evidence_status")
     subject = value.get("subject_type")
@@ -1003,11 +1013,15 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
                             {'id':execution_id,'worker':worker_id,'node':node_id,'token':fencing_token}))
                         if not lease:
                             raise PermissionError('isolated execution lease revoked')
-                    result = isolated.model(args[0], args[1], _call_llm, authorize)
+                    from . import answer_context
+                    with answer_context.dispatch_budget(input_payload.get('answer_context_selection') if business_dispatch.get('kind')=='BUSINESS_MENTION' else None):
+                        result = isolated.model(args[0], args[1], _call_llm, authorize)
                     if len(args) > 2:
                         args[2](result['content'])
                 else:
-                    result = function(*args)
+                    from . import answer_context
+                    with answer_context.dispatch_budget(input_payload.get('answer_context_selection') if business_dispatch.get('kind')=='BUSINESS_MENTION' else None):
+                        result = function(*args)
         except Exception as exc:
             if isinstance(exc, model_dispatch.CapacityQueued):
                 from . import model_endpoint_capacity
