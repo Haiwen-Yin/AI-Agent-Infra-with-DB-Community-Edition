@@ -193,13 +193,23 @@ def native_target():
         actual=connection.execute_query_one("SELECT SYS_CONTEXT('USERENV','CON_NAME') AS NAME,"
             "SYS_CONTEXT('USERENV','CON_DBID') AS DBID FROM DUAL")
         assert actual['name'].upper()==target['name'].upper()
-        receipt=json.loads((receipt_root/'development-admission.json').read_text())
-        assert receipt['target']==target['key'] and receipt['status']=='DEVELOPMENT_ONLY'
-        identity=re.search(r'^IDENTITY\|(\d+)\|([A-F0-9]+)$',receipt['observation'],re.M)
+        complete=receipt_root/'native-copy-result.json'
+        if complete.exists():
+            receipt=json.loads(complete.read_text())
+            assert receipt['target']==target['key'] and receipt['status']=='COMPLETE'
+            assert receipt['native_security_metadata_verified'] and receipt['application_catalog_verified']
+            assert receipt['application_table_counts_verified'] > 0 and receipt['scheduler_disabled']
+            assert not receipt['full_pdb_clone']
+            observation=receipt['target_observation']
+            # This receipt proves its recorded catalog/security/count scope;
+            # it does not assert comparison of every stored row value.
+        else:
+            receipt=json.loads((receipt_root/'development-admission.json').read_text())
+            assert receipt['target']==target['key'] and receipt['status']=='DEVELOPMENT_ONLY'
+            assert receipt['native_security_verified'] and not receipt['full_copy_acceptance']
+            observation=receipt['observation']
+        identity=re.search(r'^IDENTITY\|(\d+)\|([A-F0-9]+)$',observation,re.M)
         assert identity and str(actual['dbid'])==identity.group(1)
-        # This explicitly limited admission permits feature tests; it does not
-        # turn the unresolved legacy-view replay into complete copy acceptance.
-        assert receipt['native_security_verified'] and not receipt['full_copy_acceptance']
     elif target['database']=='yashandb':
         assert settings.dsn.lower()==f"{target['host']}:{target['port']}/{target['name']}".lower()
         assert settings.user.upper()==target['owner']
@@ -214,7 +224,7 @@ def native_target():
     else:
         pytest.fail('Extend exact native identity checks before selecting another backend')
     product=product_identity.identity()
-    assert product['product_key']==target['source_product'] and product['version']=='5.0.3'
+    assert product['product_key']==target['source_product'] and product['version']==manifest['version']
     rows=connection.execute_query("SELECT DISTINCT i.PRINCIPAL_ID FROM CX_HUMAN_IDENTITIES i "
         "JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID=i.PRINCIPAL_ID "
         "WHERE i.USERNAME='admin' AND i.IDENTITY_TYPE='LOCAL' AND i.STATUS='ACTIVE' AND p.STATUS='ACTIVE'")

@@ -1,4 +1,4 @@
-# 部署指南 v5.0.3
+# 部署指南 v5.0.4
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -166,7 +166,7 @@ APPLIED 记录及脚本摘要；不能用终点 105 的账本记录代替缺失�
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ```
@@ -190,7 +190,7 @@ bash scripts/install_platform.sh initialize \
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config "$CX_CONFIG_PATH"
 ./start_web_server.sh start
 ./start_web_server.sh status

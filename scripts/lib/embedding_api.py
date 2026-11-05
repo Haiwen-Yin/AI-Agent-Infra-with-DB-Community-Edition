@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.3 - Community Edition - Embedding API
+"""AI Agent Infra v5.0.4 - Community Edition - Embedding API
 
 Generate, store, and search vector embeddings for entities.
 Uses external Embedding API (OpenAI-compatible) + Oracle TO_VECTOR() for storage.

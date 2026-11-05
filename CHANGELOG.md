@@ -1,5 +1,24 @@
 # Changelog
 
+## v5.0.4 - 2026-11-05
+
+- Collect bounded official GitHub and Cloudflare incident records through
+  existing Source synchronization Tasks, exact revisions and pending candidates.
+  Preserve historical status, timestamp meanings and current read authority.
+- Provide schema-valid factual report drafts and an attributed Chinese PagerDuty
+  postmortem template. Keep unknown internal impact and unapproved advice explicit;
+  independent review and promotion remain required.
+- Display existing context budgets, representations, omissions and input receipts
+  while rechecking authorization for omitted-source metadata.
+- Inspect final Provider JSON text and serialize the inspected request once for
+  synchronous and streaming native transport. Retain attachment and byte-audit
+  boundaries and the tested model's source-attribution wording limitation.
+- Add Source-kind migrations 119 and PostgreSQL 120, repair stable-installation
+  lineage checks, and validate fresh and actual stable upgrades across five
+  artifacts and seven targets without changing v5.0.3 packages or historical SQL.
+- Measure native mixed retrieval and existing query-scope Embedding reuse across
+  three backends; keep query/TTL caching and shared encoding disabled.
+
 ## v5.0.3 - 2026-11-03
 
 - Combine authorized relational, vector, full-text, tag and graph signals in

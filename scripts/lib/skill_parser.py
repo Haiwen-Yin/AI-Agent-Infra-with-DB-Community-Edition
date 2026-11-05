@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.3 - Skill Package Parser
+"""AI Agent Infra v5.0.4 - Skill Package Parser
 
 Parse skill packages (zip archives containing SKILL.md) and extract metadata + files.
 Supports three metadata sources by priority:

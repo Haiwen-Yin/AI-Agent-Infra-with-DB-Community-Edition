@@ -1,4 +1,4 @@
--- AI Agent Infra v5.0.3 - Phase 3: Scheduler Jobs
+-- AI Agent Infra v5.0.4 - Phase 3: Scheduler Jobs
 
 WHENEVER SQLERROR CONTINUE;
 
@@ -494,4 +494,4 @@ END;
 /
 
 
-PROMPT AI Agent Infra v5.0.3 - Scheduler Jobs Complete
+PROMPT AI Agent Infra v5.0.4 - Scheduler Jobs Complete

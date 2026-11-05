@@ -13,9 +13,10 @@ from product_delivery import acceptance_targets
 
 @pytest.mark.parametrize('target', acceptance_targets(), ids=lambda row: row['key'])
 @pytest.mark.parametrize('predecessor_ok', (True, False))
-def test_declared_bootstrap_checks_predecessor_before_any_additive_ddl(monkeypatch, tmp_path, target, predecessor_ok):
+@pytest.mark.parametrize('previous,version', [('5.0.2','5.0.3'),('5.0.3','5.0.4')])
+def test_declared_bootstrap_checks_predecessor_before_any_additive_ddl(monkeypatch, tmp_path, target, predecessor_ok, previous, version):
     database = target['database']
-    names = runner.v503_runtime_migration_scripts(database)
+    names = (runner.v504_runtime_migration_scripts if version=='5.0.4' else runner.v503_runtime_migration_scripts)(database)
     deploy = tmp_path / 'scripts/deploy'
     deploy.mkdir(parents=True)
     events = []
@@ -27,8 +28,8 @@ def test_declared_bootstrap_checks_predecessor_before_any_additive_ddl(monkeypat
     def preflight(_probe, selected_database, scripts):
         assert selected_database == database
         assert [path.name for path in scripts] == list(names)
-        assert runner.MIGRATION_VERSION == '5.0.3'
-        assert runner.MIGRATION_FROM_VERSION == '5.0.2'
+        assert runner.MIGRATION_VERSION == version
+        assert runner.MIGRATION_FROM_VERSION == previous
         events.append('predecessor')
         return dict(passed=predecessor_ok, error_type='PredecessorEvidenceIncomplete')
 
@@ -45,14 +46,14 @@ def test_declared_bootstrap_checks_predecessor_before_any_additive_ddl(monkeypat
     for key in ('MIGRATION_VERSION', 'MIGRATION_EDITION', 'MIGRATION_FROM_VERSION'):
         monkeypatch.setattr(runner, key, getattr(runner, key))
     if predecessor_ok:
-        results = deployment._migration_apply('5.0.3', database, target['edition'].lower(),
-            tmp_path / 'config.json', {}, tmp_path, from_version='5.0.2')
+        results = deployment._migration_apply(version, database, target['edition'].lower(),
+            tmp_path / 'config.json', {}, tmp_path, from_version=previous)
         assert [result['script'] for result in results] == list(names)
         assert events[2:] == list(names)
     else:
         with pytest.raises(deployment.DeploymentError, match='PredecessorEvidenceIncomplete'):
-            deployment._migration_apply('5.0.3', database, target['edition'].lower(),
-                tmp_path / 'config.json', {}, tmp_path, from_version='5.0.2')
+            deployment._migration_apply(version, database, target['edition'].lower(),
+                tmp_path / 'config.json', {}, tmp_path, from_version=previous)
         assert events == ['predecessor', 'closed']
 
 
@@ -61,7 +62,7 @@ def test_invalid_declared_transition_stops_before_config_activation(monkeypatch,
     monkeypatch.setattr(deployment, 'release_baseline', lambda *_: {})
     monkeypatch.setattr(deployment, 'release_version', lambda *_: version)
     monkeypatch.setattr(deployment, '_read_config', lambda *_: pytest.fail('Invalid upgrade read credentials'))
-    with pytest.raises(deployment.DeploymentError, match='supported v5.0.2'):
+    with pytest.raises(deployment.DeploymentError, match='supported stable'):
         deployment.run(mode, database='pg', edition='community', root=tmp_path,
                        config_path=tmp_path / 'config.json', from_version='5.0.2')
 

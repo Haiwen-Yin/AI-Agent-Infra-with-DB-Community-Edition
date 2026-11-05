@@ -1,0 +1,14 @@
+{
+  "schema": "v504-incident-sources/v1",
+  "database": "yashandb",
+  "table": "CX_AGENT_SOURCES",
+  "constraint": "CX119_SOURCE_KIND",
+  "kinds": [
+    "DOCUMENT",
+    "GITHUB",
+    "STATUSPAGE"
+  ],
+  "nullable": false,
+  "historical_sql": "UNCHANGED",
+  "grants": "UNCHANGED"
+}

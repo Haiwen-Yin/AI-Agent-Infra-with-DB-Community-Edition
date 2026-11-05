@@ -277,6 +277,46 @@ def v503_migration_scripts(database: str) -> tuple[str, ...]:
     return v502_migration_scripts(database) + v503_runtime_migration_scripts(database)
 
 
+V504_INCIDENT_SOURCE_SCRIPT = '119_v5_0_4_incident_sources.sql'
+
+
+def v504_runtime_migration_scripts(database: str) -> tuple[str, ...]:
+    v503_runtime_migration_scripts(database)  # Validate the selected backend.
+    return (V504_INCIDENT_SOURCE_SCRIPT,) + (('120_v5_0_4_pg_source_kind_repair.sql',) if database=='pg' else ())
+
+
+def v504_migration_scripts(database: str) -> tuple[str, ...]:
+    return v503_migration_scripts(database) + v504_runtime_migration_scripts(database)
+
+
+def validate_v504_static_contract(database: str, scripts: Sequence[Path], edition: str = 'enterprise') -> dict[str, Any]:
+    base = validate_v503_static_contract(database, scripts, edition)
+    try:
+        from lib.incident_source_schema import render
+    except ModuleNotFoundError:
+        from shared.lib.incident_source_schema import render
+    name, sql, facts = render(database)
+    matches = [p for p in scripts if p.name == name]
+    valid = False
+    if len(matches) == 1:
+        try:
+            valid = matches[0].read_text() == sql and json.loads(matches[0].with_suffix('.schema.json').read_text()) == facts
+        except (OSError, ValueError):
+            pass
+    if database=='pg':
+        try:
+            from lib.incident_source_pg_repair import render as repair
+        except ModuleNotFoundError:
+            from shared.lib.incident_source_pg_repair import render as repair
+        name, sql, facts = repair()
+        matches = [p for p in scripts if p.name == name]
+        try:
+            valid = valid and len(matches)==1 and matches[0].read_text()==sql and json.loads(matches[0].with_suffix('.schema.json').read_text())==facts
+        except (OSError,ValueError):
+            valid = False
+    return dict(database=database, v503=base, v504_incident_sources=dict(passed=valid), passed=base['passed'] and valid)
+
+
 def v502_runtime_migration_scripts(database: str) -> tuple[str, ...]:
     if database not in {"pg", "postgresql", "oracle", "yashandb"}:
         raise ValueError("Unknown v5.0.2 database backend")
@@ -2591,7 +2631,10 @@ def main() -> int:
     static_contracts: dict[str, dict[str, Any]] = {}
     if requires_v43:
         for database in available_databases:
-            if at_least((5, 0, 3)):
+            if at_least((5, 0, 4)):
+                migration_scripts = migration_scripts_for_edition(v504_migration_scripts(database), edition)
+                validator = lambda database, scripts: validate_v504_static_contract(database, scripts, edition)
+            elif at_least((5, 0, 3)):
                 migration_scripts = migration_scripts_for_edition(v503_migration_scripts(database), edition)
                 validator = lambda database, scripts: validate_v503_static_contract(database, scripts, edition)
             elif requires_v502:

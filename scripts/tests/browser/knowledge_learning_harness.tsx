@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import PlatformLearning from '../../web/src/PlatformLearning';
 import ContinuityCandidates from '../../web/src/ContinuityCandidates';
 import ContinuityContext from '../../web/src/ContinuityContext';
+import ContinuityAgentAssets from '../../web/src/ContinuityAgentAssets';
 import '../../web/src/app.css';
 
 const params = new URLSearchParams(location.search);
@@ -24,16 +25,44 @@ const candidate = {candidate_id:'fixture-candidate',version:1,revision_no:1,curr
   proposed_by:'fixture-owner',status:'PENDING',content_digest:digest,
   payload:{content:{family:'KNOWLEDGE',title:'Fixture knowledge',body},sources:[source],replaces:null,intake:null},
   intake_preview:preview};
+const incidentSources: Record<string, any>[] = [];
 const request = async (path: string, options?: RequestInit) => {
   calls.push({path,method:options?.method||'GET',...(options?.body ? {body:JSON.parse(String(options.body))}: {})});
   await new Promise(resolve => setTimeout(resolve,20));
   if (scenario === 'error') throw new Error(text('当前授权资料不可用。','Currently authorized material is unavailable.'));
+  if (suite==='incidents') {
+    if (path.startsWith('/api/continuity-recipients?')) return {items:scenario==='empty'?[]:[
+      {principal_id:'fixture-agent',principal_type:'AGENT',status:'ACTIVE',display_name:'Fixture Agent'}]};
+    if (path.startsWith('/api/context/assemblies?') || path.startsWith('/api/agent-extensions/asset-bindings?')) return {items:[]};
+    if (path==='/api/agent-extensions/sources' && options?.method==='POST') {
+      const configured=JSON.parse(String(options.body));
+      const source={...configured,source_kind:configured.kind,source_id:'incident-source-'+(incidentSources.length+1),row_version:1,status:'ACTIVE'};
+      incidentSources.push(source);return source;
+    }
+    if (path.startsWith('/api/agent-extensions/sources?')) return {items:incidentSources};
+    if (path.endsWith('/sync')) return {job_id:'incident-sync'};
+    if (path==='/api/agent-extensions/source-sync-jobs/incident-sync/run') return {
+      job_id:'incident-sync',source_id:incidentSources[0].source_id,status:'COMPLETED',
+      imports:[{candidate_id:'incident-candidate',revision_id:'incident-revision'}]};
+    if (path==='/api/artifact-candidates/incident-candidate') return {payload:{sources:[source]}};
+    throw new Error('Unexpected incident fixture route');
+  }
   if (suite==='task') {
     if (path==='/api/context/assemble') return {assembly_id:'fixture-assembly'};
     if (path.startsWith('/api/context/assemblies/')) {
       if ((window as any).fixtureRevoke) throw new Error(text('原始来源已撤回。','Original source was withdrawn.'));
       const empty=scenario==='empty';
       return {assembly_id:'fixture-assembly',content_digest:digest,status:'PREPARED',
+        request_id:'fixture-request',expires_at:'2026-11-06T12:00:00Z',
+        budget:scenario==='legacy'?null:{source_budget:4096,byte_budget:16384,context_window:32768,
+          output_reserve:2048,system_tokens:80,tool_tokens:0,count_method:'UTF8_BYTES_UPPER_BOUND'},
+        representations:scenario==='legacy'?[]:[
+          ...(empty?[]:[{source_no:1,...source,representation:'COMPLETE',selection_reason:'DATABASE_HYBRID',
+            token_count:100,byte_count:body.length,delivery_status:'PREPARED'}]),
+          {source_no:2,family:'SOURCE',entity_id:'fixture-budget-omitted',revision_id:'fixture-omitted-revision',
+            content_digest:digest,representation:'OMITTED',selection_reason:'BUDGET_OR_ENTRY_LIMIT',
+            token_count:0,byte_count:0,delivery_status:'OMITTED'}],
+        unavailable_representation_count:1,
         retrieval_policy:'QUERY_HYBRID_BUDGET_SOURCE_CONTEXT_V3',item_count:empty?0:1,
         items:empty?[]:[{item_no:1,family:'KNOWLEDGE',entity_id:'fixture-knowledge',revision_id:'fixture-revision',content_digest:digest,rendered_tokens:100}],
         text:empty?'':body};
@@ -57,8 +86,10 @@ const request = async (path: string, options?: RequestInit) => {
   throw new Error('Unexpected fixture route');
 };
 
-createRoot(document.getElementById('root')!).render(<main className={`page-stack${suite==='task' ? ' continuity-workbench' : ''}`} style={{padding:16,minWidth:0}}>
-  {suite==='task' ? <ContinuityContext request={request} text={text} domain="fixture-domain" domains={[]} canWrite={scenario!=='readonly'}/>
+createRoot(document.getElementById('root')!).render(<main className={`page-stack${suite!=='knowledge' ? ' continuity-workbench' : ''}`} style={{padding:16,minWidth:0}}>
+  {suite==='incidents' ? <ContinuityAgentAssets request={request} text={text} domain="fixture-domain"
+    canWrite={scenario!=='readonly'} canManage={scenario!=='readonly'} canOperateAgents={scenario!=='readonly'} onSourceRefsChange={()=>{}}/>
+    : suite==='task' ? <ContinuityContext request={request} text={text} domain="fixture-domain" domains={[]} canWrite={scenario!=='readonly'}/>
     : <><PlatformLearning request={request} text={text}/>
       <div className="continuity-workbench"><ContinuityCandidates request={request} text={text} domain="fixture-domain" principalId="fixture-owner" canWrite={scenario!=='readonly'}/></div></>}
 </main>);

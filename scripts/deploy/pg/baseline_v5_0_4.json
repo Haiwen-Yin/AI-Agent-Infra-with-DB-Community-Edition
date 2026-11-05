@@ -1,9 +1,9 @@
 {
-  "version": "5.0.3",
-  "database": "oracle",
+  "version": "5.0.4",
+  "database": "pg",
   "fresh_install": true,
   "deployment": "bootstrap-deployment-agent",
-  "required_terminal_migration": "118_v5_0_3_oracle_collab_document_key.sql",
+  "required_terminal_migration": "120_v5_0_4_pg_source_kind_repair.sql",
   "historical_chain": "retained-for-audit",
   "withdrawn_upgrade_sources": [
     "4.4.8"

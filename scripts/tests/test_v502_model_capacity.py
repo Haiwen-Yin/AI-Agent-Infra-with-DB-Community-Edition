@@ -433,9 +433,11 @@ def test_selected_native_completions_release_transport_on_output_denial(ledger, 
         sends.append(1)
         return Response()
     monkeypatch.setattr(model_dispatch, "open_controlled", send)
+    original_enforce = content_security.enforce
     def deny(text, stage):
         if stage == "OUTPUT":
             raise content_security.ContentDenied({"code": "CONTENT_DENIED"})
+        return original_enforce(text, stage)
     monkeypatch.setattr(content_security, "enforce", deny)
     with model_dispatch.authenticated_context("origin-a", "NATIVE", "execution", "attempt", credential_digest="b" * 64,
             worker_key="worker", reauthorize=lambda tx, record: None):

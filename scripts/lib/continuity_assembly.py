@@ -293,12 +293,21 @@ def _read(tx,actor,assembly_id):
     source_limit=int(budget['source_budget']) if planned else int(record['token_budget'])
     if _digest(body)!=record['content_digest'] or len(items)>int(record['entry_limit']) or tokens>source_limit or (planned and len(body.encode('utf-8'))>int(budget['byte_budget'])):
         raise ContinuityError('INTEGRITY_ERROR','Stored assembly failed integrity validation')
+    # Omitted entries were not resolved above. Their historical identifiers
+    # are still protected metadata: recheck authority before displaying them.
+    omitted = [row for row in representations if row['representation']=='OMITTED']
+    visible = context_selection.metadata_many(tx, actor, record['security_domain_id'],
+        [{key:row[key] for key in ('family','entity_id','revision_id','content_digest')} for row in omitted],
+        omit_denied=True) if omitted else []
+    denied = {int(row['source_no']) for row, current in zip(omitted, visible) if current is None}
+    representations = [row for row in representations if int(row['source_no']) not in denied]
     return {'assembly_id':assembly_id,'status':record['status'],'content_digest':record['content_digest'],
             'request_id':record['request_id'],'expires_at':record['expires_at'],'purpose':record['purpose'],
             'policy_version':int(record['policy_version']),'retrieval_policy':record['retrieval_policy'],
             'token_budget':int(record['token_budget']),'entry_limit':int(record['entry_limit']),
             'item_count':len(items),'items':items,'text':body,'token_count_method':method,
-            'budget':budget,'representations':representations}
+            'budget':budget,'representations':representations,
+            'unavailable_representation_count':len(denied)}
 
 
 def read_assembly(actor,assembly_id):

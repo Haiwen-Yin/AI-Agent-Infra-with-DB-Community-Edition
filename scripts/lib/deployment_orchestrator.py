@@ -889,6 +889,23 @@ def postflight(database: str, edition: str, config: Dict[str, Any], terminal_mig
                 "Resolve failed migration steps before handoff.", {"count": failed},
             ))
 
+            if terminal_migration in {"119_v5_0_4_incident_sources.sql", "120_v5_0_4_pg_source_kind_repair.sql"}:
+                import migration_runner
+                native_tail = (migration_runner.v502_native_migration_scripts(database)
+                    + migration_runner.v503_runtime_migration_scripts(database)
+                    + migration_runner.v504_runtime_migration_scripts(database))
+                checks.append(_check("V504_BACKEND_TERMINAL",
+                    "PASS" if terminal_migration == native_tail[-1] else "BLOCKED",
+                    "Packaged terminal matches the selected backend",
+                    "Use the exact backend deployment baseline.", {"expected":native_tail[-1],"actual":terminal_migration}))
+                deploy_dir = _package_deploy_dir(database, root)
+                for name in native_tail:
+                    complete = migration_runner._step_objects_complete(cursor, database, deploy_dir/name, version='5.0.4')
+                    checks.append(_check("V504_NATIVE_"+name.split('_',1)[0], "PASS" if complete else "BLOCKED",
+                        "Native release schema and security boundary verified",
+                        "Apply the exact backend migration chain.", {"step":name}))
+                terminal_migration = "102_v5_0_0_network_access.sql"
+
             if terminal_migration in {"109_v5_0_2_observed_answer_reviews.sql", "110_v5_0_2_pg_approval_entity_repair.sql", "111_v5_0_3_knowledge_intake.sql", "112_v5_0_3_native_knowledge_governance.sql", "113_v5_0_3_authenticated_knowledge_write.sql", "114_v5_0_3_legacy_shared_knowledge_write.sql", "115_v5_0_3_yashandb_lob_knowledge_write.sql", "116_v5_0_3_yashandb_knowledge_body_search.sql", "117_v5_0_3_task_step_timestamps.sql", "118_v5_0_3_oracle_collab_document_key.sql"}:
                 import migration_runner
                 intake_release = terminal_migration in migration_runner.v503_runtime_migration_scripts(database)
@@ -1291,8 +1308,8 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
     baseline = release_baseline(database, root)
     target_version = release_version(database, root, target_version)
     if from_version is not None and (mode not in {"UPGRADE", "RESUME"} or
-                                    (from_version, target_version) != ("5.0.2", "5.0.3")):
-        raise DeploymentError("--from-version requires the supported v5.0.2 to v5.0.3 upgrade")
+                                    (from_version, target_version) not in {("5.0.2", "5.0.3"),("5.0.3", "5.0.4")}):
+        raise DeploymentError("--from-version requires a supported stable upgrade transition")
     terminal_migration = str(baseline["required_terminal_migration"])
     raw = _resolve_sensitive_config(_read_config(config_path))
     config = _database_config(raw, database)
@@ -1320,7 +1337,7 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
             raise DeploymentError("deployment journal does not match the declared predecessor")
         from_version = prior.get("from_version")
         if from_version is not None and (prior.get("mode") != "UPGRADE" or
-                                        (from_version, target_version) != ("5.0.2", "5.0.3")):
+                                        (from_version, target_version) not in {("5.0.2", "5.0.3"),("5.0.3", "5.0.4")}):
             raise DeploymentError("deployment journal has an unsupported predecessor")
         if (str(prior.get("database") or "") != database or str(prior.get("edition") or "") != edition
                 or str(prior.get("target_version") or target_version) != target_version):

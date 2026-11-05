@@ -163,6 +163,9 @@ def test_baseline_declares_packaged_version_and_terminal():
         if version == "5.0.3":
             terminal = ("118_v5_0_3_oracle_collab_document_key.sql" if database == "oracle"
                         else "117_v5_0_3_task_step_timestamps.sql")
+        if version == "5.0.4":
+            terminal = ("120_v5_0_4_pg_source_kind_repair.sql" if database == "pg"
+                        else "119_v5_0_4_incident_sources.sql")
         baseline = deployment_orchestrator.release_baseline(database, root)
         assert baseline["version"] == version
         assert baseline["deployment"] == "bootstrap-deployment-agent"

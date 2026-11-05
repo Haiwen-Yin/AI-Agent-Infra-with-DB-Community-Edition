@@ -1,0 +1,9 @@
+{
+  "schema": "v504-pg-source-kind-repair/v1",
+  "database": "pg",
+  "predecessor": "119_v5_0_4_incident_sources.sql",
+  "prerequisite_execution": true,
+  "exact_native_cast_forms": 2,
+  "historical_sql": "UNCHANGED",
+  "grants": "UNCHANGED"
+}

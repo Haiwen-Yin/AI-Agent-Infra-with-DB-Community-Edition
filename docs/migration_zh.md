@@ -1,4 +1,4 @@
-# 迁移指南 v5.0.3
+# 迁移指南 v5.0.4
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -28,6 +28,15 @@ YashanDB 包内的历史 112–114 文件继续保留，以便核对历史及校
 Oracle 118 为成员文档增加显式冗余唯一键，并按原有全部 JSON 字段重建协作组
 Duality View，保留原主键、数据及授权。新装遇到对应的 ORA-40609 时也只执行
 这份明确的新增修复；历史 SQL 及其校验和不改写。
+
+v5.0.4 新增 119，提供有界 STATUSPAGE 来源类型。PostgreSQL 另选 120，识别旧来源
+检查约束的两种精确数组 cast 形式。执行器先运行此先决修复，再执行字节不变的
+119，随后核验两个步骤及完整前序链。PostgreSQL 终点为 120，Oracle/YashanDB
+终点为 119；不改写历史 SQL、校验和或其他原生检查。Bootstrap 支持明确指定
+`--from-version 5.0.3` 升级到包内 v5.0.4，仍要求确认已有数据库备份。
+前序检查接受 v5.0.3 新装登记的历史步骤，也接受受支持升级路径保留的原版本记录。
+优先检查最近的已有记录；失败、运行中或摘要变化的记录不能回退到更早的成功记录。
+原生结构与 SQL 校验和仍须完整，不重标历史记录的版本。
 
 单后端基线位于 `scripts/deploy/baseline_v*.json`。在统一的 Community 包中，每个后端在 `scripts/deploy/<database>/` 下恰好有一个基线。仅使用所选后端的脚本、驱动和配置。OpenTenBase AgentX 只能使用 PostgreSQL 链。
 
@@ -65,7 +74,7 @@ Oracle、YashanDB 升级至 v5.0.1 前，需由 SYS 在原有的确切应用 PDB
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --from-version 5.0.2 \
   --config /absolute/path/config.json \
   --confirm-database-backup
@@ -121,10 +130,10 @@ PostgreSQL 在历史状态分区 Task Plan 表没有全局 PLAN_ID 键的情况�
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -134,7 +143,7 @@ bash scripts/install_platform.sh resume \
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config /absolute/path/config.json
 ```
 

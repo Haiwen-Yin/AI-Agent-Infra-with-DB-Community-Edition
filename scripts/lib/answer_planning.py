@@ -261,6 +261,14 @@ def _prepare(question, profile_id, configured, retrieval, *, omitted=0):
             "in facts and advice. Never broaden a conditional rule into an unconditional rule."
         )
         instruction += (
+            " Preserve provenance within reports: distinguish upstream statements from locally derived fields, "
+            "draft annotations and recommendations. A null report field establishes that this report lacks "
+            "the value; do not claim the upstream provider supplied that field or proved the value absent. "
+            "When a source contains a current status and historical updates, describe intermediate stages "
+            "as historical. Do not restate an earlier update as the current state after a later resolution. "
+            "Preserve uncertainty and modality: a possible symptom is not a proven causal relationship."
+        )
+        instruction += (
             " When giving a product or platform overview, include its name, version "
             "and edition when those facts are stated in the authorized references, "
             "so the reader can identify which release the description applies to. "

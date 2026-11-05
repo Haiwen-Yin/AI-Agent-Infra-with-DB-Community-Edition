@@ -21,6 +21,7 @@ const uniqueRows = (rows: Row[], key: string): Row[] => [...new Map(rows.map(ite
 
 export default function ContinuityAgentAssets({ request, text, domain, canWrite, canManage, canOperateAgents, onSourceRefsChange }: Props) {
   const [view, setView] = useState<"assets" | "sources" | "recommend">("assets");
+  const [sourceKind, setSourceKind] = useState("DOCUMENT");
   const [agents, setAgents] = useState<Row[]>([]);
   const [agent, setAgent] = useState("");
   const [agentCursor, setAgentCursor] = useState("");
@@ -146,8 +147,9 @@ export default function ContinuityAgentAssets({ request, text, domain, canWrite,
       const value = await post(`${ROOT}/sources`, {
         security_domain_id: domain, agent_id: agent, kind, endpoint: String(data.get("endpoint")).trim(),
         pinned_commit: kind === "GITHUB" ? String(data.get("pinned_commit")).trim() : "",
-        paths: kind === "GITHUB" ? String(data.get("paths")).split("\n").map(x => x.trim()).filter(Boolean) : ["/"],
-        credential_ref: String(data.get("credential_ref") || "").trim(), content_types: ["text/plain", "text/markdown", "text/html"],
+        paths: kind === "STATUSPAGE" ? [`/incidents/recent/${Number(data.get("incident_limit"))}`] : kind === "GITHUB" ? String(data.get("paths")).split("\n").map(x => x.trim()).filter(Boolean) : ["/"],
+        credential_ref: kind === "STATUSPAGE" ? "" : String(data.get("credential_ref") || "").trim(),
+        content_types: kind === "STATUSPAGE" ? ["application/json"] : ["text/plain", "text/markdown", "text/html"],
         max_bytes: Number(data.get("max_bytes")), max_attempts: 3, reason: reason(data),
       });
       await loadAgentData();
@@ -271,12 +273,18 @@ export default function ContinuityAgentAssets({ request, text, domain, canWrite,
     {view === "sources" && agent && <div className="continuity-extension-grid">
       <section className="continuity-extension-column"><h4>{text("配置只读来源", "Configure a read-only source")}</h4>
         <form onSubmit={configureSource}><fieldset className="operation-explainer-form" disabled={busy || !canManage}><legend>{text("来源配置", "Source configuration")}</legend>
-          <label className="workbench-field"><span>{text("来源类型", "Source kind")}</span><select name="kind" defaultValue="DOCUMENT"><option value="DOCUMENT">{text("单个 HTTPS 文档", "Single HTTPS document")}</option><option value="GITHUB">{text("固定提交的 GitHub 仓库", "Pinned GitHub commit")}</option></select></label>
-          {input("endpoint", "HTTPS 地址", "HTTPS URL", { type: "url", required: true, maxLength: 2000, placeholder: "https://docs.example.org/guide.html" })}
-          {input("pinned_commit", "完整提交 SHA（GitHub）", "Full commit SHA (GitHub)", { pattern: "[0-9a-f]{40}", maxLength: 40 })}
-          <label className="workbench-field"><span>{text("限定路径（每行一个）", "Allowed paths (one per line)")}</span><textarea name="paths" rows={3} defaultValue="/" maxLength={25000} /></label>
-          {input("credential_ref", "主机凭据引用（可选，不填写密钥）", "Host credential reference (optional; never enter a secret)", { maxLength: 100, pattern: "[A-Z][A-Z0-9_]{0,99}" })}
-          <label className="workbench-field"><span>{text("最大导入字节数", "Maximum import size")}</span><input name="max_bytes" type="number" min={128} max={262144} defaultValue={16384} required /></label>
+          <label className="workbench-field"><span>{text("来源类型", "Source kind")}</span><select name="kind" value={sourceKind} onChange={e => setSourceKind(e.target.value)}><option value="DOCUMENT">{text("单个 HTTPS 文档", "Single HTTPS document")}</option><option value="GITHUB">{text("固定提交的 GitHub 仓库", "Pinned GitHub commit")}</option><option value="STATUSPAGE">{text("官方故障公告与复盘草稿", "Official incidents and report drafts")}</option></select></label>
+          {sourceKind === "STATUSPAGE" ? <>
+            <label className="workbench-field"><span>{text("官方来源", "Official source")}</span><select name="endpoint"><option value="https://www.githubstatus.com/api/v2/incidents.json">GitHub Status</option><option value="https://www.cloudflarestatus.com/api/v2/incidents.json">Cloudflare Status</option></select></label>
+            <label className="workbench-field"><span>{text("最近事件数量", "Recent incident count")}</span><input name="incident_limit" type="number" min={1} max={5} defaultValue={1} required /></label>
+            <p>{text("采集一页中的最近 1–5 个事件，生成完整概览及逐条更新证据。草稿保留历史状态，仍需补充适用范围和独立审核。", "Collect 1–5 recent incidents from one feed page as complete overviews and update evidence. Drafts retain historical status and require applicability metadata and independent review.")}</p>
+          </> : <>
+            {input("endpoint", "HTTPS 地址", "HTTPS URL", { type: "url", required: true, maxLength: 2000, placeholder: "https://docs.example.org/guide.html" })}
+            {input("pinned_commit", "完整提交 SHA（GitHub）", "Full commit SHA (GitHub)", { pattern: "[0-9a-f]{40}", maxLength: 40 })}
+            <label className="workbench-field"><span>{text("限定路径（每行一个）", "Allowed paths (one per line)")}</span><textarea name="paths" rows={3} defaultValue="/" maxLength={25000} /></label>
+            {input("credential_ref", "主机凭据引用（可选，不填写密钥）", "Host credential reference (optional; never enter a secret)", { maxLength: 100, pattern: "[A-Z][A-Z0-9_]{0,99}" })}
+          </>}
+          <label className="workbench-field"><span>{text("最大导入字节数", "Maximum import size")}</span><input key={sourceKind} name="max_bytes" type="number" min={128} max={262144} defaultValue={sourceKind === "STATUSPAGE" ? 262144 : 16384} required /></label>
           {input("reason", "操作原因", "Reason", { required: true, maxLength: 1000 })}<button className="primary-button">{text("保存只读来源", "Save read-only source")}</button>
           <p>{text("仅 HTTPS/443；禁止跳转到其他地址。GitHub 必须固定完整提交 SHA。导入内容只形成待审候选，不会自动发布。", "HTTPS/443 only; redirects are rejected. GitHub requires a full pinned commit SHA. Imports become pending candidates and are never published automatically.")}</p>
         </fieldset></form>

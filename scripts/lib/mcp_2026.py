@@ -133,7 +133,7 @@ class MCP2026Session:
         request_id = identifier("MR")
         request_params = {**params, "_meta": {
             META_VERSION: VERSION, META_CAPABILITIES: {},
-            META_CLIENT: {"name": "chuanxu", "version": "5.0.3"},
+            META_CLIENT: {"name": "chuanxu", "version": "5.0.4"},
         }}
         extra = {"MCP-Protocol-Version": VERSION, "Mcp-Method": method,
                  "Cache-Control": "no-store"}

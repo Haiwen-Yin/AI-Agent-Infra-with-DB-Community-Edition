@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.3 - Community Edition - Memory API
+"""AI Agent Infra v5.0.4 - Community Edition - Memory API
 
 Unified memory management using oracledb with bind variables.
 Operates on the ENTITIES table (ENTITY_TYPE='MEMORY').

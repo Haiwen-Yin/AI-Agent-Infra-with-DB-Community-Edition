@@ -1,9 +1,9 @@
 {
-  "version": "5.0.3",
-  "database": "yashandb",
+  "version": "5.0.4",
+  "database": "oracle",
   "fresh_install": true,
   "deployment": "bootstrap-deployment-agent",
-  "required_terminal_migration": "117_v5_0_3_task_step_timestamps.sql",
+  "required_terminal_migration": "119_v5_0_4_incident_sources.sql",
   "historical_chain": "retained-for-audit",
   "withdrawn_upgrade_sources": [
     "4.4.8"

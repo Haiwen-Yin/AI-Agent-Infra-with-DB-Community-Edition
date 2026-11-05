@@ -130,9 +130,8 @@ def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, manage
             headers["Authorization"] = "Bearer " + secret
     from .provider_capability_probes import apply_parameters
     request_payload = apply_parameters(profile, {"model": model, "messages": messages, "stream": False, **fields})
-    from . import answer_context
-    request_payload,input_budget=answer_context.final_payload(request_payload)
-    payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+    from . import provider_payload
+    request_payload,payload,input_budget,input_inspection=provider_payload.prepare(request_payload, managed_images=managed_input)
     request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     with model_dispatch.dispatch(profile, request_payload) as ticket:
         try:
@@ -157,7 +156,8 @@ def _call_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], *, manage
             exc.model_observation = {key: parsed[key] for key in ("model", "usage", "usage_observation", "usage_field_provenance", "request_complete")}
             raise
         return {key: parsed[key] for key in ("content", "model", "finish_reason", "request_complete", "structured", "tool_calls",
-                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id} | (
+                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id,
+                                               'provider_input_inspection': input_inspection} | (
                                                {'provider_input_budget':input_budget} if input_budget else {})
 
 
@@ -186,9 +186,8 @@ def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delt
         raise ValueError('Unsupported streaming text request fields')
     request_payload = apply_parameters(profile, {"model": model, "messages": messages, "stream": True,
                                                 "stream_options": {"include_usage": True},**fields})
-    from . import answer_context
-    request_payload,input_budget=answer_context.final_payload(request_payload)
-    payload = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+    from . import provider_payload
+    request_payload,payload,input_budget,input_inspection=provider_payload.prepare(request_payload)
     request = urllib.request.Request(provider_url + "/chat/completions", data=payload, headers=headers, method="POST")
     content = ""
     pending = ""
@@ -235,7 +234,8 @@ def _stream_llm(profile: Dict[str, Any], messages: List[Dict[str, Any]], on_delt
         if not content:
             raise RuntimeError("LLM provider returned no content")
         return {key: parsed[key] for key in ("content", "model", "finish_reason", "request_complete",
-                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id} | (
+                                           "usage", "usage_observation", "usage_field_provenance")} | {"request_id": ticket.request_id,
+                                               'provider_input_inspection': input_inspection} | (
                                                {'provider_input_budget':input_budget} if input_budget else {})
 
 

@@ -125,7 +125,7 @@ def peer(tmp_path,monkeypatch):
     monkeypatch.setattr(connection_crypto,'decrypt_section',lambda value:json.loads(value))
     monkeypatch.setattr(provider_capability_probes,'request_parameters',lambda *_: {})
     monkeypatch.setattr(content_security,'inspect_messages',lambda *args,**kwargs:None)
-    monkeypatch.setattr(content_security,'enforce',lambda *args,**kwargs:None)
+    monkeypatch.setattr(content_security,'enforce',lambda *args,**kwargs:dict(ruleset_digest='synthetic-rules',decision='ALLOW'))
     # These HTTP peers use synthetic source authorities instead of native
     # Task projections. Actual native/Task adapters have their own integration
     # tests; this fixture never certifies production business authorization.
@@ -523,7 +523,7 @@ def _independent_origin_process(path,profile,name,result,foreign_config):
         patch.setattr(native_runtime,'request_timeout_seconds',lambda:180)
         patch.setattr(provider_capability_probes,'request_parameters',lambda *_:{})
         patch.setattr(content_security,'inspect_messages',lambda *args,**kwargs:None)
-        patch.setattr(content_security,'enforce',lambda *args,**kwargs:None)
+        patch.setattr(content_security,'enforce',lambda *args,**kwargs:dict(ruleset_digest='synthetic-rules',decision='ALLOW'))
         patch.setattr(processing_recovery,'on_origin_dispatch',lambda tx,receipt:None,raising=False)
         patch.setattr(identity_api,'_audit_tx',lambda tx,actor,action,family,resource,outcome,reason:tx.execute(
             'INSERT INTO AUDIT VALUES(:actor,:action_name,:resource)',dict(actor=actor,action_name=action,resource=resource)))

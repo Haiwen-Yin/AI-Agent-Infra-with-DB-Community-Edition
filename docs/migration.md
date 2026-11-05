@@ -1,4 +1,4 @@
-# Migration guide v5.0.3
+# Migration guide v5.0.4
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -36,6 +36,19 @@ Oracle 118 adds an explicit redundant member document key and recreates the
 existing collaboration Duality View with every original JSON field. The member
 primary key, rows and grants are preserved. The exact repair also handles the
 matching ORA-40609 during fresh schema execution without rewriting old SQL.
+
+v5.0.4 adds migration 119 for the bounded STATUSPAGE Source kind. PostgreSQL
+also selects 120 to recognize both exact historical array-cast forms of its
+Source check. The runner applies this prerequisite before unchanged 119, then
+verifies both entries and the complete predecessor chain. PostgreSQL ends at
+120; Oracle/YashanDB end at 119. No historical SQL/checksum or unrelated native
+check is replaced. Bootstrap supports an explicit `--from-version 5.0.3`
+upgrade to a packaged v5.0.4 target, with the original backup requirement.
+The predecessor check accepts exact historical steps journaled by a fresh
+v5.0.3 installation or retained from earlier supported upgrades. It checks the
+nearest existing release record first; a failed, running or changed record
+cannot fall back to an older success. Native objects and SQL checksums remain
+required, and historical records are never relabelled.
 
 Single-backend baselines are at `scripts/deploy/baseline_v*.json`. In the
 unified Community package, each backend has exactly one baseline under
@@ -92,7 +105,7 @@ Use the installed package's Python environment and work from its root:
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --from-version 5.0.2 \
   --config /absolute/path/config.json \
   --confirm-database-backup
@@ -171,10 +184,10 @@ checksum, skip a failed fragment or assume an interrupted statement committed.
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -188,7 +201,7 @@ verified, stop and use the database's documented recovery procedure.
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.3 \
+  --database pg --edition community --version 5.0.4 \
   --config /absolute/path/config.json
 ```
 

@@ -105,6 +105,10 @@ from live_db_validator import (
     v503_runtime_migration_scripts,
     v503_migration_scripts,
     validate_v503_static_contract,
+    V504_INCIDENT_SOURCE_SCRIPT,
+    v504_runtime_migration_scripts,
+    v504_migration_scripts,
+    validate_v504_static_contract,
 )
 
 
@@ -150,12 +154,12 @@ IDENTITY_PORTAL_GRAPH_MIGRATION_VERSIONS = frozenset({"4.4.6"})
 PLATFORM_AGENT_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.8"})
 RELEASE_SECURITY_REPAIR_MIGRATION_VERSIONS = frozenset({"4.4.9"})
 MODEL_USAGE_WALLBOARD_MIGRATION_VERSIONS = frozenset({"4.4.10"})
-RUNTIME_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1", "5.0.2", "5.0.3"})
+RUNTIME_ISOLATION_MIGRATION_VERSIONS = frozenset({"4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1", "5.0.2", "5.0.3", "5.0.4"})
 # Only these retained releases share migration 94's checksum-bound successor
 # contract. Never infer a trusted predecessor from a version string alone.
 HANDOFF_POLICY_RELEASE_CHAIN = (
     "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1",
-    "5.0.2", "5.0.3",
+    "5.0.2", "5.0.3", "5.0.4",
 )
 SUPPORTED_V449_BASELINE_VERSION = "4.4.7"
 WITHDRAWN_SCHEMA_VERSION = "4.4.8"
@@ -180,6 +184,8 @@ NATIVE_SCHEMA_VERIFIED_MIGRATIONS = frozenset({
     V503_YASHAN_SEARCH_SCRIPT,
     V503_TASK_TIMESTAMPS_SCRIPT,
     V503_ORACLE_COLLAB_SCRIPT,
+    V504_INCIDENT_SOURCE_SCRIPT,
+    '120_v5_0_4_pg_source_kind_repair.sql',
 })
 
 # v4.4.1 was exercised against the retained PostgreSQL and YashanDB test
@@ -740,7 +746,9 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
             )
         elif MIGRATION_VERSION in {"4.4.10"} | RUNTIME_ISOLATION_MIGRATION_VERSIONS:
             deploy_dir = scripts[0].parent if scripts else _deployment_script(database, "55_v4_4_10_model_usage_wallboard.sql").parent
-            if MIGRATION_VERSION == "5.0.3":
+            if MIGRATION_VERSION == '5.0.4':
+                release_scripts = v504_migration_scripts(database)
+            elif MIGRATION_VERSION == "5.0.3":
                 release_scripts = v503_migration_scripts(database)
             elif MIGRATION_VERSION == "5.0.2":
                 release_scripts = v502_migration_scripts(database)
@@ -763,7 +771,9 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
                 missing = [str(path.name) for path in full_scripts if not path.is_file()]
                 if missing:
                     raise RuntimeError("v4.4.11 migration contract is incomplete: " + ",".join(missing))
-                if MIGRATION_VERSION == "5.0.3":
+                if MIGRATION_VERSION == '5.0.4':
+                    v43_static_contract = validate_v504_static_contract(database, full_scripts, MIGRATION_EDITION)
+                elif MIGRATION_VERSION == "5.0.3":
                     v43_static_contract = validate_v503_static_contract(database, full_scripts, MIGRATION_EDITION)
                 elif MIGRATION_VERSION == "5.0.2":
                     v43_static_contract = validate_v502_static_contract(database, full_scripts, MIGRATION_EDITION)
@@ -784,6 +794,8 @@ def _preflight(conn: Any, database: str, scripts: list[Path], tier: int | None =
             predecessor_contract = _v502_predecessor_contract(cursor, database, scripts)
         if MIGRATION_VERSION == '5.0.3' and MIGRATION_FROM_VERSION == '5.0.2':
             predecessor_contract = _v503_predecessor_contract(cursor, database, scripts)
+        if MIGRATION_VERSION == '5.0.4' and MIGRATION_FROM_VERSION == '5.0.3':
+            predecessor_contract = _v504_predecessor_contract(cursor, database, scripts)
     passed = bool(identity) and capabilities.get("apache_age_available", True)
     if predecessor_contract is not None and not predecessor_contract["passed"]:
         passed = False
@@ -1583,7 +1595,60 @@ def _v503_predecessor_contract(cursor: Any, database: str, scripts: list[Path]) 
     return {'version': '5.0.2', 'steps': steps, 'passed': all(item['passed'] for item in steps.values())}
 
 
+def _v504_predecessor_contract(cursor: Any, database: str, scripts: list[Path]) -> dict[str, Any]:
+    """Verify actual v5.0.3 ledgers/checksums/objects before the additive 119."""
+    inherited = {}
+    steps = {}
+    for name in (*v502_native_migration_scripts(database), *v503_runtime_migration_scripts(database)):
+        path = scripts[0].parent / name if scripts else None
+        versions = ['5.0.3']
+        if name in v502_native_migration_scripts(database):
+            versions.append('5.0.2')
+            if name in V501_MIGRATION_SCRIPTS[-3:]:versions.append('5.0.1')
+        row = None
+        observed_version = None
+        if path and path.is_file():
+            for version in versions:
+                row = _step_row(cursor, database, path, version=version)
+                if row is not None:
+                    # Fresh 503 journals the whole chain under 503. An upgrade
+                    # keeps earlier release rows. Never skip a present bad row.
+                    observed_version = version
+                    break
+        checksum = bool(row and row['checksum'] == _checksum(path))
+        objects = bool(path and path.is_file() and _step_objects_complete(cursor, database, path, version='5.0.3'))
+        result = dict(version=observed_version, ledger_status=row['status'] if row else 'MISSING', checksum_matches=checksum,
+                          objects_complete=objects, passed=bool(row and row['status']=='APPLIED' and checksum and objects))
+        (inherited if name in v502_native_migration_scripts(database) else steps)[name] = result
+    previous = dict(version='5.0.2',steps=inherited,passed=all(item['passed'] for item in inherited.values()))
+    return dict(version='5.0.3', predecessors=previous, steps=steps,
+                passed=previous['passed'] and all(item['passed'] for item in steps.values()))
+
+
 def _step_objects_complete(cursor: Any, database: str, script: Path, *, version: str | None = None) -> bool:
+    version = MIGRATION_VERSION if version is None else version
+    if script.name == '120_v5_0_4_pg_source_kind_repair.sql':
+        try:
+            try:
+                from lib.incident_source_pg_repair import render
+                from lib.incident_source_schema import errors
+            except ModuleNotFoundError:
+                from shared.lib.incident_source_pg_repair import render
+                from shared.lib.incident_source_schema import errors
+            _,sql,facts=render()
+            return database=='pg' and script.read_text()==sql and json.loads(script.with_suffix('.schema.json').read_text())==facts and not errors(cursor,'pg')
+        except Exception:
+            return False
+    if script.name == V504_INCIDENT_SOURCE_SCRIPT:
+        try:
+            try:
+                from lib.incident_source_schema import render, errors
+            except ModuleNotFoundError:
+                from shared.lib.incident_source_schema import render, errors
+            _, sql, facts = render(database)
+            return script.read_text() == sql and json.loads(script.with_suffix('.schema.json').read_text()) == facts and not errors(cursor, database)
+        except Exception:
+            return False
     if script.name == V503_ORACLE_COLLAB_SCRIPT:
         try:
             try:
@@ -1641,7 +1706,9 @@ def _step_objects_complete(cursor: Any, database: str, script: Path, *, version:
                 expected_successor=render(database,authenticated_login=True,legacy_shared=name.startswith('114_'))
                 if successor.read_text()!=expected_successor[1] or json.loads(successor.with_suffix('.schema.json').read_text())!=expected_successor[2]:
                     continue
-                recorded=_step_row(cursor,database,successor,version='5.0.3')
+                recorded=_step_row(cursor,database,successor,version=version)
+                if not recorded and version=='5.0.4':
+                    recorded=_step_row(cursor,database,successor,version='5.0.3')
                 if (recorded and recorded['status']=='APPLIED' and recorded['checksum']==_checksum(successor)
                         and not errors(cursor,database,legacy_shared=name.startswith('114_'))):
                     return True
@@ -1666,6 +1733,16 @@ def _step_objects_complete(cursor: Any, database: str, script: Path, *, version:
             except ModuleNotFoundError:
                 from shared.lib.continuity_schema_validation import errors
             facts = json.loads(script.with_suffix(".schema.json").read_text(encoding="utf-8"))
+            if script.name=='104_v5_0_1_context_assets.sql':
+                successor=script.parent/V504_INCIDENT_SOURCE_SCRIPT
+                recorded=_step_row(cursor,database,successor,version='5.0.4') if successor.is_file() else None
+                if recorded and recorded['status']=='APPLIED' and recorded['checksum']==_checksum(successor):
+                    if not _step_objects_complete(cursor,database,successor,version='5.0.4'):
+                        return False
+                    checks=facts['CX_AGENT_SOURCES']['check_expressions']
+                    old="SOURCE_KIND IN ('DOCUMENT','GITHUB')"
+                    if checks.count(old)!=1:return False
+                    checks[checks.index(old)]="SOURCE_KIND IN ('DOCUMENT','GITHUB','STATUSPAGE')"
             if not facts or errors(cursor, database, facts):
                 return False
             return (script.name not in (*V502_RUNTIME_MIGRATION_SCRIPTS, *V503_RUNTIME_MIGRATION_SCRIPTS)
@@ -2334,6 +2411,8 @@ def release_script_names(version: str, database: str, config_path: Path, edition
     # objects in preflight, then execute only the additive release steps. Do
     # not replay historical seeds or DDL under the new release's journal.
     if from_version is not None:
+        if (from_version, version) == ('5.0.3', '5.0.4'):
+            return list(v504_runtime_migration_scripts(database))
         if (from_version, version) == ('5.0.2', '5.0.3'):
             return list(v503_runtime_migration_scripts(database))
         if (from_version, version) == ('5.0.1', '5.0.2'):
@@ -2342,13 +2421,14 @@ def release_script_names(version: str, database: str, config_path: Path, edition
     # Application-only releases retain the reviewed schema chain.
     # v4.5.0 starts with the complete reviewed continuity schema. New schema
     # changes must extend this selection rather than mutate historical SQL.
-    knowledge_intake_release = version == '5.0.3'
-    model_processing_release = version in {"5.0.2", "5.0.3"}
-    memory_context_release = version in {"5.0.1", "5.0.2", "5.0.3"}
-    source_ip_release = version in {"5.0.0", "5.0.1", "5.0.2", "5.0.3"}
+    incident_source_release = version == '5.0.4'
+    knowledge_intake_release = version in {'5.0.3', '5.0.4'}
+    model_processing_release = version in {"5.0.2", "5.0.3", "5.0.4"}
+    memory_context_release = version in {"5.0.1", "5.0.2", "5.0.3", "5.0.4"}
+    source_ip_release = version in {"5.0.0", "5.0.1", "5.0.2", "5.0.3", "5.0.4"}
     extension_release = version == "4.5.1"
-    continuity_release = version in {"4.5.2", "5.0.0", "5.0.1", "5.0.2", "5.0.3"}
-    version = {"4.4.16": "4.4.15", "4.5.0": "4.4.15", "4.5.1": "4.4.15", "4.5.2": "4.4.15", "5.0.0": "4.4.15", "5.0.1": "4.4.15", "5.0.2": "4.4.15", "5.0.3": "4.4.15"}.get(version, version)
+    continuity_release = version in {"4.5.2", "5.0.0", "5.0.1", "5.0.2", "5.0.3", "5.0.4"}
+    version = {"4.4.16": "4.4.15", "4.5.0": "4.4.15", "4.5.1": "4.4.15", "4.5.2": "4.4.15", "5.0.0": "4.4.15", "5.0.1": "4.4.15", "5.0.2": "4.4.15", "5.0.3": "4.4.15", "5.0.4": "4.4.15"}.get(version, version)
     selectors = {
         "4.3.7": _v437_script_names,
         "4.4.10": _v410_script_names,
@@ -2418,6 +2498,8 @@ def release_script_names(version: str, database: str, config_path: Path, edition
         names.extend(v502_runtime_migration_scripts(database))
     if knowledge_intake_release:
         names.extend(v503_runtime_migration_scripts(database))
+    if incident_source_release:
+        names.extend(v504_runtime_migration_scripts(database))
     return names
 
 
@@ -2966,6 +3048,14 @@ def _order_successor_recovery(database: str, config: dict[str, Any], scripts: li
     first; the normal chain still runs afterwards, including successor checks.
     """
     version = MIGRATION_VERSION if version is None else version
+    if database=='pg' and version=='5.0.4':
+        repair=next((path for path in scripts if path.name=='120_v5_0_4_pg_source_kind_repair.sql'),None)
+        if repair is None:
+            raise ValueError('v5.0.4 PostgreSQL requires its exact Source cast-form prerequisite')
+        # This prerequisite creates the identical wider predicate before 119's
+        # unchanged strict postcondition. Both steps still get exact ledgers.
+        index=next(i for i,path in enumerate(scripts) if path.name==V504_INCIDENT_SOURCE_SCRIPT)
+        scripts=[*scripts[:index],repair,*scripts[index:]]
     successor = next((path for path in scripts if path.name == '94_v4_4_15_handoff_policy.sql'), None)
     if successor is None:
         return scripts
@@ -3012,8 +3102,8 @@ def _connect_for_preflight(database: str, config: dict[str, Any]) -> Any:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", choices=("all", "oracle", "pg", "yashandb"), default="all")
-    parser.add_argument("--version", choices=("4.0.1", "4.1.0", "4.2.0", "4.2.1", "4.3.0", "4.3.1", "4.3.2", "4.3.3", "4.3.4", "4.3.5", "4.3.6", "4.3.7", "4.4.0", "4.4.1", "4.4.2", "4.4.3", "4.4.4", "4.4.5", "4.4.6", "4.4.8", "4.4.9", "4.4.10", "4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1", "5.0.2", "5.0.3"), default="4.1.0")
-    parser.add_argument("--from-version", choices=("5.0.1", "5.0.2"),
+    parser.add_argument("--version", choices=("4.0.1", "4.1.0", "4.2.0", "4.2.1", "4.3.0", "4.3.1", "4.3.2", "4.3.3", "4.3.4", "4.3.5", "4.3.6", "4.3.7", "4.4.0", "4.4.1", "4.4.2", "4.4.3", "4.4.4", "4.4.5", "4.4.6", "4.4.8", "4.4.9", "4.4.10", "4.4.11", "4.4.12", "4.4.13", "4.4.14", "4.4.15", "4.4.16", "4.5.0", "4.5.1", "4.5.2", "5.0.0", "5.0.1", "5.0.2", "5.0.3", "5.0.4"), default="4.1.0")
+    parser.add_argument("--from-version", choices=("5.0.1", "5.0.2", "5.0.3"),
                         help="declare a supported stable transition and require exact applied predecessor evidence")
     parser.add_argument("--edition", choices=("community", "enterprise"), default="community",
                         help="v4.2 scheduler scope; Community excludes Enterprise HA objects")
@@ -3031,7 +3121,7 @@ def main() -> int:
         help="confirm database-side backup/recovery responsibility before applying migrations",
     )
     args = parser.parse_args()
-    if args.from_version and (args.from_version, args.version) not in {('5.0.1','5.0.2'),('5.0.2','5.0.3')}:
+    if args.from_version and (args.from_version, args.version) not in {('5.0.1','5.0.2'),('5.0.2','5.0.3'),('5.0.3','5.0.4')}:
         parser.error('--from-version requires a declared supported stable transition')
 
     global MIGRATION_VERSION, MIGRATION_EDITION, MIGRATION_FROM_VERSION

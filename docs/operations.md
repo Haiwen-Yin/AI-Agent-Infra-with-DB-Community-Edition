@@ -1,4 +1,4 @@
-# Chuanxu v5.0.3 Operations and Technical Documentation
+# Chuanxu v5.0.4 Operations and Technical Documentation
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -64,7 +64,7 @@ Community. For other supported targets, select `oracle` / `yashandb` and
 `community` / `enterprise` as appropriate:
 
 ```bash
-bash scripts/install_platform.sh initialize --version 5.0.3 \
+bash scripts/install_platform.sh initialize --version 5.0.4 \
   --database pg --edition community --config config.json
 bash start_web_server.sh start
 ```
@@ -92,7 +92,7 @@ readiness, and the management page for database governance. These are separate
 checks; none alone establishes release acceptance. Reverify the deployment with:
 
 ```bash
-bash scripts/install_platform.sh verify --version 5.0.3 \
+bash scripts/install_platform.sh verify --version 5.0.4 \
   --database pg --edition community --config config.json
 ```
 

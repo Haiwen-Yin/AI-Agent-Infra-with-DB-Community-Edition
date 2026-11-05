@@ -1,4 +1,4 @@
-# Agent 扩展操作说明 — 川序 v5.0.3
+# Agent 扩展操作说明 — 川序 v5.0.4
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -77,7 +77,7 @@ MCP 发现不批准执行；再次发现会关闭原批准，复核后重新批�
 
 通过服务管理器运行 `scripts/agent_integration_worker.py`，投递登记遥测并对账
 不确定调用。使用 `scripts/prepare_framework_rootfs.py --rootfs
-/var/lib/chuanxu/framework-v5.0.3` 准备新框架根文件系统，然后配置经验证的
+/var/lib/chuanxu/framework-v5.0.4` 准备新框架根文件系统，然后配置经验证的
 Linux 隔离目标。框架只接收有界消息，数据库仍是执行状态与授权的事实源。
 任意框架运行、真实副作用回放、运行中迁移与全局自治仍不开放。
 

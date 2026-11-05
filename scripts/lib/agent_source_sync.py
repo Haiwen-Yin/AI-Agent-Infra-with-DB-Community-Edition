@@ -30,7 +30,7 @@ from .continuity_state import ContinuityConflict, ContinuityError, require_idemp
 class SourceConfiguration(Contract):
     security_domain_id: Identifier
     agent_id: Identifier
-    kind: Literal['DOCUMENT', 'GITHUB']
+    kind: Literal['DOCUMENT', 'GITHUB', 'STATUSPAGE']
     endpoint: Annotated[str, Field(min_length=1, max_length=2000)]
     pinned_commit: Annotated[str, Field(max_length=40)] = ''
     paths: Annotated[tuple[Annotated[str, Field(max_length=500)], ...], Field(min_length=1, max_length=50)] = ('/',)
@@ -57,6 +57,9 @@ class SourceConfiguration(Contract):
                 raise ValueError('Git sources require a pinned full commit SHA')
         elif self.pinned_commit:
             raise ValueError('Document sources use response versions, not Git commits')
+        if self.kind == 'STATUSPAGE':
+            from .enterprise_incidents import selection
+            selection(self.endpoint, self.paths, self.content_types, self.credential_ref, self.pinned_commit)
         for path in self.paths:
             validate_path(path)
         if self.kind == 'DOCUMENT' and not curated and self.paths != ('/',):
@@ -89,7 +92,7 @@ def schema_statements(dialect):
     return [
         "CREATE TABLE CX_AGENT_SOURCES (SOURCE_ID VARCHAR(128) PRIMARY KEY, AGENT_ID VARCHAR(128) NOT NULL REFERENCES CX_PRINCIPALS(PRINCIPAL_ID), "
         "OWNER_PRINCIPAL_ID VARCHAR(128) NOT NULL REFERENCES CX_PRINCIPALS(PRINCIPAL_ID), SECURITY_DOMAIN_ID VARCHAR(128) NOT NULL REFERENCES CX_SECURITY_DOMAINS(SECURITY_DOMAIN_ID), "
-        "SOURCE_KIND VARCHAR(16) NOT NULL CHECK(SOURCE_KIND IN ('DOCUMENT','GITHUB')), ENDPOINT VARCHAR(2000) NOT NULL, PINNED_COMMIT VARCHAR(40), "
+        "SOURCE_KIND VARCHAR(16) NOT NULL CHECK(SOURCE_KIND IN ('DOCUMENT','GITHUB','STATUSPAGE')), ENDPOINT VARCHAR(2000) NOT NULL, PINNED_COMMIT VARCHAR(40), "
         "CREDENTIAL_REF VARCHAR(100), CONTENT_POLICY_DIGEST VARCHAR(64) NOT NULL, CONFIG_DIGEST VARCHAR(64) NOT NULL, "
         "ROW_VERSION INTEGER NOT NULL CHECK(ROW_VERSION>0), MAX_BYTES INTEGER NOT NULL CHECK(MAX_BYTES>=128 AND MAX_BYTES<=262144), "
         "MAX_ATTEMPTS INTEGER NOT NULL CHECK(MAX_ATTEMPTS>=1 AND MAX_ATTEMPTS<=5), "
@@ -391,6 +394,9 @@ def _fetch(source, get):
     from .knowledge_curated import manifest_id
     if manifest_id(source['endpoint']):
         raise ContinuityConflict('CURATED_IMPORT_REQUIRED','Curated documents are supplied explicitly, never fetched from a URN')
+    if source['source_kind'] == 'STATUSPAGE':
+        from .enterprise_incidents import fetch
+        return fetch(source, get)
     headers = _credential(source)
     if source['source_kind'] == 'DOCUMENT':
         result = get(source['endpoint'], allowed_hosts={urlsplit(source['endpoint']).hostname}, headers=headers, max_bytes=int(source['max_bytes']))
@@ -512,18 +518,22 @@ def run(actor, job_id, *, get=None):
                     if len(path)>500:
                         raise ValueError('Chunked source path exceeds its exact locator limit')
                     content_hash = hashlib.sha256(chunk.encode()).hexdigest()
-                    prior = tx.query_one("SELECT REVISION_ID FROM CX_AGENT_SOURCE_REVISIONS WHERE SOURCE_ID=:source AND SOURCE_VERSION=:source_version AND SOURCE_PATH=:path AND CONTENT_DIGEST=:digest",
+                    prior = tx.query_one("SELECT REVISION_ID,LIFECYCLE_STATE FROM CX_AGENT_SOURCE_REVISIONS WHERE SOURCE_ID=:source AND SOURCE_VERSION=:source_version AND SOURCE_PATH=:path AND CONTENT_DIGEST=:digest",
                                          {'source': source['source_id'], 'source_version': document['version'], 'path': path, 'digest': content_hash})
+                    if prior and prior['lifecycle_state'] != 'AVAILABLE':
+                        raise PermissionError('An unavailable source revision cannot be reactivated by sync')
                     revision = prior['revision_id'] if prior else identifier('SR')
                     if not prior:
                         tx.execute("INSERT INTO CX_AGENT_SOURCE_REVISIONS(REVISION_ID,SOURCE_ID,SOURCE_VERSION,SOURCE_PATH,TITLE,CONTENT_DIGEST,CONTENT_CIPHER,LIFECYCLE_STATE) "
                                    "VALUES(:revision,:source,:source_version,:path,:title,:digest,:cipher,'AVAILABLE')",
                                    {'revision': revision, 'source': source['source_id'], 'source_version': document['version'], 'path': path,
-                                    'title': document['title'][:500], 'digest': content_hash, 'cipher': encrypt_section({'text': chunk})})
+                                    'title': document['title'][:500], 'digest': content_hash, 'cipher': encrypt_section({'text': chunk,
+                                        **({'statuspage': document['statuspage']} if 'statuspage' in document else {})})})
                     evidence = {'family': 'SOURCE', 'entity_id': source['source_id'], 'revision_id': revision, 'content_digest': content_hash}
                     candidate = continuity_candidates._create_candidate(tx, actor, NewCandidate.model_validate({
                         'security_domain_id': source['security_domain_id'], 'content': {'family': 'KNOWLEDGE', 'title': document['title'][:500], 'body': chunk},
                         'sources': [evidence], 'reason': 'Versioned configured source import; independent review required',
+                        **({'intake': document['intake']} if 'intake' in document else {}),
                         'idempotency_key': 'source-import:' + digest([source['source_id'], revision])[:64]}))
                     existing = tx.query_one("SELECT CANDIDATE_ID FROM CX_AGENT_SYNC_IMPORTS WHERE JOB_ID=:job AND REVISION_ID=:revision", {'job': job_id, 'revision': revision})
                     if not existing:
@@ -613,6 +623,11 @@ def _resolved_source(domain, reference, revision):
     if str(revision['source_version']).startswith('curated:'):
         from .knowledge_curated import verify_snapshot
         provenance={'provenance':verify_snapshot(revision,stored)}
+    elif str(revision['source_version']).startswith('statuspage:'):
+        from .enterprise_incidents import verify_snapshot, factual_report
+        provenance={'provenance': verify_snapshot(revision, stored)}
+        if revision['source_path'].endswith('/overview.md'):
+            provenance['factual_report'] = factual_report(revision, stored)
     return {'source': reference.model_dump(mode='json'), 'text': text, 'content_digest': reference.content_digest, 'authorized_scope': domain,**provenance}
 
 
