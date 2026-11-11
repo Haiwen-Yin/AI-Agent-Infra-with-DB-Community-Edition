@@ -1,4 +1,4 @@
-# 川序社区版 架构 v5.0.4
+# 川序社区版 架构 v5.0.5
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -79,5 +79,9 @@ MCP、A2A、遥测、工具和框架执行复用当前授权、确切契约、�
 统一监听入口是 FastAPI `web_app:app`。React Dashboard 位于 `/app/`；Portal 和保留路由使用按请求隔离的兼容桥接，不创建第二套身份、监听器或调度器。
 
 Bootstrap Deployment Agent 只执行包选定的 SQL，记录校验和、步骤、就绪状态及交接，不把模型文本转成 SQL 或权限。v5.0.0 终点为 102，v5.0.1 在完整链上新增 103–105；以本包生成的 baseline 为准，同时验证实际对象和 APPLIED 校验和，历史 SQL 文件名保持不变。
+
+v5.0.5 的当前终点为 PostgreSQL 121、Oracle/YashanDB 119。PostgreSQL 的 120
+在 119 前执行；121 通过已登记原生身份，仅恢复 ACTIVE Agent 对自己上下文的读取。
+完整链和原生权限边界见[迁移](migration_zh.md)。
 
 进程重启恢复依据数据库租约及已记录结果。数据库备份、复制、备库提升和 RPO/RTO 由部署环境负责。构建或健康检查成功不等于发布验收；七个分类目标、当前包哈希和适用工作流都须验证。详见[部署](deployment_zh.md)、[迁移](migration_zh.md)与[恢复](recovery_zh.md)。

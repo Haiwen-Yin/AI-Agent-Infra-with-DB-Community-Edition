@@ -317,6 +317,14 @@ def sse_events(response: Iterable[bytes], *, max_bytes: int = 8 * 1024 * 1024,
         yield decode_json("\n".join(pending), max_bytes=max_event_bytes)
 
 
+def _usage_extends(previous: Any, current: Any) -> bool:
+    """Allow final supplemental fields without changing reported measurements."""
+    if isinstance(previous, dict) and isinstance(current, dict):
+        return all(key in current and _usage_extends(value, current[key])
+                   for key, value in previous.items())
+    return type(previous) is type(current) and previous == current
+
+
 class ChatCompletionStream:
     """Bounded stream accumulator; never exposes hidden reasoning text."""
     def __init__(self, expected_model: str, *, output_kind: str = "text",
@@ -335,6 +343,7 @@ class ChatCompletionStream:
         self.reasoning_present = False
         self.refusal = False
         self.usage = None
+        self.usage_terminal = False
         self.calls: dict[int, dict[str, Any]] = {}
 
     def feed(self, event: Any) -> str:
@@ -350,18 +359,13 @@ class ChatCompletionStream:
             if self.model is not None and observed != self.model:
                 raise ModelResultError("MODEL_MISMATCH")
             self.model = observed
-        if event.get("usage") is not None:
-            if not isinstance(event["usage"], dict):
-                raise ModelResultError("INVALID_COMPLETION")
-            if self.usage is not None and self.usage != event["usage"]:
-                raise ModelResultError("CONFLICTING_USAGE")
-            self.usage = event["usage"]
         choices = event.get("choices")
         if not isinstance(choices, list) or len(choices) > 1:
             raise ModelResultError("INVALID_COMPLETION")
         if not choices:
             if event.get("usage") is None:
                 raise ModelResultError("INVALID_COMPLETION")
+            self._observe_usage(event["usage"], terminal=True)
             return ""
         choice = choices[0]
         if (not isinstance(choice, dict) or type(choice.get("index", 0)) is not int
@@ -374,6 +378,7 @@ class ChatCompletionStream:
             raise ModelResultError("INVALID_STREAM_CONTENT")
         if self.finish_reason is not None:
             raise ModelResultError("INVALID_STREAM_CONTENT")
+        self._observe_usage(event.get("usage"), terminal=choice.get("finish_reason") is not None)
         piece = delta.get("content")
         if piece is not None and not isinstance(piece, str):
             raise ModelResultError("INVALID_STREAM_CONTENT")
@@ -395,6 +400,24 @@ class ChatCompletionStream:
                 raise ModelResultError("INCOMPLETE_COMPLETION")
             self.finish_reason = finish
         return piece
+
+    def _observe_usage(self, usage: Any, *, terminal: bool) -> None:
+        if usage is None:
+            return
+        if not isinstance(usage, dict):
+            raise ModelResultError("INVALID_COMPLETION")
+        if self.usage is not None:
+            # Some compatible providers attach cumulative counters to every
+            # unfinished choice. Replace snapshots; never sum them. Once final
+            # accounting is observed, only supplemental fields may be added;
+            # an existing measurement cannot change or disappear.
+            before, after = normalize_usage(self.usage), normalize_usage(usage)
+            if (self.usage_terminal and not _usage_extends(self.usage, usage)) or any(
+                    count is not None and (after[key] is None or after[key] < count)
+                    for key, count in before.items()):
+                raise ModelResultError("CONFLICTING_USAGE")
+        self.usage = usage
+        self.usage_terminal = self.usage_terminal or terminal
 
     def _tool_delta(self, call: Any) -> None:
         if (not isinstance(call, dict) or type(call.get("index")) is not int

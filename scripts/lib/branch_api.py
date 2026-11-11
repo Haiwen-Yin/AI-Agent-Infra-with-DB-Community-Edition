@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.4 - Context Branching API
+"""AI Agent Infra v5.0.5 - Context Branching API
 
 Context branch lifecycle management: fork, merge, abandon, pause, resume,
 branch comparison, conflict detection, and lesson extraction from abandoned branches.
@@ -46,6 +46,11 @@ def fork_branch(
     purpose: Optional[str] = None,
     fork_session_id: Optional[str] = None,
 ) -> str:
+    # HTML forms encode an omitted optional context as an empty string.
+    # PostgreSQL's numeric reference rejects it; all adapters should receive
+    # the same absent value without changing a nonempty reference.
+    if isinstance(fork_context_id, str) and not fork_context_id.strip():
+        fork_context_id = None
     if DATABASE_DIALECT == "oracle" and oracledb is not None:
         try:
             with get_connection() as conn:
@@ -76,7 +81,7 @@ def fork_branch(
     import uuid as _uuid
     branch_id = f"BR_{_uuid.uuid4().hex[:24]}"
     if DATABASE_DIALECT == "postgresql":
-        return execute_insert_returning_id(
+        return str(execute_insert_returning_id(
             """INSERT INTO CONTEXT_BRANCHES (
                    BRANCH_ID, WORKSPACE_ID, BRANCH_NAME, BRANCH_TYPE,
                    STATUS, AGENT_ID, SOURCE_CONTEXT_ID, DESCRIPTION
@@ -89,7 +94,7 @@ def fork_branch(
                 "vbtype": branch_type, "vaid": agent_id,
                 "vfcid": fork_context_id, "vpurpose": purpose,
             },
-        )
+        ))
     try:
         execute(
             """INSERT INTO CONTEXT_BRANCHES (

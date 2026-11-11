@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.4 - Community Edition - Database Connection Pool Manager
+"""AI Agent Infra v5.0.5 - Community Edition - Database Connection Pool Manager
 
 psycopg2-based connection pool with parameterized query support.
 Supports Admin/Agent separation modes (standalone, admin, agent).

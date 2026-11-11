@@ -168,6 +168,29 @@ def test_batched_source_reads_equal_serial_and_recheck_revocation_on_next_use(st
         lambda tx:sync.resolve_source_batch(tx,'owner','domain',refs,omit_denied=True))==[None,None]
 
 
+def test_shared_agent_authority_is_rechecked_in_both_phases_without_cross_call_cache(store, monkeypatch):
+    from lib import agent_assets
+    db,_ = store
+    docs = [document(), dict(document('Another complete source unit.'),path='/docs/another.md')]
+    source = prepare_source(docs)
+    refs = [SourceRef.model_validate(item['source']) for item in
+            curated.import_documents('owner',source,request(docs))['imports']]
+    calls = []
+    original = agent_assets._agent
+    def tracked(*args, **kwargs):
+        calls.append(args[1:])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(agent_assets,'_agent',tracked)
+    def read(tx):
+        result = sync.resolve_source_batch(tx,'owner','domain',[*refs,refs[0]])
+        assert result[0] == result[2] and result[0] is not result[2]
+        return result
+    assert len(sync.connection.execute_transaction_callback(read)) == 3
+    assert len(calls) == 2, 'Same Agent/domain must be freshly authorized before and after bodies'
+    sync.connection.execute_transaction_callback(read)
+    assert len(calls) == 4, 'No authority cache survives a batch call'
+
+
 @pytest.mark.parametrize('fault',['digest','retired','pair'])
 def test_batch_rejects_unavailable_revision_metadata_before_loading_any_cipher(store,fault):
     db,_=store

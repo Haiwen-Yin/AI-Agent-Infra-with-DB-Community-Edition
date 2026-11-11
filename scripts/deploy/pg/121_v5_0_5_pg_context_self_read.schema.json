@@ -1,0 +1,11 @@
+{
+  "schema": "v505-pg-context-self-read/v1",
+  "database": "pg",
+  "table": "workspace_context",
+  "policies": ["cx505_context_self_read", "cx505_context_self_bound"],
+  "authenticated_identity": "SESSION_USER_AND_REGISTERED_AGENT_CONTEXT",
+  "reads": "ACTIVE_PRINCIPAL_OWN_CONTEXT_ONLY",
+  "data_mutation": false,
+  "additional_write_permissions": false,
+  "historical_sql": "UNCHANGED"
+}

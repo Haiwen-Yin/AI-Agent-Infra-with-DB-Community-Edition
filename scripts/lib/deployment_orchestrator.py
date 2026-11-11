@@ -710,6 +710,16 @@ def _migration_apply(target_version: str, database: str, edition: str, config_pa
         if not checked.get("passed"):
             raise DeploymentError("declared stable upgrade preflight failed: " +
                                   str(checked.get("error_type") or "MigrationContractIncomplete"))
+        if not names and (from_version, target_version) == ("5.0.4", "5.0.5"):
+            # This terminal was verified by the exact predecessor contract. It
+            # was applied under the stable release, not executed by this run.
+            # Keep that distinction in deployment evidence; never manufacture
+            # a new SQL-ledger row for an application-only upgrade.
+            terminal = release_baseline(database, root)["required_terminal_migration"]
+            return [{"script": terminal, "passed": True, "ledger_status": "already_applied",
+                     "checksum": hashlib.sha256((deploy / terminal).read_bytes()).hexdigest(), "error": None,
+                     "applied_version": from_version, "statements_executed": 0,
+                     "verification": "EXACT_PREDECESSOR_CONTRACT", "application_only": True}]
     scripts = runner._order_successor_recovery(database, config, [deploy / name for name in names], version=target_version)
     for script in scripts:
         name = script.name
@@ -889,18 +899,23 @@ def postflight(database: str, edition: str, config: Dict[str, Any], terminal_mig
                 "Resolve failed migration steps before handoff.", {"count": failed},
             ))
 
-            if terminal_migration in {"119_v5_0_4_incident_sources.sql", "120_v5_0_4_pg_source_kind_repair.sql"}:
+            if terminal_migration in {"119_v5_0_4_incident_sources.sql", "120_v5_0_4_pg_source_kind_repair.sql", "121_v5_0_5_pg_context_self_read.sql"}:
                 import migration_runner
+                verification_version = release_baseline(database, root).get('version')
+                if verification_version not in {'5.0.4', '5.0.5'}:
+                    raise DeploymentError('Native schema verification requires its exact application release baseline')
                 native_tail = (migration_runner.v502_native_migration_scripts(database)
                     + migration_runner.v503_runtime_migration_scripts(database)
                     + migration_runner.v504_runtime_migration_scripts(database))
+                if verification_version == '5.0.5' and database == 'pg':
+                    native_tail += ('121_v5_0_5_pg_context_self_read.sql',)
                 checks.append(_check("V504_BACKEND_TERMINAL",
                     "PASS" if terminal_migration == native_tail[-1] else "BLOCKED",
                     "Packaged terminal matches the selected backend",
                     "Use the exact backend deployment baseline.", {"expected":native_tail[-1],"actual":terminal_migration}))
                 deploy_dir = _package_deploy_dir(database, root)
                 for name in native_tail:
-                    complete = migration_runner._step_objects_complete(cursor, database, deploy_dir/name, version='5.0.4')
+                    complete = migration_runner._step_objects_complete(cursor, database, deploy_dir/name, version=verification_version)
                     checks.append(_check("V504_NATIVE_"+name.split('_',1)[0], "PASS" if complete else "BLOCKED",
                         "Native release schema and security boundary verified",
                         "Apply the exact backend migration chain.", {"step":name}))
@@ -1308,7 +1323,7 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
     baseline = release_baseline(database, root)
     target_version = release_version(database, root, target_version)
     if from_version is not None and (mode not in {"UPGRADE", "RESUME"} or
-                                    (from_version, target_version) not in {("5.0.2", "5.0.3"),("5.0.3", "5.0.4")}):
+                                    (from_version, target_version) not in {("5.0.2", "5.0.3"),("5.0.3", "5.0.4"),("5.0.4", "5.0.5")}):
         raise DeploymentError("--from-version requires a supported stable upgrade transition")
     terminal_migration = str(baseline["required_terminal_migration"])
     raw = _resolve_sensitive_config(_read_config(config_path))
@@ -1337,7 +1352,7 @@ def run(mode: str, *, database: str, edition: str, config_path: Path,
             raise DeploymentError("deployment journal does not match the declared predecessor")
         from_version = prior.get("from_version")
         if from_version is not None and (prior.get("mode") != "UPGRADE" or
-                                        (from_version, target_version) not in {("5.0.2", "5.0.3"),("5.0.3", "5.0.4")}):
+                                        (from_version, target_version) not in {("5.0.2", "5.0.3"),("5.0.3", "5.0.4"),("5.0.4", "5.0.5")}):
             raise DeploymentError("deployment journal has an unsupported predecessor")
         if (str(prior.get("database") or "") != database or str(prior.get("edition") or "") != edition
                 or str(prior.get("target_version") or target_version) != target_version):

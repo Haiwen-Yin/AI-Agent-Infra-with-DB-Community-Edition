@@ -132,7 +132,8 @@ def _actor_can_use_domain(actor: str, domain_id: str) -> bool:
     return bool(row)
 
 
-def list_domains(actor: str, *, limit: int = 200, include_inactive: bool = False) -> List[Dict[str, Any]]:
+def list_domains(actor: str, *, limit: int = 200, include_inactive: bool = False,
+                 query: str = "", classification: str = "", domain_status: str = "") -> List[Dict[str, Any]]:
     """Return only domains that the caller may discover."""
     identity_api._require(actor, DOMAIN_READ_ACTION)
     limit = max(1, min(int(limit), 500))
@@ -140,6 +141,22 @@ def list_domains(actor: str, *, limit: int = 200, include_inactive: bool = False
     status = " AND d.SECURITY_DOMAIN_ID<>'CX_NATIVE_RUNTIME_ANCHOR'"
     if not (include_inactive and admin):
         status += " AND d.STATUS='ACTIVE'"
+    params: Dict[str, Any] = {"limit": limit}
+    query = _text(query, "search query", 256)
+    if query:
+        # Treat wildcard characters literally, using a portable explicit escape.
+        term = query.lower().replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        params["query"] = "%" + term + "%"
+        status += " AND (LOWER(d.DOMAIN_NAME) LIKE :query ESCAPE '!' OR LOWER(d.SECURITY_DOMAIN_ID) LIKE :query ESCAPE '!')"
+    if classification:
+        params["classification"] = _classification(classification)
+        status += " AND d.CLASSIFICATION=:classification"
+    if domain_status:
+        domain_status = str(domain_status).strip().upper()
+        if domain_status not in VALID_DOMAIN_STATES:
+            raise SecurityDomainError("Security Domain status is invalid")
+        params["domain_status"] = domain_status
+        status += " AND d.STATUS=:domain_status"
     if admin:
         rows = connection.execute_query(
             "SELECT d.SECURITY_DOMAIN_ID,d.DOMAIN_NAME,d.CLASSIFICATION,d.PURPOSE,d.STATUS,d.CREATED_AT,"
@@ -148,7 +165,7 @@ def list_domains(actor: str, *, limit: int = 200, include_inactive: bool = False
             "AND m.STATUS='ACTIVE' AND (m.VALID_UNTIL IS NULL OR m.VALID_UNTIL>CURRENT_TIMESTAMP)) AS MEMBER_COUNT "
             "FROM CX_SECURITY_DOMAINS d LEFT JOIN CX_DOMAIN_GOVERNANCE g ON g.SECURITY_DOMAIN_ID=d.SECURITY_DOMAIN_ID "
             "WHERE 1=1" + status + " ORDER BY d.DOMAIN_NAME,d.SECURITY_DOMAIN_ID " + _limit_clause(),
-            {"limit": limit},
+            params,
         )
     else:
         rows = connection.execute_query(
@@ -159,7 +176,7 @@ def list_domains(actor: str, *, limit: int = 200, include_inactive: bool = False
             "WHERE m.PRINCIPAL_ID=:actor AND m.STATUS='ACTIVE' "
             "AND (m.VALID_UNTIL IS NULL OR m.VALID_UNTIL>CURRENT_TIMESTAMP)" + status +
             " ORDER BY d.DOMAIN_NAME,d.SECURITY_DOMAIN_ID " + _limit_clause(),
-            {"actor": actor, "limit": limit},
+            {**params, "actor": actor},
         )
     return _rows(rows)
 

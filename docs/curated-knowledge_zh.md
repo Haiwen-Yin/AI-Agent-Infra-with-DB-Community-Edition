@@ -93,7 +93,7 @@ instance 与当前 `knowledge.write` 权限，导入仍会核对来源及安全�
 决策状态。Portal 发送入口使用 `knowledge_scope` 传递同一对象。例如：
 
 ```json
-{"product":"unified-community","version":"5.0.3","as_of":"2026-11-02T00:00:00+08:00","decision_statuses":["CURRENT"]}
+{"product":"unified-community","version":"5.0.5","as_of":"2026-11-11T00:00:00+08:00","decision_statuses":["CURRENT"]}
 ```
 
 Task 上下文组装通过可选的 `applicability` 字段接收同一对象。不适用的可选来源

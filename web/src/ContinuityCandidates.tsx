@@ -1,3 +1,4 @@
+import { newRequestId } from "./requestId";
 import React, { FormEvent, useEffect, useRef, useState } from "react";
 
 type Row = Record<string, any>;
@@ -46,7 +47,7 @@ export default function ContinuityCandidates({ request, text, domain, principalI
   };
   const post = async (path: string, body: Row) => {
     const signature = path + JSON.stringify(body);
-    const id = pending.current.get(signature) || crypto.randomUUID();
+    const id = pending.current.get(signature) || newRequestId();
     pending.current.set(signature, id);
     const result = await request(path, { method: "POST", body: JSON.stringify({ ...body, idempotency_key: id }) });
     pending.current.delete(signature); return result;
@@ -105,7 +106,7 @@ export default function ContinuityCandidates({ request, text, domain, principalI
   const qualityPreview = (value: Row) => <section aria-label={text("入库质量与分块预览", "Intake quality and chunk preview")}>
     <h4>{text("入库质量与分块预览", "Intake quality and chunk preview")}</h4>
     <p>{value.publication_eligible ? text("必填信息已声明，仍需独立审核与显式发布。", "Required metadata is declared; independent review and explicit promotion are still required.") : text("当前只能保存待补充候选，请补齐以下信息后再审核。", "Save as a pending candidate and complete the following information before approval.")}</p>
-    <ul>{value.findings.map((finding: Row) => <li key={finding.code}>{finding.code.startsWith("MISSING_") ? text("请声明：", "Declare: ") + (intakeFields.find(([key]) => key === finding.field)?.slice(1).reduce((zh, en) => text(zh, en)) || ({ classification: text("密级", "Classification"), audience: text("预期读者", "Intended audience") }[finding.field] || finding.field)) : finding.code === "NONCURRENT_DECISION" ? text("保留提案或历史状态，不能作为当前政策。", "Retain the proposed or historical status; do not present it as current policy.") : finding.code === "POSSIBLE_DUPLICATE" ? text("发现同标题、同正文的可读资料；请核对来源、版本与适用范围。", "Readable material has the same title and body; compare source, revision and applicability.") : finding.code === "POSSIBLE_CONFLICT" ? text("发现同标题、不同正文的可读资料；可能存在冲突，请比较原始依据，不自动替换。", "Readable material has the same title and different content; compare original evidence for a possible conflict without automatic replacement.") : text("请复核较长语义块；拆分时保留表头、单位、条件和例外。", "Review the long semantic block; retain table headers, units, conditions and exceptions when splitting.")}</li>)}</ul>
+    <ul>{value.findings.map((finding: Row) => <li key={finding.code}>{finding.code.startsWith("MISSING_") ? text("请声明：", "Declare: ") + (() => { const field = intakeFields.find(([key]) => key === finding.field); const labels: Record<string, string> = { classification: text("密级", "Classification"), audience: text("预期读者", "Intended audience") }; return field ? text(field[1], field[2]) : labels[String(finding.field)] || String(finding.field); })() : finding.code === "NONCURRENT_DECISION" ? text("保留提案或历史状态，不能作为当前政策。", "Retain the proposed or historical status; do not present it as current policy.") : finding.code === "POSSIBLE_DUPLICATE" ? text("发现同标题、同正文的可读资料；请核对来源、版本与适用范围。", "Readable material has the same title and body; compare source, revision and applicability.") : finding.code === "POSSIBLE_CONFLICT" ? text("发现同标题、不同正文的可读资料；可能存在冲突，请比较原始依据，不自动替换。", "Readable material has the same title and different content; compare original evidence for a possible conflict without automatic replacement.") : text("请复核较长语义块；拆分时保留表头、单位、条件和例外。", "Review the long semantic block; retain table headers, units, conditions and exceptions when splitting.")}</li>)}</ul>
     <p>{text("预览保留原文；重复和潜在冲突检查仅比较当前可读、同标题的前 20 条正式资料，不代表全库检查。", "Preview retains the original text. Duplicate and possible-conflict checks compare at most 20 currently readable formal entries with the same title; this is not an exhaustive corpus check.")}</p>
     {value.comparisons?.length > 0 && <ul>{value.comparisons.map((item: Row) => <li key={item.entity_id}>{text("可读资料标识", "Readable source ID")}: {item.entity_id}</li>)}</ul>}
     {value.chunks.map((chunk: Row) => <details key={chunk.number}><summary>{text("原文块", "Source block")} {chunk.number} · {chunk.start}–{chunk.end}</summary><pre className="continuity-body">{chunk.text}</pre></details>)}

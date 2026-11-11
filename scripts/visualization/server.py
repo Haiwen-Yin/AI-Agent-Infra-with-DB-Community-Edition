@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.4 - Community Edition - Web Visualization Server
+"""AI Agent Infra v5.0.5 - Community Edition - Web Visualization Server
 
 Lightweight HTTP server providing session-based auth, page routing,
 and JSON API endpoints for knowledge, memory, agents, tasks, workspaces,
@@ -58,7 +58,7 @@ if edition_features.has_feature('governance'):
 else:
     governance_api = None
 
-VERSION = "5.0.4"
+VERSION = "5.0.5"
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
@@ -715,11 +715,16 @@ def _get_tags_for_entities(entity_ids):
     return tags_map
 
 
-def _knowledge_to_vis(principal_id=None):
-    items = knowledge_api.search_knowledge(limit=500, principal_id=principal_id)
+def _knowledge_to_vis(principal_id=None, limit=500):
+    limit = _parse_bounded_limit(limit)
+    items = knowledge_api.search_knowledge(limit=limit, principal_id=principal_id)
+    edge_params = {f'knowledge{i}': item['entity_id'] for i, item in enumerate(items)}
+    placeholders = ','.join(':' + name for name in edge_params)
     edges = connection.execute_query(
         "SELECT source_id, source_type, target_id, edge_type, strength, confidence FROM entity_edges "
-        "WHERE source_type = 'KNOWLEDGE' OR target_id IN (%s)" % ','.join(["'%s'" % i['entity_id'] for i in items]) if items else "FALSE",
+        "WHERE source_type = 'KNOWLEDGE' "
+        f"AND source_id IN ({placeholders}) AND target_id IN ({placeholders})",
+        edge_params,
     ) if items else []
     eids = [i['entity_id'] for i in items]
     tags_map = _get_tags_for_entities(eids)
@@ -741,18 +746,23 @@ def _knowledge_to_vis(principal_id=None):
             'tags': tags_map.get(str(item['entity_id']), []),
         })
     vis_edges = []
+    visible_ids = {str(item['entity_id']) for item in items}
     for e in edges:
+        if str(e['source_id']) not in visible_ids or str(e['target_id']) not in visible_ids:
+            continue
         vis_edges.append({
             'from': e['source_id'],
             'to': e['target_id'],
             'label': e.get('edge_type', ''),
             'value': float(e.get('strength', 1.0)),
         })
-    return {'nodes': nodes, 'edges': vis_edges}
+    return {'nodes': nodes, 'edges': vis_edges,
+            'window': {'limit': limit, 'returned': len(items), 'complete': False}}
 
 
-def _memory_to_vis(principal_id=None):
-    items = memory_api.search_memories(limit=500, principal_id=principal_id)
+def _memory_to_vis(principal_id=None, limit=500):
+    limit = _parse_bounded_limit(limit)
+    items = memory_api.search_memories(limit=limit, principal_id=principal_id)
     version_ids = [str(i.get('version_id')) for i in items if i.get('version_id')]
     # Versioned families need not have a legacy ENTITIES row. Their family ID
     # is a display compatibility ID, never an entity_tags foreign key.
@@ -761,17 +771,18 @@ def _memory_to_vis(principal_id=None):
     eids = [legacy_id(item) for item in items if legacy_id(item) is not None]
     tags_map = _get_tags_for_entities(eids)
     try:
-        # Do not let the library's newest-500 window hide valid relationships
-        # whose current endpoint falls just outside that display window.
+        # Load relationships adjacent to this window, including their exact
+        # authorized endpoints outside it; unrelated relations are another view.
+        relation_params = {f'memory_v{i}': value for i, value in enumerate(version_ids)}
+        placeholders = ','.join(':'+name for name in relation_params)
         mem_edges = connection.execute_query(
             "SELECT r.SOURCE_VERSION_ID AS source_id, r.TARGET_VERSION_ID AS target_id, r.RELATION_TYPE AS edge_type, "
             "COALESCE(r.CONFIDENCE, 1) AS strength FROM CX_MEMORY_RELATIONS r "
             "WHERE r.RELATION_STATE = 'ACTIVE' AND ("
-            "r.SOURCE_VERSION_ID IN (SELECT CURRENT_VERSION_ID FROM CX_MEMORY_FAMILIES WHERE CURRENT_VERSION_ID IS NOT NULL) "
-            "OR r.TARGET_VERSION_ID IN (SELECT CURRENT_VERSION_ID FROM CX_MEMORY_FAMILIES WHERE CURRENT_VERSION_ID IS NOT NULL)) "
-            "FETCH FIRST 1000 ROWS ONLY",
-            {},
-        )
+            f"r.SOURCE_VERSION_ID IN ({placeholders}) OR r.TARGET_VERSION_ID IN ({placeholders})) "
+            "ORDER BY r.SOURCE_VERSION_ID,r.TARGET_VERSION_ID FETCH FIRST 1000 ROWS ONLY",
+            relation_params,
+        ) if version_ids else []
     except Exception:
         mem_edges = connection.execute_query(
             "SELECT source_id, target_id, edge_type, strength FROM entity_edges "
@@ -869,7 +880,10 @@ def _memory_to_vis(principal_id=None):
             'label': e.get('edge_type', ''),
             'value': float(e.get('strength', 1.0)),
         })
-    return {'nodes': nodes, 'edges': vis_edges}
+    return {'nodes': nodes, 'edges': vis_edges,
+            'window': {'limit': limit, 'returned': len(items), 'complete': False,
+                       'related_nodes': len(related_versions), 'relation_limit': 1000,
+                       'related_endpoint_limit': 250, 'relation_scope': 'ADJACENT_TO_WINDOW'}}
 
 
 class VisHandler(BaseHTTPRequestHandler):
@@ -2321,13 +2335,15 @@ class VisHandler(BaseHTTPRequestHandler):
                 self._send_json(item)
             elif path == '/api/knowledge':
                 principal = self._authenticated_principal()
-                self._send_json(_knowledge_to_vis(principal.get('actor_id') if principal else None))
+                self._send_json(_knowledge_to_vis(principal.get('actor_id') if principal else None,
+                                                 limit=_parse_bounded_limit(qs.get('limit', [None])[0])))
             elif path == '/api/memory':
                 principal = self._authenticated_principal()
                 if not principal:
                     self._send_error(401, 'Authenticated principal required')
                     return
-                self._send_json(_memory_to_vis(str(principal.get('actor_id') or '')))
+                self._send_json(_memory_to_vis(str(principal.get('actor_id') or ''),
+                                              limit=_parse_bounded_limit(qs.get('limit', [None])[0])))
             elif path == '/api/memory/jobs':
                 self._send_json({'jobs': memory_lifecycle.list_jobs(int(qs.get('limit', ['100'])[0]))})
             elif path == '/api/memory/projections/metrics':
@@ -4855,11 +4871,15 @@ class VisHandler(BaseHTTPRequestHandler):
 
     def _handle_loop_run_start(self):
         data = json.loads(self._read_body())
-        run_id = loop_api.start_run_for_actor(
-            data['loop_id'], self._authenticated_principal()['actor_id'],
-            requested_agent_id=data.get('agent_id'),
-            processing_domain_id=data.get('processing_domain_id'),
-            trigger_type=data.get('trigger_type', 'MANUAL'), trigger_source=data.get('trigger_source'))
+        try:
+            run_id = loop_api.start_run_for_actor(
+                data['loop_id'], self._authenticated_principal()['actor_id'],
+                requested_agent_id=data.get('agent_id'),
+                processing_domain_id=data.get('processing_domain_id'),
+                trigger_type=data.get('trigger_type', 'MANUAL'), trigger_source=data.get('trigger_source'))
+        except PermissionError:
+            self._send_error(403, 'Loop execution access denied')
+            return
         self._send_json({'success': True, 'run_id': run_id})
 
     def _handle_loop_run_control(self, action):
@@ -5042,8 +5062,8 @@ class VisHandler(BaseHTTPRequestHandler):
             with open(filepath, 'r', encoding='utf-8') as f:
                 html = f.read()
             timeout = _session_timeout()
-            html = html.replace('5.0.4', VERSION)
-            html = html.replace('2026-11-05', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
+            html = html.replace('5.0.5', VERSION)
+            html = html.replace('2026-11-11', os.environ.get('AI_AGENT_RELEASE_DATE', ''))
             html = html.replace('{{DB_DISPLAY}}', _product_database_display())
             html = html.replace('{{EDITION_TIER}}', _product_tier())
             html = html.replace(

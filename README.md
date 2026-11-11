@@ -1,4 +1,4 @@
-# Chuanxu Community Edition v5.0.3
+# Chuanxu Community Edition v5.0.5
 
 [简体中文](README_zh.md)
 
@@ -13,7 +13,7 @@ source synchronization and final-answer evaluation extend the existing
 Task/Step, Work/Handoff and candidate/review entities. Their permissions, exact
 revisions and explicit publication boundaries remain enforced.
 
-With the v5.0.2 runtime contract, registered model resources share durable
+Registered model resources share durable
 capacity admission and request observations. Structured retrospectives retain
 independent candidate review; approved read-only tool turns retain the existing
 Action Cards and Workers. Processing diagnosis shows consumed budgets and
@@ -26,6 +26,18 @@ This package is **AI-Agent-Infra-with-DB-Community-Edition**, **Community**, lic
 **Apache-2.0**. Supported database keys: **oracle, pg, yashandb**. The unified Community
 package selects one database per running process. OpenTenBase AgentX supports
 PostgreSQL only; the three Enterprise packages remain database-specific.
+
+## Current release
+
+v5.0.5 improves management-channel stream handling, separates retrieval
+scores from evidence sufficiency, and checks bounded citation/expression rules
+before publishing shared answers. These checks do not provide a calibrated
+correctness probability or verify every claim. Knowledge/Memory pages use
+independent bounded loading; Portal policy and Agent asset navigation are
+aligned, including ordinary-HTTP request identifiers. Configured source intake
+and incident-report drafts still require independent review and promotion.
+See [release notes](RELEASE_NOTES_v5.0.5.md) and
+[answer quality](docs/answer-quality.md) for the verified boundaries.
 
 ## Install and initialize
 
@@ -40,7 +52,7 @@ including `vendor/`. From the package root:
    set `CX_DATABASE_DIALECT` to a supported database key. Only its native driver
    requirements and client libraries are installed.
 3. Have the DBA prepare the dedicated empty database/PDB, bounded Owner and
-   selected backend's prerequisites. For v5.0.1 Oracle and YashanDB, SYS must
+   selected backend's prerequisites. On Oracle and YashanDB, SYS must
    separately prepare `SYS.CX_AGENT_ACCOUNT_STATUS` in the exact application
    PDB using the packaged `0_<database>_v5_0_1_native_identity_prerequisites.sql`.
    This also applies to existing-database upgrades; PostgreSQL does not use
@@ -48,7 +60,7 @@ including `vendor/`. From the package root:
    and [minimum privileges](docs/minimum-privileges.md) before initialization.
 4. Store an initial administrator password in an owner-readable file (mode
    `0600`). Run `bash scripts/install_platform.sh initialize --database DB
-   --edition EDITION --version 5.0.3 --config /absolute/path/config.json
+   --edition EDITION --version 5.0.5 --config /absolute/path/config.json
    --admin-password-file /absolute/path/password-file`, replacing `DB` with a
    supported database key and `EDITION` with `community` or `enterprise`.
 5. Run `./start_web_server.sh start`. Dashboard: `/app/`; Portal: `/portal`.
@@ -95,7 +107,7 @@ driver; switching configuration is not a dependency or data migration.
 - [Security](docs/security.md) and [release verification](docs/release-signing.md)
 - [Native Agent offboarding and account-status prerequisites](docs/native-identity.md)
 - [Source IP access and local recovery](docs/source-ip-access.md)
-- [Release notes](RELEASE_NOTES_v5.0.3.md)
+- [Release notes](RELEASE_NOTES_v5.0.5.md)
 
 Model features are verified per provider and model. Controlled integrations keep
 their authorization, isolation, bounded execution and database audit checks.

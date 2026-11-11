@@ -1,3 +1,4 @@
+import { newRequestId } from "./requestId";
 import React, { FormEvent, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import ContinuityCandidates from "./ContinuityCandidates";
@@ -7,15 +8,17 @@ import ContinuityAgentAssets from "./ContinuityAgentAssets";
 import ContinuityNotes from "./ContinuityNotes";
 import ContinuityQuality from "./ContinuityQuality";
 import PlatformLearning from "./PlatformLearning";
+import { useUrlParam } from "./useUrlState";
 
 type Row = Record<string, any>;
 type SourceRef = { family: string; entity_id: string; revision_id: string; content_digest: string };
-type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; principalId: string; canWrite: boolean; canManage: boolean; canOperateAgents: boolean; modelRuntimeEnabled?: boolean };
-const key = () => crypto.randomUUID();
+type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; principalId: string; canWrite: boolean; canManage: boolean; canOperateAgents: boolean; modelRuntimeEnabled?: boolean; assetsOnly?: boolean };
+const key = () => newRequestId();
 const lines = (value: FormDataEntryValue | null) => String(value || "").split("\n").map(x => x.trim()).filter(Boolean);
 
-export default function ContinuityWorkbench({ request, text, principalId, canWrite, canManage, canOperateAgents, modelRuntimeEnabled = false }: Props) {
+export default function ContinuityWorkbench({ request, text, principalId, canWrite, canManage, canOperateAgents, modelRuntimeEnabled = false, assetsOnly = false }: Props) {
   const [domains, setDomains] = useState<Row[]>([]);
+  const [requestedDomain, setRequestedDomain] = useUrlParam("domain");
   const [domain, setDomain] = useState("");
   const [members, setMembers] = useState<Row[]>([]);
   const [works, setWorks] = useState<Row[]>([]);
@@ -62,7 +65,7 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
   }, []);
   const load = async (selectedDomain: string) => {
     const next = ++generation.current;
-    if (!selectedDomain) return;
+    if (!selectedDomain || assetsOnly) return;
     const [w, h, m] = await Promise.all([
       request(`/api/work-contracts?security_domain_id=${encodeURIComponent(selectedDomain)}`),
       request(`/api/handoffs?security_domain_id=${encodeURIComponent(selectedDomain)}`),
@@ -74,10 +77,22 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
     setMemberCursor(m.next_cursor || "");
   };
   const selectDomain = (value: string) => {
+    setRequestedDomain(value);
     setAssetSources([]);
     currentDomain.current = value; setDomain(value); setWork(null); setHandoff(null); setHistorical(null); setHandoffHistory([]); setRecordedOutcome(null); setWorks([]); setHandoffs([]); setMembers([]); setWorkCursor(""); setHandoffCursor("");
     void run(() => load(value));
   };
+  useEffect(() => {
+    if (requestedDomain === domain) return;
+    // A bookmark is a selection hint, never authority to enumerate a domain.
+    const authorized = domains.some(item => item.security_domain_id === requestedDomain);
+    const value = authorized ? requestedDomain : "";
+    currentDomain.current = value; setDomain(value); setAssetSources([]);
+    setWork(null); setHandoff(null); setWorks([]); setHandoffs([]); setMembers([]);
+    setHistorical(null); setHandoffHistory([]); setRecordedOutcome(null);
+    setWorkCursor(""); setHandoffCursor(""); setMemberCursor("");
+    void run(() => load(value));
+  }, [requestedDomain, domains]);
   const more = async (kind: "work" | "handoff") => {
     const cursor = kind === "work" ? workCursor : handoffCursor;
     if (!cursor) return;
@@ -181,12 +196,16 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
   };
   const field = (name: string, zh: string, en: string, value = "", multiline = false) => <label className="workbench-field"><span>{text(zh, en)}</span>{multiline ? <textarea name={name} required defaultValue={value} maxLength={4000} rows={3} /> : <input name={name} required defaultValue={value} maxLength={4000} />}</label>;
   const recipientCanRespond = !!handoff && handoff.to_principal_id === principalId && !handoff.expired && handoff.executable !== false;
-  return <section className="page-stack continuity-workbench" aria-label={text("工作交接", "Work continuity")}>
-    <PlatformLearning request={request} text={text} />
-    <div className="page-toolbar"><label>{text("安全域", "Security Domain")}<select value={domain} disabled={busy} onChange={e => selectDomain(e.target.value)}><option value="">{text("请选择安全域", "Select a Security Domain")}</option>{domains.map(item => <option key={item.security_domain_id} value={item.security_domain_id}>{item.display_name || item.domain_name || item.security_domain_id}</option>)}</select></label><button type="button" className="small-button" disabled={busy || !domain} onClick={() => void run(() => load(domain))}><RefreshCw size={14} />{text("刷新", "Refresh")}</button></div>
+  const domainControls = <><label className="workbench-field"><span>{text("安全域", "Security Domain")}</span><select value={domain} disabled={busy} onChange={e => selectDomain(e.target.value)}><option value="">{text("请选择安全域", "Select a Security Domain")}</option>{domains.map(item => <option key={item.security_domain_id} value={item.security_domain_id}>{item.display_name || item.domain_name || item.security_domain_id}</option>)}</select></label><button type="button" className="small-button" disabled={busy || !domain} onClick={() => void run(() => load(domain))}><RefreshCw size={14} />{text("刷新", "Refresh")}</button>{domainCursor && <button type="button" className="small-button" disabled={busy} onClick={() => void run(() => moreChoices("domain"))}>{text("加载更多安全域", "Load more domains")}</button>}</>;
+  return <section className="page-stack continuity-workbench" aria-label={assetsOnly ? text("资产与来源工作台", "Assets and sources workbench") : text("工作交接", "Work continuity")}>
+    {!assetsOnly && <PlatformLearning request={request} text={text} />}
+    {!assetsOnly && <div className="page-toolbar">{domainControls}</div>}
+    {assetsOnly && !domain && <section className="info-panel"><div className="panel-title"><h2>{text("管理范围", "Management scope")}</h2></div><div className="continuity-scope-controls">{domainControls}</div></section>}
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-    {domainCursor && <button type="button" className="small-button" disabled={busy} onClick={() => void run(() => moreChoices("domain"))}>{text("加载更多安全域", "Load more domains")}</button>}
+    {!domain && <p role="status">{requestedDomain ? text("请选择有权访问的安全域；书签中的安全域可能不在当前列表，请加载更多或重新选择。", "Select an authorized Security Domain. The bookmarked domain may require loading more options or choosing another domain.") : text("请选择安全域以加载当前授权范围内的数据。", "Select a Security Domain to load data in your authorized scope.")}</p>}
     {domain && <>
+      {assetsOnly && <ContinuityAgentAssets scopeControls={domainControls} key={`${domain}-assets`} request={request} text={text} domain={domain} canWrite={canWrite} canManage={canManage} canOperateAgents={canOperateAgents} onSourceRefsChange={setAssetSources} />}
+      {!assetsOnly && <>
       <section className="panel"><h3>{text("我负责或创建的工作", "Work I own or created")}</h3>
         {workCursor && <button className="small-button" type="button" disabled={busy} onClick={() => void run(() => more("work"))}>{text("加载更多工作", "Load more work")}</button>}
         <div className="page-toolbar"><select aria-label={text("选择工作契约", "Select work contract")} disabled={busy} value={work?.work_contract_id || ""} onChange={e => e.target.value && void run(() => selectWork(e.target.value))}><option value="">{text("选择工作", "Select work")}</option>{works.map(item => <option key={item.work_contract_id} value={item.work_contract_id}>{String(item.work_contract_id).slice(-12)} · {status(item.status)}</option>)}</select><button type="button" className="small-button" disabled={busy} onClick={() => { setWork(null); setHandoff(null); }}>{text("新建工作", "New work")}</button></div>
@@ -246,6 +265,7 @@ export default function ContinuityWorkbench({ request, text, principalId, canWri
       <ContinuityCandidates key={`${domain}-candidates`} request={request} text={text} domain={domain} principalId={principalId} canWrite={canWrite} />
       <ContinuityContext key={`context-${domain}`} request={request} text={text} domain={domain} domains={domains} workId={work?.work_contract_id} handoffId={!handoff?.expired ? handoff?.handoff_id : undefined} canWrite={canWrite} modelRuntimeEnabled={modelRuntimeEnabled} />
       <ContinuityDiagnostics key={`${domain}-diagnostics`} request={request} text={text} domain={domain} modelRuntimeEnabled={modelRuntimeEnabled} canWrite={canWrite} />
+      </>}
     </>}
   </section>;
 }

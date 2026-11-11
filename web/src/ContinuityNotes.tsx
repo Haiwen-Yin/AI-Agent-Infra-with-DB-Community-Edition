@@ -1,3 +1,4 @@
+import { newRequestId } from "./requestId";
 import React, { FormEvent, useEffect, useRef, useState } from "react";
 import { statusLabel } from "./statusLabels";
 
@@ -10,7 +11,7 @@ type Props = {
   canWrite: boolean;
   sources: SourceRef[];
 };
-const newId = () => crypto.randomUUID();
+const newId = () => newRequestId();
 const sourceKey = (source: SourceRef) => JSON.stringify(source);
 
 export default function ContinuityNotes({ request, text, work, canWrite, sources }: Props) {

@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.4 - Community Edition - Legacy execution-group API.
+"""AI Agent Infra v5.0.5 - Community Edition - Legacy execution-group API.
 
 Collaboration group lifecycle, membership management,
 shared/personal workspaces, and group memory sharing.

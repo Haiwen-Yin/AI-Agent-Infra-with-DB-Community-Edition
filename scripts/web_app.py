@@ -1,4 +1,4 @@
-"""FastAPI/Uvicorn entrypoint for the v5.0.4 Chuanxu Web application.
+"""FastAPI/Uvicorn entrypoint for the v5.0.5 Chuanxu Web application.
 
 The database-backed services are the authoritative implementation.  This
 entrypoint intentionally contains only HTTP concerns and exposes the same
@@ -47,7 +47,7 @@ except ModuleNotFoundError as exc:
     from shared.lib import identity_api, external_identity_api, agent_gateway_api, compliance_api, connection, governed_contracts, security_lifecycle, organization_api, security_domain_api, platform_capabilities, native_agent_api, native_runtime, model_usage_api, model_governance_api, model_capability_api, deployment_adapters, runtime_isolation, db4a2a, embedding_governance, admin_management, cursor_pagination, task_plan_api, knowledge_api, memory_lifecycle, skill_api, tool_registry, spec_api, graph_production_profile, platform_agent_pool, host_provisioning, platform_governance_graph as governance_graph_module
 
 
-VERSION = "5.0.4"
+VERSION = "5.0.5"
 logger = logging.getLogger(__name__)
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 if not WEB_ROOT.is_dir():
@@ -1902,6 +1902,10 @@ class NativeAgentActivationBody(BaseModel):
     reason: str = Field(min_length=3, max_length=2000)
 
 
+class NativeAgentModelBody(NativeAgentActivationBody):
+    expected_llm_profile_id: str = Field(max_length=128)
+
+
 class NativeAgentExecuteBody(BaseModel):
     messages: list[Dict[str, Any]] = Field(min_length=1, max_length=100)
     reason: str = Field(min_length=3, max_length=2000)
@@ -3371,19 +3375,20 @@ def knowledge_graph(
             "status": item.get("status"),
         } for entity_id, item in by_id.items()]
         edges: Dict[str, Dict[str, Any]] = {}
+        details = knowledge_api.knowledge_graph_details(by_id)
+        for edge in details['edges']:
+            source = str(edge.get("source_id") or "")
+            target = str(edge.get("target_id") or "")
+            if source not in by_id or target not in by_id:
+                continue
+            edge_id = str(edge.get("edge_id") or f"{source}:{target}:{edge.get('edge_type') or 'RELATED'}")
+            edges[edge_id] = {
+                "id": edge_id, "from": source, "to": target,
+                "label": str(edge.get("edge_type") or "RELATED"),
+                "strength": edge.get("strength"), "confidence": edge.get("confidence"),
+            }
         for entity_id in by_id:
-            for edge in knowledge_api.get_edges(entity_id):
-                source = str(edge.get("source_id") or "")
-                target = str(edge.get("target_id") or "")
-                if source not in by_id or target not in by_id:
-                    continue
-                edge_id = str(edge.get("edge_id") or f"{source}:{target}:{edge.get('edge_type') or 'RELATED'}")
-                edges[edge_id] = {
-                    "id": edge_id, "from": source, "to": target,
-                    "label": str(edge.get("edge_type") or "RELATED"),
-                    "strength": edge.get("strength"), "confidence": edge.get("confidence"),
-                }
-            context = knowledge_api.get_knowledge_context(entity_id)
+            context = details['contexts'].get(entity_id)
             if context:
                 chain = context.get("organization_chain") or []
                 for org in chain:
@@ -3536,6 +3541,32 @@ def spec_inventory(
         raise HTTPException(status_code=422, detail="Spec cursor is invalid") from exc
     except Exception as exc:
         raise _identity_http_error(exc, "Spec inventory is unavailable") from exc
+
+
+@app.get("/api/native-agents/{agent_id}")
+def native_agent_detail(
+    agent_id: str,
+    session: Dict[str, Any] = Depends(require_action("agents.read")),
+) -> Dict[str, Any]:
+    try:
+        return native_agent_api.get_native_agent(str(session["principal_id"]), agent_id)
+    except Exception as exc:
+        raise _identity_http_error(exc, "Native Agent is unavailable") from exc
+
+
+@app.post("/api/native-agents/{agent_id}/model-profile")
+def native_agent_model_profile(
+    agent_id: str,
+    body: NativeAgentModelBody,
+    session: Dict[str, Any] = Depends(require_action("platform.manage")),
+) -> Dict[str, Any]:
+    try:
+        return native_agent_api.configure_agent_model(
+            str(session["principal_id"]), agent_id, body.llm_profile_id,
+            body.expected_llm_profile_id, body.reason,
+        )
+    except Exception as exc:
+        raise _identity_http_error(exc, "Native Agent model configuration was denied") from exc
 
 
 @app.post("/api/native-agents/{agent_id}/activate")
@@ -5826,10 +5857,14 @@ def channel(body: ChannelBody, session: Dict[str, Any] = Depends(require_action(
 
 
 @app.get("/api/security-domains")
-def security_domains(limit: int = 200, include_inactive: bool = False, session: Dict[str, Any] = Depends(require_action("channels.read"))) -> Dict[str, Any]:
+def security_domains(limit: int = 200, include_inactive: bool = False,
+                     query: str = "", classification: str = "", domain_status: str = "",
+                     session: Dict[str, Any] = Depends(require_action("channels.read"))) -> Dict[str, Any]:
     try:
-        items = security_domain_api.list_domains(str(session["principal_id"]), limit=limit, include_inactive=include_inactive)
-        return {"items": items, "count": len(items)}
+        amount = max(1, min(limit, 500))
+        items = security_domain_api.list_domains(str(session["principal_id"]), limit=amount,
+            include_inactive=include_inactive, query=query, classification=classification, domain_status=domain_status)
+        return {"items": items, "count": len(items), "limit": amount, "at_limit": len(items) == amount}
     except Exception as exc:
         raise _identity_http_error(exc, "Security Domain inventory is unavailable", identity_status=503) from exc
 

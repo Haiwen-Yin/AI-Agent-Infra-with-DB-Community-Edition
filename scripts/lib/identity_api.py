@@ -3895,7 +3895,7 @@ def _post_channel_message_uncached(principal_id: str, channel_id: str, body: str
     is_administration_channel = str(channel_id) == "CH_PLATFORM_ADMINISTRATION"
     is_platform_command = str(body or "").strip().lower().startswith("/platform ")
     if is_administration_channel and (normalized_mentions or is_platform_command):
-        from . import native_agent_api
+        from . import native_agent_api, platform_agent_pool
         command_targets = [native_agent_api.PLATFORM_ADMIN_AGENT_ID] if is_platform_command else []
         for mentioned_agent_id in sorted(set(normalized_mentions + command_targets)):
             try:
@@ -3908,7 +3908,7 @@ def _post_channel_message_uncached(principal_id: str, channel_id: str, body: str
                     principal_id, channel_id, message_id, body, mentioned_agent_id,
                     normalized_thread_type, thread_id, response_language=response_language,
                 ))
-            except (native_agent_api.NativeAgentError, PermissionError) as exc:
+            except (native_agent_api.NativeAgentError, platform_agent_pool.AgentPoolError, PermissionError) as exc:
                 # The human message is already durable and auditable. Preserve
                 # it, report the bounded dispatch failure, and never make a
                 # client retry create a duplicate request message.

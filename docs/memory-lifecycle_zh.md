@@ -1,4 +1,4 @@
-# 版本化记忆生命周期 v5.0.4
+# 版本化记忆生命周期 v5.0.5
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -59,12 +59,13 @@ HTTP API 提供相应的 Dashboard 和自动化路径：
 使用可恢复的备份记录运行带账本的升级：
 
 ```bash
-bash scripts/install_platform.sh upgrade --version 5.0.4 \
+bash scripts/install_platform.sh upgrade --version 5.0.5 \
+  --from-version 5.0.4 \
   --edition community --database pg --config config.json \
   --confirm-database-backup
 ```
 
-将数据库和社区版/企业版参数替换为此包支持的目标。运行完整的当前基线；不要仅停留在这些历史引入步骤。
+本例从 v5.0.4 升级；更早版本使用对应中间包。将数据库和社区版/企业版参数替换为此包支持的目标。运行完整的当前基线；不要仅停留在这些历史引入步骤。
 步骤 `23_v4_3_2_memory_lifecycle.sql` 将现有的 `MEMORY` 实体纳入
 版本一，且不更改其外部 ID。步骤
 `24_v4_3_2_memory_digest_alignment.sql` 随后将历史导入摘要

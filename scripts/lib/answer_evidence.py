@@ -176,21 +176,33 @@ def assess_for_answer(question, candidates, *, relationships=()):
     neither their presence nor their retrieval rank establishes a fact.
     Call only after the normal dual-reader source authorization and loading.
     """
+    locator = answer_query.leading_locator(question)
+    locator_rejections = []
+    if locator:
+        eligible = []
+        for item in candidates:
+            if answer_query.supports_term(str(item.get('title') or '')+'\n'+str(item.get('content') or ''), locator):
+                eligible.append(item)
+            else:
+                locator_rejections.append(dict(entity_id=item['entity_id'], reason='EXPLICIT_LOCATOR_UNSUPPORTED'))
+        candidates = eligible
     result = assess(question, candidates, relationships=relationships)
+    result['evidence_decision']['rejected_sources'].extend(locator_rejections)
     parsed = answer_query.interpret(question)
     lowered = question.casefold()
-    natural = bool(re.search(r'如何|怎么|怎样|为什么|是否|能否|哪些|什么|[吗呢][？?]?|'
-        r'^\s*(?:how|why|can|could|should|would|does|do|what)\b', lowered))
+    natural_question = lowered[len(locator):].lstrip(' :：,，') if locator else lowered
+    natural = bool(re.search(r'如何|怎么|怎样|为什么|是否|能否|哪些|什么|多少|多久|何时|还是|[吗呢][？?]?|'
+        r'^\s*(?:how|why|can|could|should|would|does|do|what|has|have|when)\b', natural_question))
     factual_company = any(_contains(lowered, alias) for alias in _COMPANY_ALIASES)
     scalar = any(_contains(lowered, alias) for key in ('revenue', 'headquarters', 'founding') for alias in _FACETS[key])
     # Explicit document frames and named-claim lists retain their strict
     # subject/claim contract. A source cannot opt itself into this review mode.
     if (not natural or parsed.framed or parsed.frame_candidate or factual_company or scalar
-            or re.search(r'[:：]|https?://|[\n`{}]', question)):
+            or re.search(r'[:：]|https?://|[\n`{}]', re.sub(r'(?<=\d):(?=\d)', '', natural_question))):
         return result
     present = {item['entity_id'] for item in result['items']}
     provisional = []
-    hard_rejections = []
+    hard_rejections = list(locator_rejections)
     rejected = {item['entity_id']: item['reason'] for item in result['evidence_decision']['rejected_sources']}
     for item in candidates:
         if item['entity_id'] in present:

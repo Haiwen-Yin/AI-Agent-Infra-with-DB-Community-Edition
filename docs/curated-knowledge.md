@@ -114,7 +114,7 @@ with exact `product`, exact `version`, timezone-qualified `as_of`, and allowed
 `knowledge_scope`, for example:
 
 ```json
-{"product":"unified-community","version":"5.0.3","as_of":"2026-11-02T00:00:00+08:00","decision_statuses":["CURRENT"]}
+{"product":"unified-community","version":"5.0.5","as_of":"2026-11-11T00:00:00+08:00","decision_statuses":["CURRENT"]}
 ```
 
 Task context assembly accepts the same object as its optional `applicability`

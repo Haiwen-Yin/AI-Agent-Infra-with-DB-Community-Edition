@@ -1,5 +1,27 @@
 # Changelog
 
+## v5.0.5 - 2026-11-11
+
+- Accept consistent cumulative and terminal streaming usage, including zero
+  placeholders, while preserving model identity, complete output and accounting.
+- Bind answer expression to authorized evidence, source applicability and exact
+  citations. Withhold selected unsupported confidence numbers and categorical
+  outcomes without execution evidence. These bounded checks do not verify every
+  claim or provide calibrated correctness probabilities.
+- Load Knowledge and Memory by the visible view, batch authorized graph reads,
+  and retain explicit preview bounds, errors and retry states.
+- Unify Portal knowledge-policy layout and expose Agent assets and sources
+  through Workspace with explicit Domain/Agent selection and retained deep links.
+- Support request UUIDs and content hashes on ordinary HTTP, retain idempotency
+  identities on retries, and fail clearly when secure randomness is unavailable.
+- Append PostgreSQL migration 121 for ACTIVE Agents' own native context reads;
+  preserve other-owner and direct-write restrictions and historical migrations.
+- Repair optional Branch context and native identifiers, align the Branch form
+  with the database enum, and return authorization denial when a Loop cannot start.
+- Refresh bilingual product documents, narrated demo and release materials.
+  Model reasoning and completeness limits remain disclosed separately from
+  mandatory product correctness and current database authorization.
+
 ## v5.0.4 - 2026-11-05
 
 - Collect bounded official GitHub and Cloudflare incident records through

@@ -1,4 +1,4 @@
-# 迁移指南 v5.0.4
+# 迁移指南 v5.0.5
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -38,6 +38,14 @@ v5.0.4 新增 119，提供有界 STATUSPAGE 来源类型。PostgreSQL 另选 120
 优先检查最近的已有记录；失败、运行中或摘要变化的记录不能回退到更早的成功记录。
 原生结构与 SQL 校验和仍须完整，不重标历史记录的版本。
 
+v5.0.5 在 PostgreSQL（包括 Community 与 AgentX）追加迁移 121，恢复 ACTIVE
+Agent 通过登记的专属原生登录及现有 `current_agent_identity()` 读取自己的
+工作区上下文。不开放共享上下文或写权限。新装在完整历史链后执行 121；明确
+指定 `--from-version 5.0.4` 的升级先核验前序链，再执行 121。Oracle 与
+YashanDB 仍以 119 为终点，使用应用升级。保留原数据库备份、历史 SQL 及
+校验和；除部署检查外，还需核对自身可读、其他上下文拒读、伪造身份无效和
+直接写入被拒绝。
+
 单后端基线位于 `scripts/deploy/baseline_v*.json`。在统一的 Community 包中，每个后端在 `scripts/deploy/<database>/` 下恰好有一个基线。仅使用所选后端的脚本、驱动和配置。OpenTenBase AgentX 只能使用 PostgreSQL 链。
 
 | 先前发布的版本 | 迁移终点 |
@@ -49,6 +57,8 @@ v5.0.4 新增 119，提供有界 STATUSPAGE 来源类型。PostgreSQL 另选 120
 | v5.0.0 | 102 |
 | v5.0.1 | 105 |
 | v5.0.2 | PostgreSQL 为 110；Oracle/YashanDB 为 109 |
+| v5.0.3 | PostgreSQL/YashanDB 为 117；Oracle 为 118 |
+| v5.0.4 | PostgreSQL 为 120；Oracle/YashanDB 为 119 |
 
 这些版本是常规发布。历史迁移文件名描述的是结构引入的时间，而不是传递给当前安装程序的目标版本。已撤回的 v4.4.8 和未知的部分架构不被假定为升级源。保留历史证据并在继续之前进行调查。
 
@@ -60,7 +70,7 @@ v5.0.4 新增 119，提供有界 STATUSPAGE 来源类型。PostgreSQL 另选 120
 
 保留私有配置、主加密密钥和 `.runtime/deployment/` 日志/密钥文件。切勿将这些放入公共发布或支持归档中。从所选后端确认先决条件以及 [最小权限](minimum-privileges_zh.md)；普通 Agent 不得获取部署所有者的凭据。
 
-Oracle、YashanDB 升级至 v5.0.1 前，需由 SYS 在原有的确切应用 PDB 中单独执行
+Oracle、YashanDB 升级前，需由 SYS 在原有的确切应用 PDB 中单独执行
 本底座的 `0_<database>_v5_0_1_native_identity_prerequisites.sql`。该管理员脚本
 创建仅投影账户名称和状态的只读 `SYS.CX_AGENT_ACCOUNT_STATUS`，只向确切 Owner
 授予不带转授权权利的 SELECT。它不是应用迁移，不由安装器自动执行，也不修改
@@ -74,14 +84,15 @@ Oracle、YashanDB 升级至 v5.0.1 前，需由 SYS 在原有的确切应用 PDB
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.4 \
-  --from-version 5.0.2 \
+  --database pg --edition community --version 5.0.5 \
+  --from-version 5.0.4 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
 
-从 v5.0.2 升到 v5.0.3 时，`--from-version 5.0.2` 会先检查前序真实结构及
-APPLIED 校验和，再仅执行上表中的本底座新增链。续跑保留原日志声明的前序版本；
+从 v5.0.4 升到 v5.0.5 时，`--from-version 5.0.4` 会先检查前序真实结构及
+APPLIED 校验和，再由 PostgreSQL 执行 121；其他受支持底座保持终点 119。
+更早版本应使用对应历史软件包逐级转换，本命令不支持跳过版本。续跑保留原日志声明的前序版本；
 旧的未声明日志不能重新标成已核验的升级。初始化和其他版本迁移不使用此参数。
 
 将数据库和社区版/企业版参数替换为此软件包支持的值。
@@ -115,6 +126,9 @@ Oracle 任务迁移 85 使用可恢复的复制，并在最终切换前进行检
 | 111–116（按底座选择） | 知识引导元数据、原生共享写入边界及底座特定的正文检索 |
 | 117 | 实际观测的步骤开始、完成时间，未知历史保持为空 |
 | 118（Oracle） | 显式子文档键，保留完整协作组 JSON 投影 |
+| 119 | 有界 STATUSPAGE 来源类型；采集与审核、晋升分开 |
+| 120（PostgreSQL，在 119 前执行） | 精确修复历史来源类型约束 |
+| 121（PostgreSQL） | ACTIVE Agent 读取自己的上下文，不增加共享上下文或写权限 |
 
 v5.0.1 目标需检查三项新脚本及结构清单，包括实际表、键、约束和原生保护。
 终点 105 账本成功不代表 103、104 对象存在。来源/模型作业复用既有任务连续性链，
@@ -130,10 +144,10 @@ PostgreSQL 在历史状态分区 Task Plan 表没有全局 PLAN_ID 键的情况�
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -143,7 +157,7 @@ bash scripts/install_platform.sh resume \
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config /absolute/path/config.json
 ```
 

@@ -171,6 +171,18 @@ def test_native_private_skill_directory_retains_owner_and_rechecks_exact_content
 
 @pytest.fixture(scope='module')
 def native_target():
+    if os.environ.get('CX_VALIDATION_MANIFEST'):
+        # Release-slot admission is owned by the same guarded validation tool
+        # as real browser checks. It verifies the selected immutable package,
+        # native identity, private config and completed installation receipt.
+        from version_validation_runtime import selected
+        package,target,_state,_version=selected()
+        assert Path(connection.__file__).resolve().is_relative_to(package/'scripts')
+        rows=connection.execute_query("SELECT i.PRINCIPAL_ID FROM CX_HUMAN_IDENTITIES i "
+            "JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID=i.PRINCIPAL_ID "
+            "WHERE i.USERNAME='admin' AND i.IDENTITY_TYPE='LOCAL' AND i.STATUS='ACTIVE' AND p.STATUS='ACTIVE'")
+        assert len(rows)==1
+        return target,str(rows[0]['principal_id'])
     key=os.environ.get('CX_DEVELOPMENT_TARGET')
     if not key:
         pytest.skip('Explicit classified persistent development target required')

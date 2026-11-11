@@ -1,3 +1,5 @@
+import { newRequestId } from "./requestId";
+import { contentDigest } from "./contentDigest";
 import React, { useRef, useState } from "react";
 import "./ModelEndpointCapacity.css";
 
@@ -5,8 +7,7 @@ type Row = Record<string, any>;
 type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; canRecover: boolean; initial?: Row };
 const root = "/api/agent-extensions/processing";
 async function fingerprint(value: Row) {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
+  return contentDigest(JSON.stringify(value));
 }
 
 export default function ProcessingRecovery({ request, text, canRecover, initial }: Props) {
@@ -27,7 +28,7 @@ export default function ProcessingRecovery({ request, text, canRecover, initial 
   };
   const post = async (path: string, body: Row) => {
     const signature = path + JSON.stringify(body);
-    const payload = pending.current.get(signature) || { ...body, idempotency_key: crypto.randomUUID() };
+    const payload = pending.current.get(signature) || { ...body, idempotency_key: newRequestId() };
     pending.current.set(signature, payload);
     const result = await request(path, { method: "POST", body: JSON.stringify(payload) });
     pending.current.delete(signature); return result;

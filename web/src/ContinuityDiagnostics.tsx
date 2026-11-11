@@ -1,3 +1,4 @@
+import { newRequestId } from "./requestId";
 import React, { useRef, useState } from "react";
 import ProcessingRecovery from "./ProcessingRecovery";
 
@@ -37,7 +38,7 @@ export default function ContinuityDiagnostics({ request, text, domain, modelRunt
       for (const [field, check] of [["instance_id", "INSTANCE"], ["assembly_id", "CONTEXT_INPUT"], ["distribution_id", "SKILL_DELIVERY"]]) if (data.get(field)) { body[field] = String(data.get(field)); body.checks.push(check); }
       if (data.get("parity")) body.checks.push("ENTRYPOINT_PARITY");
       const signature = JSON.stringify(body);
-      const payload = pending.current.get(signature) || { ...body, request_id: crypto.randomUUID(), idempotency_key: crypto.randomUUID() };
+      const payload = pending.current.get(signature) || { ...body, request_id: newRequestId(), idempotency_key: newRequestId() };
       pending.current.set(signature, payload);
       const result = await request("/api/diagnostics/runs", { method: "POST", body: JSON.stringify(payload) });
       pending.current.delete(signature); setDiagnostic(result);

@@ -1,4 +1,4 @@
-# Minimum database privileges v5.0.4
+# Minimum database privileges v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -59,7 +59,7 @@ PL/SQL or Data Grant parsing cannot use inherited role privileges. The
 consolidated prerequisite establishes `DEEP_SEC_SESSION_ROLE` with only
 CREATE SESSION and the Owner's ADMIN OPTION for managed attachment.
 
-For v5.0.1, SYS separately runs
+For this release, SYS separately runs the prerequisite introduced in v5.0.1:
 `0_oracle_v5_0_1_native_identity_prerequisites.sql` in the exact application PDB.
 `SYS.CX_AGENT_ACCOUNT_STATUS` projects only `USERNAME, ACCOUNT_STATUS` from
 `SYS.DBA_END_USERS`, with `WITH READ ONLY`. Only the exact configured Owner
@@ -85,7 +85,7 @@ DDL privileges and CREATE USER/ALTER USER to provision and rotate independent
 Agent logins. The prerequisite establishes the minimal session role and
 Owner management grant; it does not grant DBA, SYSDBA or unrestricted data.
 
-For v5.0.1, SYS separately runs
+For this release, SYS separately runs the prerequisite introduced in v5.0.1:
 `0_yashandb_v5_0_1_native_identity_prerequisites.sql` in the exact application PDB.
 Its `SYS.CX_AGENT_ACCOUNT_STATUS` view projects only `USERNAME, ACCOUNT_STATUS`
 from `SYS.DBA_USERS`, with `WITH READ ONLY`. Grant only the exact Owner SELECT,
@@ -109,7 +109,7 @@ does not demonstrate enforcement.
 
 The native account-status prerequisite is a separate DBA action, not an
 automatic grant or a change to an applied migration. Missing or incompatible
-access blocks v5.0.1 preflight. See [native identity operations](native-identity.md)
+access blocks current preflight. See [native identity operations](native-identity.md)
 for exact-PDB checks and the limited new-login revocation contract.
 
 Remove an excessive privilege only after resolving the exact principal,

@@ -1,3 +1,4 @@
+import { newRequestId } from "./requestId";
 import React, { useEffect, useRef, useState } from "react";
 import ContinuityWorkbench from "./ContinuityWorkbench";
 import { useUIPreferences } from "./uiPreferences";
@@ -13,7 +14,7 @@ export default function PortalContinuity() {
   const text = (zh: string, en: string) => lang === "zh" ? zh : en;
   const request = async (path: string, options: RequestInit = {}): Promise<Row> => {
     let client = sessionStorage.getItem("cxPortalClientInstance");
-    if (!client) { client = crypto.randomUUID(); sessionStorage.setItem("cxPortalClientInstance", client); }
+    if (!client) { client = newRequestId(); sessionStorage.setItem("cxPortalClientInstance", client); }
     let page = sessionStorage.getItem("cxPortalPageInstance");
     if (!page) { page = client; sessionStorage.setItem("cxPortalPageInstance", page); }
     const headers = new Headers(options.headers);

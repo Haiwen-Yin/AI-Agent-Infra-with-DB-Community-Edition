@@ -16,15 +16,24 @@ import pytest
 from lib import connection
 from .release_target import classified_current_target
 
-pytestmark = pytest.mark.skipif(os.environ.get('CX_V502_NATIVE_BATCH_LIVE') != '1',
-                                reason='explicit classified v5.0.2 native batch acceptance required')
+pytestmark = pytest.mark.skipif(
+    os.environ.get('CX_V502_NATIVE_BATCH_LIVE') != '1' and os.environ.get('CX_NATIVE_BATCH_LIVE') != '1',
+    reason='explicit exact classified native batch acceptance required')
 
 
 @pytest.fixture
 def probe():
-    assert classified_current_target(), 'Native batch mutation requires the exact classified package target'
     from lib.product_identity import read_manifest
-    assert read_manifest()['version'] == '5.0.2'
+    if os.environ.get('CX_NATIVE_BATCH_LIVE') == '1':
+        from pathlib import Path
+        from version_validation_runtime import selected
+        package, target, _state, version = selected()
+        assert version == '5.0.5' and read_manifest()['version'] == version
+        assert target['classification'] == 'temporary'
+        assert Path(connection.__file__).resolve().is_relative_to(package/'scripts')
+    else:
+        assert classified_current_target(), 'Native batch mutation requires the exact classified package target'
+        assert read_manifest()['version'] == '5.0.2'
     table = 'CX502_B_' + secrets.token_hex(6).upper()
     pg = connection.DATABASE_DIALECT in {'pg', 'postgresql'}
     connection.execute('CREATE TABLE ' + table + '(ITEM_ID VARCHAR(40) PRIMARY KEY,BODY_TEXT ' +

@@ -1,4 +1,5 @@
-import React, { useRef, useState } from "react";
+import { newRequestId } from "./requestId";
+import React, { useEffect, useRef, useState } from "react";
 import ContinuityRuntime from "./ContinuityRuntime";
 import ContextEvidence from "./ContextEvidence";
 
@@ -21,12 +22,15 @@ export default function ContinuityContext({ request, text, domain, domains, work
   const [notice, setNotice] = useState("");
   const [knowledgeSearch, setKnowledgeSearch] = useState(false);
   const pending = useRef(new Map<string, Row>());
-  const requestId = useRef(crypto.randomUUID());
+  const [requestId, setRequestId] = useState("");
+  useEffect(() => {
+    try { setRequestId(newRequestId()); } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+  }, []);
   const lock = useRef(false);
   const status = (value: string) => ({ PREPARED: text("已组装，尚未发送", "Prepared, not sent"), SENDING: text("正在发送", "Sending"), SENT: text("已取得输入回执", "Input receipt recorded"), UNOBSERVED: text("发送结果未观测", "Delivery unobserved"), PUBLISHED: text("已发布", "Published"), REVOKED: text("已撤回", "Revoked") }[value] || value);
   const familyName = (value: string) => ({ WORK: text("工作契约", "Work contract"), HANDOFF: text("交接", "Handoff"), HANDOFF_OUTCOME: text("交接结果", "Handoff outcome"), MEMORY: text("记忆", "Memory"), KNOWLEDGE: text("知识", "Knowledge"), EXPERIENCE: text("经验", "Experience"), SKILL: text("技能", "Skill"), TASK: text("任务快照", "Task snapshot"), GRAPH: text("图运行快照", "Graph run snapshot"), DB4A2A: text("数据库派发快照", "Database dispatch snapshot"), AUDIT: text("安全事件摘要", "Security event summary") }[value] || value);
   const run = async (action: () => Promise<void>) => { if (lock.current) return; lock.current = true; setBusy(true); setError(""); setNotice(""); try { await action(); } catch (e) { setError(e instanceof Error ? e.message : text("操作失败", "Operation failed")); } finally { lock.current = false; setBusy(false); } };
-  const post = async (path: string, body: Row, expiryHours?: number) => { const signature = path + JSON.stringify({ ...body, expiryHours }); const payload = pending.current.get(signature) || { ...body, idempotency_key: crypto.randomUUID(), ...(expiryHours === undefined ? {} : { expires_at: new Date(Date.now() + expiryHours * 3600000).toISOString() }) }; pending.current.set(signature, payload); const value = await request(path, { method: "POST", body: JSON.stringify(payload) }); pending.current.delete(signature); return value; };
+  const post = async (path: string, body: Row, expiryHours?: number) => { const signature = path + JSON.stringify({ ...body, expiryHours }); const payload = pending.current.get(signature) || { ...body, idempotency_key: newRequestId(), ...(expiryHours === undefined ? {} : { expires_at: new Date(Date.now() + expiryHours * 3600000).toISOString() }) }; pending.current.set(signature, payload); const value = await request(path, { method: "POST", body: JSON.stringify(payload) }); pending.current.delete(signature); return value; };
   const sourceFields = (source: Source, change: (value: Source) => void, publish = false) => <>
     <label className="workbench-field"><span>{text("来源类型", "Source family")}</span><select value={source.family} onChange={e => change({ ...source, family: e.target.value })}>{["HANDOFF", "MEMORY", "KNOWLEDGE", "EXPERIENCE", "SKILL", ...(publish ? [] : ["HANDOFF_OUTCOME", "TASK", "GRAPH", "DB4A2A", "AUDIT"])].map(value => <option value={value} key={value}>{familyName(value)}</option>)}</select></label>
     {([["entity_id", "实体标识", "Entity ID"], ["revision_id", "精确版本标识", "Exact revision ID"], ["content_digest", "内容摘要（SHA-256）", "Content digest (SHA-256)"]] as const).map(([name, zh, en]) => <label className="workbench-field" key={name}><span>{text(zh, en)}</span><input required value={source[name]} maxLength={name === "content_digest" ? 64 : 128} pattern={name === "content_digest" ? "[0-9a-f]{64}" : undefined} onChange={e => change({ ...source, [name]: e.target.value })} /></label>)}
@@ -59,7 +63,7 @@ export default function ContinuityContext({ request, text, domain, domains, work
           token_budget: Number(data.get("token_budget")), entry_limit: Number(data.get("entry_limit")), ttl_seconds: Number(data.get("ttl_seconds")), purpose: String(data.get("purpose")) });
         setAssembly(await request(`/api/context/assemblies/${encodeURIComponent(value.assembly_id)}`)); await list("assembly");
       }); }}><fieldset className="operation-explainer-form" disabled={busy}><legend>{text("准备上下文", "Prepare context")}</legend>
-        <label className="workbench-field"><span>{text("请求标识", "Request ID")}</span><input name="request_id" required maxLength={128} defaultValue={requestId.current} /></label>
+        <label className="workbench-field"><span>{text("请求标识", "Request ID")}</span><input name="request_id" required maxLength={128} value={requestId} onChange={event => setRequestId(event.target.value)} /></label>
         {workId && <label key={workId}><input name="include_work" type="checkbox" />{text("包含当前选择的工作契约", "Include the selected work contract")} · {workId}</label>}
         {handoffId && <label key={handoffId}><input name="include_handoff" type="checkbox" />{text("包含当前选择的交接", "Include the selected handoff")} · {handoffId}</label>}
         {sources.map((source, i) => <fieldset className="operation-explainer-form" key={i}><legend>{text("组装来源", "Assembly source")} {i + 1}</legend>{sourceFields(source, value => setSources(previous => previous.map((item, index) => index === i ? value : item)))}<button type="button" className="small-button" onClick={() => setSources(previous => previous.filter((_, index) => index !== i))}>{text("移除此来源", "Remove source")}</button></fieldset>)}

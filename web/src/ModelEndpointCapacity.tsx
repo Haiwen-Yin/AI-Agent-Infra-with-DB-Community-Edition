@@ -1,3 +1,5 @@
+import { newRequestId } from "./requestId";
+import { contentDigest } from "./contentDigest";
 import React, { useEffect, useRef, useState } from "react";
 import PrincipalPicker from "./PrincipalPicker";
 import "./ModelEndpointCapacity.css";
@@ -41,7 +43,7 @@ export default function ModelEndpointCapacity({ request, text, profiles }: Props
   };
   const post = async (path: string, body: Row) => {
     const signature = path + JSON.stringify(body);
-    const payload = pending.current.get(signature) || { ...body, idempotency_key: crypto.randomUUID() };
+    const payload = pending.current.get(signature) || { ...body, idempotency_key: newRequestId() };
     pending.current.set(signature, payload);
     const result = await request(path, { method: "POST", body: JSON.stringify(payload) });
     pending.current.delete(signature); return result;
@@ -91,7 +93,7 @@ export default function ModelEndpointCapacity({ request, text, profiles }: Props
       {next !== null && <button type="button" className="small-button" disabled={busy} onClick={() => void run(() => loadRequests(next))}>{text("更多请求", "More requests")}</button>}
       {resolution && <form onSubmit={e => { e.preventDefault(); const data = new FormData(e.currentTarget); if (!data.get("confirmed")) return; void run(async () => {
         const evidence = JSON.stringify({ admission_id: resolution.admission_id, attempt_id: resolution.attempt_id, version: resolution.version, reason: data.get("reason") });
-        const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(evidence))), value => value.toString(16).padStart(2, "0")).join("");
+        const hash = await contentDigest(evidence);
         await post(`${root}/admissions/${encodeURIComponent(resolution.admission_id)}/reconcile`, { expected_version: resolution.version, attempt_id: resolution.attempt_id, fencing_token: resolution.fencing_token,
           evidence_kind: "OPERATOR_CONFIRMATION", evidence_digest: hash, finish_code: "OPERATOR_CONFIRMED_TERMINATED", reason: data.get("reason") }); setResolution(null); await loadRequests();
       }); }}><fieldset className="operation-explainer-form" disabled={busy}><legend>{text("人工确认原请求结束", "Operator confirmation of original request termination")}</legend><p><code>{resolution.admission_id}</code></p>{reason}<label><input type="checkbox" name="confirmed" required />{text("我已核实这个原始请求已结束。这是人工确认，不是服务端独立观测。", "I verified this original request ended. This is operator confirmation, not independent server observation.")}</label><button className="primary-button">{text("确认并记录", "Confirm and record")}</button><button type="button" className="small-button" onClick={() => setResolution(null)}>{text("返回", "Back")}</button></fieldset></form>}

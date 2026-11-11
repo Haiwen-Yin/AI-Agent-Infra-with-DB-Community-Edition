@@ -8,7 +8,9 @@ UI_SOURCE = Path(__file__).parents[1] / "web" / "src" / "App.tsx"
 
 
 def test_dashboard_uses_whitelisted_url_state_and_browser_history():
-    source = UI_SOURCE.read_text(encoding="utf-8")
+    app = UI_SOURCE.read_text(encoding="utf-8")
+    assert 'import { useUrlState, useUrlParam } from "./useUrlState"' in app
+    source = (UI_SOURCE.parent / 'useUrlState.ts').read_text(encoding="utf-8")
     assert "function useUrlState" in source
     assert 'window.addEventListener("popstate"' in source
     assert 'window.history.replaceState({}, "", url.pathname + url.search)' in source

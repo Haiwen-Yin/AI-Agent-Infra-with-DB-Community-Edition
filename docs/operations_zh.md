@@ -1,4 +1,4 @@
-# 川序 v5.0.4 运维与技术说明（中文）
+# 川序 v5.0.5 运维与技术说明（中文）
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -38,14 +38,14 @@ bash scripts/config_wizard.sh
 首次初始化不需要外部 Agent 或真实模型，由确定性的 Bootstrap Deployment Agent 执行。以下以 PostgreSQL Community 为例；其他版本将两个参数改为对应的 `oracle` / `yashandb` 和 `community` / `enterprise`：
 
 ```bash
-bash scripts/install_platform.sh initialize --version 5.0.4 \
+bash scripts/install_platform.sh initialize --version 5.0.5 \
   --database pg --edition community --config config.json
 bash start_web_server.sh start
 ```
 
 初始化会核对空目标、前置能力、逐步迁移及基线清单，交互输入初始管理员密码，建立 Human 管理员和平台原生管理 Agent，完成后退休临时部署身份。初始密码至少 12 位，包内没有通用默认密码。失败或中断时先查看部署状态和账本，通过同一部署入口恢复，不能手工跳过失败步骤或把未知结构认作空库。
 
-Oracle、YashanDB v5.0.1 新部署和升级前，还需由 SYS 在确切应用 PDB 中准备窄账户
+Oracle、YashanDB 新部署和升级前，还需由 SYS 在确切应用 PDB 中准备窄账户
 状态视图。此前置在预检前完成；视图缺失或不兼容时部署阻断，应用不会自动修复。
 详见[原生身份前置](native-identity_zh.md)。
 
@@ -54,7 +54,7 @@ Oracle、YashanDB v5.0.1 新部署和升级前，还需由 SYS 在确切应用 P
 启动后核对 `/api/health` 的进程与版本、`/api/ready` 的数据库就绪状态，以及管理页面中的数据库治理配置。健康响应、启动模式为 production、功能配置正常是不同检查，任何单项都不代表完成发布验收。需要再次核验部署时运行：
 
 ```bash
-bash scripts/install_platform.sh verify --version 5.0.4 \
+bash scripts/install_platform.sh verify --version 5.0.5 \
   --database pg --edition community --config config.json
 ```
 
@@ -65,6 +65,11 @@ bash scripts/install_platform.sh verify --version 5.0.4 \
 ## 升级与迁移
 
 v4.4.14 已正常发布，基线终点为 82；v4.4.15、v4.4.16、v4.5.0 终点为 97，v4.5.1 为 100，v4.5.2 为 101，v5.0.0 为 102。v5.0.1 新增 103–105，目标合同不代表发布验收完成。单库包以唯一的 `scripts/deploy/baseline_v*.json` 为部署合同；整合包使用 `scripts/deploy/数据库标识/` 下的对应清单，不根据历史模板文件名猜测终点。
+
+v5.0.5 的 PostgreSQL 终点为 121，Oracle/YashanDB 为 119。核验按底座选择的
+完整链，包括 PostgreSQL 在 119 前执行的 120，以及 121 的自有上下文读取/拒绝检查。
+从 v5.0.4 升级按[迁移指南](migration_zh.md)明确声明前序版本；更早版本使用对应中间包。
+上文历史终点不能当作当前目标。
 
 升级前完成数据库原生备份和恢复演练，记录目标、已有迁移校验和、运行目录与进程。已有数据不得重新执行空库初始化。先运行包内迁移预检，再通过受约束部署入口确认并按账本顺序执行；预检失败时保留日志并修复原因，不清空目标库掩盖问题。
 

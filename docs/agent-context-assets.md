@@ -1,4 +1,4 @@
-# Agent assets and query-aware context v5.0.4
+# Agent assets and query-aware context v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -12,11 +12,21 @@ Use the selected package's complete migration chain before these operations.
 
 ## Prepare access and choose an asset
 
-In Dashboard, open **Workspaces → Work continuity** and select a Security Domain.
-The **Agent assets** area separates bindings, source synchronization and Skill
+In Dashboard, open **Workspaces → Agent assets and sources** and explicitly
+select a Security Domain and target Agent. The existing Work continuity entry
+remains available. This area separates bindings, source synchronization and Skill
 recommendation. Select an active Agent from the authorized directory. The
 operator and Agent must retain current Domain and source access. A private
 source does not become shared because it is attached to an Agent.
+
+The `/app/workspaces?view=assets` link can restore `domain`, `asset_agent` and
+`assets_view` selections; URL state confers no authority. Missing selections
+produce a prompt rather than an implicit Domain or Agent choice. Forms wrap on
+narrow screens and retain readable long identifiers. On ordinary HTTP, secure
+randomness supplies UUIDs when native `crypto.randomUUID` is unavailable;
+missing secure randomness produces a controlled error. Pending retries retain
+their idempotency identity and content hashing has a compatibility fallback.
+These features do not replace transport encryption.
 
 The HTTP prefix below is `/api/agent-extensions`. Human clients first log into
 Dashboard with `POST /api/auth/login`, complete required MFA/setup and retain

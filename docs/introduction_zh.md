@@ -1,4 +1,4 @@
-# 川序社区版 v5.0.4
+# 川序社区版 v5.0.5
 
 [English](../README.md)
 
@@ -12,7 +12,7 @@ Portal 对话分配平台托管的本地 Agent。
 绑定、配置化来源同步和最终回答验收继续使用已有 Task/Step、Work/Handoff 与候选/
 审核实体，保留权限、精确修订及显式发布边界。
 
-v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观测。结构化回顾继续
+已登记模型资源共用持久容量准入和请求观测。结构化回顾继续
 进入独立候选审核；受控只读工具轮沿用 Action Card 与 Worker。处理诊断呈现已用
 预算与显式恢复回执，MCP 按确切版本选择有界适配器。详见
 [模型容量](model-endpoint-capacity_zh.md)、[模型工作流](model-workflows_zh.md)、
@@ -22,6 +22,15 @@ v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观�
 **Apache-2.0**。支持的数据库标识：**oracle, pg, yashandb**。整合社区版的每个运行
 进程选择一种数据库底座；OpenTenBase AgentX 仅支持 PostgreSQL，三个企业版
 仍分别交付。
+
+## 当前版本
+
+v5.0.5 改进管理频道流式处理，将检索得分与证据充分性分开，并在共享问答发布前
+检查有限的引用与表达规则。这些检查不提供校准正确概率，也不逐句证明事实正确。
+知识/记忆页面采用独立、有界加载，Portal 策略和 Agent 资产导航统一布局，并兼容
+普通 HTTP 下的请求标识生成。配置化来源采集及故障报告草稿仍需独立审核和晋升。
+已验证边界见[发布说明](../RELEASE_NOTES_v5.0.5.md)和
+[回答质量](answer-quality_zh.md)。
 
 ## 安装与初始化
 
@@ -35,7 +44,7 @@ v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观�
 2. 执行 `bash scripts/install_offline.sh --database DB`。若先安装、后配置，设置
    `CX_DATABASE_DIALECT` 为受支持的数据库标识。安装器只安装所选底座的驱动
    依赖和原生客户端。
-3. 由 DBA 准备专用空数据库/PDB、受限 Owner 和所选底座前置。v5.0.1 的 Oracle、
+3. 由 DBA 准备专用空数据库/PDB、受限 Owner 和所选底座前置。Oracle、
    YashanDB 还需由 SYS 在确切应用 PDB 中，单独执行包内
    `0_<database>_v5_0_1_native_identity_prerequisites.sql`，准备
    `SYS.CX_AGENT_ACCOUNT_STATUS`。已有数据库升级也需要此前置；PostgreSQL
@@ -43,7 +52,7 @@ v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观�
    [最小权限](minimum-privileges_zh.md)完成核验。
 4. 将初始管理员密码存入权限为 `0600` 的文件。执行
    `bash scripts/install_platform.sh initialize --database DB --edition EDITION
-   --version 5.0.4 --config /绝对路径/config.json --admin-password-file
+   --version 5.0.5 --config /绝对路径/config.json --admin-password-file
    /绝对路径/password-file`。将 `DB` 替换为支持的数据库标识，将 `EDITION`
    替换为 `community` 或 `enterprise`。
 5. 执行 `./start_web_server.sh start`。Dashboard 入口为 `/app/`，Portal 入口
@@ -86,7 +95,7 @@ v5.0.2 运行契约增加已登记模型资源的持久容量准入和请求观�
 - [安全说明](security_zh.md)与[交付验证](release-signing_zh.md)
 - [原生 Agent 退役与账户状态前置](native-identity_zh.md)
 - [访问 IP 配置与本机恢复](source-ip-access_zh.md)
-- [版本说明](../RELEASE_NOTES_v5.0.4.md)
+- [版本说明](../RELEASE_NOTES_v5.0.5.md)
 
 模型能力按供应商与模型逐项验证。受控集成继续执行授权、隔离、运行限额及数据库
 审计检查。社区包不包含企业版专属代码和 SQL。人用户自助注册与外部 Agent 注册

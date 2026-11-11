@@ -1,4 +1,4 @@
-# Chuanxu v5.0.4 Operations and Technical Documentation
+# Chuanxu v5.0.5 Operations and Technical Documentation
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -64,7 +64,7 @@ Community. For other supported targets, select `oracle` / `yashandb` and
 `community` / `enterprise` as appropriate:
 
 ```bash
-bash scripts/install_platform.sh initialize --version 5.0.4 \
+bash scripts/install_platform.sh initialize --version 5.0.5 \
   --database pg --edition community --config config.json
 bash start_web_server.sh start
 ```
@@ -73,7 +73,7 @@ Initialization verifies an empty target, prerequisites, ordered migrations and
 the baseline manifest. It prompts for a deployment-specific administrator
 password of at least 12 characters, creates the Human administrator and native
 management Agent, and retires the temporary deployment identity. There is no
-universal default password. Oracle/YashanDB v5.0.1 fresh deployment and upgrade
+universal default password. Oracle/YashanDB fresh deployment and upgrade
 also require SYS to prepare the narrow account-status view in the exact
 application PDB before preflight. A missing or incompatible view blocks
 deployment; the application does not repair it. See
@@ -92,7 +92,7 @@ readiness, and the management page for database governance. These are separate
 checks; none alone establishes release acceptance. Reverify the deployment with:
 
 ```bash
-bash scripts/install_platform.sh verify --version 5.0.4 \
+bash scripts/install_platform.sh verify --version 5.0.5 \
   --database pg --edition community --config config.json
 ```
 
@@ -110,6 +110,12 @@ v4.5.0 end at 97; v4.5.1 ends at 100; v4.5.2 ends at 101; v5.0.0 ends at
 Single-backend packages use their sole `scripts/deploy/baseline_v*.json`;
 unified packages use the selected manifest under `scripts/deploy/<database>/`.
 Historical template filenames do not define the deployment terminal.
+
+For v5.0.5, PostgreSQL ends at 121 and Oracle/YashanDB at 119. Verify
+the full backend-selected chain, including PostgreSQL 120 before 119 and 121's
+own-context read/denial checks. Upgrade from v5.0.4 using the explicit predecessor
+argument in [migration](migration.md); earlier releases require their matching
+intermediate packages. The historical terminals above are not current targets.
 
 Complete native backup and a recovery drill, recording the target, applied
 checksums, runtime directory and processes. Never reinitialize existing data.

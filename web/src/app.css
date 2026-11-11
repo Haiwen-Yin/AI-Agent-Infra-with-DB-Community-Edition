@@ -1675,6 +1675,7 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 }
 .channel-main {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-width: 0;
 }
@@ -1690,6 +1691,9 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 }
 .channel-title > div {
   min-width: 0;
+}
+.channel-title h2 {
+  overflow-wrap: anywhere;
 }
 .message-stream {
   grid-row: 3;
@@ -2131,6 +2135,13 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
   margin-bottom: 14px;
 }
 .domain-list { display: grid; gap: 5px; max-height: 370px; overflow: auto; }
+.domain-inventory-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.domain-inventory-filters > .domain-keyword, .domain-inventory-filters > .row-actions { grid-column: 1 / -1; }
+.domain-inventory-filters label { min-width: 0; }
+.domain-inventory-filters input, .domain-inventory-filters select { width: 100%; min-width: 0; }
+.domain-list .list-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.domain-list .list-row small { white-space: normal; }
+@media (max-width: 520px) { .domain-inventory-filters { grid-template-columns: minmax(0, 1fr); } }
 .domain-form,
 .domain-inline-form {
   display: grid;
@@ -2420,7 +2431,7 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 }
 .registration-token-form {
   display: grid;
-  grid-template-columns: minmax(150px, .75fr) minmax(260px, 1.6fr) minmax(190px, .8fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
   gap: 12px;
   align-items: stretch;
   margin: 10px 0 14px;
@@ -3371,18 +3382,36 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 .continuity-workbench .workbench-field > span { white-space: normal; overflow: visible; }
 .continuity-workbench .operation-explainer-form > fieldset { grid-column: 1 / -1; }
 .continuity-workbench .operation-explainer-form > button { align-self: end; justify-self: start; }
-.continuity-workbench input[type="checkbox"] { width: auto; height: auto; }
+.continuity-workbench input:is([type="checkbox"], [type="radio"]) { width: auto; height: auto; flex: 0 0 auto; }
 .continuity-workbench p, .continuity-workbench li, .continuity-workbench label { overflow-wrap: anywhere; }
 .continuity-body { white-space: pre-wrap; }
 .platform-learning { min-width: 0; overflow-wrap: anywhere; }
-.continuity-extension-panel, .continuity-quality-panel, .continuity-notes { min-width: 0; }
+.continuity-extension-panel, .continuity-quality-panel, .continuity-notes { min-width: 0; container-type: inline-size; }
 .continuity-extension-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
 .continuity-extension-heading > div { min-width: 0; }
 .continuity-extension-heading p { max-width: 760px; }
 .continuity-agent-select { flex: 0 1 420px; min-width: 240px; }
-.continuity-extension-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 22px; border-bottom: 1px solid var(--line); }
-.continuity-extension-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 8px 14px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
-.continuity-extension-tabs button.active, .continuity-extension-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--brand); }
+.continuity-extension-panel > .continuity-extension-tabs { margin: 0 0 18px; }
+.continuity-scope-panel { margin-bottom: 18px; }
+.continuity-scope-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; min-width: 0; }
+.continuity-scope-controls > label { flex: 1 1 260px; min-width: 0; }
+.continuity-scope-controls > .continuity-agent-select { flex: 2 1 360px; }
+.continuity-scope-controls > button { margin-bottom: 0; }
+.continuity-extension-panel .continuity-extension-grid { gap: 18px; }
+.continuity-extension-panel .info-panel { margin: 0; }
+.continuity-extension-panel .continuity-scope-panel { margin-bottom: 18px; }
+.continuity-extension-panel .panel-title { margin-bottom: 14px; }
+.continuity-extension-column .page-toolbar { align-items: start; margin: 0 0 16px; flex-wrap: wrap; }
+.continuity-extension-column .page-toolbar > .panel-title { flex: 1; }
+.continuity-extension-column fieldset.operation-explainer-form { position: relative; border: 0; border-radius: 0; padding: 0; margin: 16px 0 0; }
+.continuity-extension-panel .continuity-form-legend { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.continuity-extension-column .operation-explainer-form > label:has(textarea) { grid-column: 1 / -1; }
+.continuity-extension-column .operation-explainer-form p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.continuity-extension-column form + form, .continuity-extension-column ul + form { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 4px; }
+.continuity-extension-column .continuity-body { max-height: 520px; overflow: auto; overflow-wrap: anywhere; }
+.continuity-import-references { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-top: 16px; }
+.continuity-import-references summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.continuity-extension-panel > [role="alert"], .continuity-extension-panel > [role="status"] { padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; }
 .continuity-extension-grid, .continuity-quality-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
 .continuity-extension-column { min-width: 0; }
 .continuity-extension-column > h4 { display: flex; align-items: center; gap: 8px; margin: 8px 0 16px; }
@@ -3411,6 +3440,29 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 .continuity-quality-grid pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .continuity-extension-panel select[multiple] { min-height: 132px; }
 .continuity-extension-panel .page-toolbar, .continuity-notes .page-toolbar { justify-content: space-between; gap: 12px; }
+.continuity-extension-panel .continuity-reference-toolbar { justify-content: flex-start; align-items: end; flex-wrap: wrap; margin: 16px 0; }
+.continuity-reference-toolbar > label { flex: 1 1 280px; max-width: 560px; }
+@container (max-width: 960px) {
+  .continuity-extension-grid, .continuity-quality-grid { grid-template-columns: minmax(0, 1fr); }
+  .continuity-extension-heading { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .continuity-agent-select { min-width: 0; }
+}
+@container (max-width: 540px) {
+  .continuity-extension-column .operation-explainer-form, .continuity-notes .operation-explainer-form { grid-template-columns: minmax(0, 1fr); }
+}
+.portal-knowledge-policy { min-width: 0; container-type: inline-size; }
+.portal-knowledge-policy .page-toolbar { flex-wrap: wrap; align-items: center; }
+.portal-knowledge-policy .page-toolbar h3 { margin: 0; }
+.portal-policy-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 18px 24px; min-width: 0; margin: 16px 0 24px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; }
+.portal-policy-fields > :is(.checkbox-field, fieldset, button) { grid-column: 1 / -1; }
+.portal-policy-fields > button { justify-self: start; }
+.portal-policy-disclosure { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px 20px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }
+.portal-policy-disclosure p { grid-column: 1 / -1; margin: 0; color: var(--muted); }
+.portal-policy-disclosure .checkbox-field { min-width: 0; align-items: start; }
+.portal-policy-disclosure input { flex-shrink: 0; }
+.portal-policy-fields legend, .portal-policy-fields .checkbox-field { overflow-wrap: anywhere; }
+.portal-policy-coverage { border-top: 1px solid var(--line); padding-top: 20px; min-width: 0; }
+.portal-policy-coverage > .config-field { max-width: 560px; }
 .continuity-notes .page-toolbar > div { display: flex; flex-wrap: wrap; gap: 8px; }
 /* Principal identities need a readable row rather than a narrow scalar field. */
 :is(.config-field, .inline-field, .workbench-field):has(.principal-picker) { grid-column: 1 / -1; }

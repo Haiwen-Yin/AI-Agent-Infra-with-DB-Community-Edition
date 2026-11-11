@@ -166,7 +166,7 @@ def test_expired_final_reference_cannot_back_an_attribute():
 def test_unrecognized_frames_keep_original_model_prompt_semantics(question):
     value = prepare(question, [source()])
     wire = prompt(value)
-    assert set(wire) == {'question','missing_parts','authorized_sources','temporal_context'}
+    assert set(wire) == {'question','missing_parts','authorized_sources','temporal_context','evidence_expression_contract'}
     assert wire['question'] == question
     assert 'Answer each requested_attributes item' not in value['messages'][0]['content']
 

@@ -1,4 +1,4 @@
-# Deployment guide v5.0.4
+# Deployment guide v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -132,7 +132,7 @@ tablespaces, extensions and bounded owner privileges according to the selected
 `0_*_database_prerequisites.sql`. Deployment privileges are different from
 ordinary Agent privileges. Business Agents cannot fall back to owner credentials.
 
-For a v5.0.1 Oracle or YashanDB target, the DBA also reviews and separately runs
+For an Oracle or YashanDB target, the DBA also reviews and separately runs
 the native-identity prerequisite in that exact application PDB:
 
 | Backend | Additional administrator script |
@@ -199,13 +199,21 @@ data, independent Agent SQL denials and the prior Task/Step/continuity chain
 remain part of verification; a successful fresh installation does not prove an
 existing-database transition.
 
+For v5.0.5, PostgreSQL (including AgentX) ends at migration 121;
+Oracle/YashanDB end at 119. v5.0.3 introduced the backend-selected 111–118
+tail; v5.0.4 added 119 and PostgreSQL's 120 prerequisite, executed before 119.
+PostgreSQL 121 restores ACTIVE Agents' native reads of their own context
+without shared-context or write grants. Fresh initialization and the explicit
+v5.0.4 upgrade must verify the complete chain, actual objects, APPLIED digests
+and native denial checks. See [migration](migration.md) for the exact order.
+
 Store the initial administrator password in a private, current-user-owned
 regular file with mode `0600`, then run:
 
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ```
@@ -234,7 +242,7 @@ They must not enter public archives.
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config "$CX_CONFIG_PATH"
 ./start_web_server.sh start
 ./start_web_server.sh status

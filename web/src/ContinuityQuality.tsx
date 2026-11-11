@@ -1,3 +1,4 @@
+import { newRequestId } from "./requestId";
 import React, { FormEvent, useEffect, useRef, useState } from "react";
 import { ClipboardCheck, RotateCcw } from "lucide-react";
 import { statusLabel } from "./statusLabels";
@@ -9,7 +10,7 @@ type Row = Record<string, any>;
 type SourceRef = { family: string; entity_id: string; revision_id: string; content_digest: string };
 type Props = { request: (path: string, options?: RequestInit) => Promise<Row>; text: (zh: string, en: string) => string; domain: string; principalId: string; work?: Row; sources: SourceRef[]; canWrite: boolean; canManage: boolean; modelRuntimeEnabled?: boolean };
 const ROOT = "/api/agent-extensions";
-const newId = () => crypto.randomUUID();
+const newId = () => newRequestId();
 const SOURCE_MODES = ["KNOWLEDGE_GROUNDED", "MIXED_SOURCES", "MODEL_SUPPLEMENT", "KNOWLEDGE_EXTRACTS", "CLARIFICATION_REQUIRED", "INSUFFICIENT_KNOWLEDGE"];
 
 export default function ContinuityQuality({ request, text, domain, principalId, work, sources, canWrite, canManage, modelRuntimeEnabled = false }: Props) {

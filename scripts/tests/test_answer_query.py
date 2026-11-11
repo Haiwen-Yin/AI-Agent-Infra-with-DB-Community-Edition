@@ -115,6 +115,22 @@ def test_a_complete_version_without_v_does_not_create_a_year_constraint(requeste
     assert answer_evidence.assess(question,[item])['status']=='MATCHED'
 
 
+@pytest.mark.parametrize('query', ['检索相关度为 0.92，是否意味着 92% 正确率？',
+                                 'The cost is 2.50 per hour.', 'A measured latency of 19.3 ms'])
+def test_decimal_measurements_never_select_a_product_release(query):
+    from lib import knowledge_applicability
+    assert not answer_query.qualifiers(query)
+    assert knowledge_applicability.constraints(query)['versions'] == []
+    assert answer_query.claim_terms(query)
+
+
+@pytest.mark.parametrize('query', ['Boreal v0.92', 'Boreal version 0.92', '版本：0.92', '0.92版'])
+def test_explicit_two_component_versions_keep_the_exact_applicability_filter(query):
+    from lib import knowledge_applicability
+    assert answer_query.qualifiers(query) == (answer_query.Qualifier('version', '0.92'),)
+    assert knowledge_applicability.constraints(query)['versions'] == ['0.92']
+
+
 @pytest.mark.parametrize('question',[
     EN.replace('Boreal NOTE_42','Boreal NOTE_42 certified'),
     EN.replace('Boreal NOTE_42','Boreal NOTE_42 and Cedar'),
@@ -189,6 +205,15 @@ def authorized_store(monkeypatch):
     monkeypatch.setattr(embedding_api,'search_authorized_knowledge',lambda *_a,**_kw:[dict(entity_id=row[0]) for row in rows])
     yield db
     db.close()
+
+
+def test_explicit_title_recall_retains_dual_authority_before_priority(authorized_store):
+    rows = knowledge._keyword_candidates('human','agent',[],entity_ids=None,
+                                         title_query='Boreal NOTE_42 能否直接使用这些步骤？')
+    assert {row['ENTITY_ID'] for row in rows} == {'good','wrong-version'}
+    filtered = knowledge._keyword_candidates('human','agent',[],entity_ids=['good'],
+                                             title_query='Boreal NOTE_42 能否直接使用这些步骤？')
+    assert [row['ENTITY_ID'] for row in filtered] == ['good']
 
 
 @pytest.mark.parametrize('strategy',['keyword','fulltext','vector','hybrid'])

@@ -8,7 +8,7 @@ def test_native_family_ids_never_enter_legacy_entity_tag_queries():
     source=Path(__file__).resolve().parents[1]/'visualization/server.py'
     tree=ast.parse(source.read_text())
     selected=[node for node in tree.body if isinstance(node,ast.FunctionDef)
-              and node.name in {'_memory_to_vis','_get_tags_for_entities'}]
+              and node.name in {'_memory_to_vis','_get_tags_for_entities','_parse_bounded_limit'}]
     items=[dict(entity_id='MF-native',family_id='MF-native',version_id='MV-native',title='Native'),
            dict(entity_id='42',legacy_entity_id='42',family_id='MF-legacy',version_id='MV-legacy',title='Adopted'),
            dict(entity_id=43,title='Legacy')]

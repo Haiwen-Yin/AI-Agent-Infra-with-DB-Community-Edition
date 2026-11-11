@@ -188,7 +188,8 @@ def test_v442_dashboard_removes_manual_embedding_operations_and_keeps_forms_labe
     assert 'text("保存绑定", "Save binding")' not in ui
     assert 'text("加入队列", "Queue job")' not in ui
     assert 'name="profile_key" required placeholder' not in ui
-    assert "function useUrlState" in ui
+    assert 'import { useUrlState, useUrlParam } from "./useUrlState"' in ui
+    assert "function useUrlState" in (root / "web" / "src" / "useUrlState.ts").read_text(encoding="utf-8")
     assert '"section"' in ui
     assert 'platformTabKeys' in ui
 
@@ -441,7 +442,9 @@ def test_v442_compliance_draft_is_structured_and_forms_do_not_use_instructional_
 
 
 def test_v445_platform_child_state_uses_shared_url_state_contract():
-    ui = (Path(__file__).parents[1] / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
-    assert "function useUrlState" in ui
+    root = Path(__file__).parents[1]
+    ui = (root / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert 'import { useUrlState, useUrlParam } from "./useUrlState"' in ui
+    assert "function useUrlState" in (root / "web" / "src" / "useUrlState.ts").read_text(encoding="utf-8")
     assert '"config"' in ui
     assert '"section"' in ui

@@ -1,4 +1,6 @@
+import { useUrlState, useUrlParam } from "./useUrlState";
 import { statusLabels, statusLabel } from "./statusLabels";
+import { usePageResource } from "./usePageResource";
 import React, { FormEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import RecordDetails from "./RecordDetails";
 import FindingReview from "./FindingReview";
@@ -195,57 +197,6 @@ const pageFromPath = () => {
   const parts = window.location.pathname.split("/").filter(Boolean);
   return parts[0] === "app" && parts[1] ? parts[1] : "monitor";
 };
-
-function useUrlState<T extends string>(
-  key: string,
-  allowed: readonly T[],
-  fallback: T,
-): [T, (value: T) => void] {
-  const read = () => {
-    const value = new URLSearchParams(window.location.search).get(key);
-    return value && allowed.includes(value as T) ? (value as T) : fallback;
-  };
-  const [state, setState] = useState<T>(read);
-  useEffect(() => {
-    const onPopState = () => setState(read());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [key, fallback, allowed.join("|")]);
-  const update = (value: T) => {
-    if (!allowed.includes(value)) return;
-    setState(value);
-    const url = new URL(window.location.href);
-    if (value === fallback) url.searchParams.delete(key);
-    else url.searchParams.set(key, value);
-    window.history.replaceState({}, "", url.pathname + url.search);
-  };
-  return [state, update];
-}
-
-function useUrlParam(
-  key: string,
-  fallback = "",
-): [string, (value: string) => void] {
-  const read = () => {
-    const value = new URLSearchParams(window.location.search).get(key) || "";
-    return value.length <= 200 ? value : fallback;
-  };
-  const [state, setState] = useState<string>(read);
-  useEffect(() => {
-    const onPopState = () => setState(read());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [key, fallback]);
-  const update = (value: string) => {
-    if (value.length > 200) return;
-    setState(value);
-    const url = new URL(window.location.href);
-    if (value) url.searchParams.set(key, value);
-    else url.searchParams.delete(key);
-    window.history.replaceState({}, "", url.pathname + url.search);
-  };
-  return [state, update];
-}
 
 const validationFieldLabels: Record<string, [string, string]> = {
   reason: ["变更原因", "change reason"],
@@ -1314,16 +1265,16 @@ function PageView({
           text={text}
           onNotice={onNotice}
         />
-        <DataPage page={page} lang={lang} text={text} onNotice={onNotice} />
+        <DataPage key={page} page={page} lang={lang} text={text} onNotice={onNotice} />
       </>
     );
-  return <DataPage page={page} lang={lang} text={text} onNotice={onNotice} />;
+  return <DataPage key={page} page={page} lang={lang} text={text} onNotice={onNotice} />;
 }
 
 function WorkspacesAndContinuity({ lang, me, capabilities, text, onNotice }: { lang: Lang; me: Row | null; capabilities: Row | null; text: (zh: string, en: string) => string; onNotice: (value: string) => void }) {
-  const [view, setView] = useUrlState("view", ["workspaces", "continuity"] as const, "workspaces");
-  return <section className="page-stack"><ViewToggle value={view} onChange={setView} options={[["workspaces", text("工作区", "Workspaces"), Layers3], ["continuity", text("工作交接", "Work continuity"), History]]} />
-    {view === "workspaces" ? <DataPage page="workspaces" lang={lang} text={text} onNotice={onNotice} /> : <><SectionHeading title={text("工作交接", "Work continuity")} subtitle={text("记录目标与验收条件，明确交接责任，保留修订和执行结果。", "Record objectives and acceptance criteria, assign handoff responsibility, and retain revisions and outcomes.")} text={text} /><ContinuityWorkbench request={api} text={text} principalId={String(me?.principal_id || "")} canWrite={canAction(capabilities, "workspaces.write")} canManage={canAction(capabilities, "platform.manage")} canOperateAgents={canAction(capabilities, "agents.operate")} modelRuntimeEnabled={Boolean(capabilities?.model_runtime_context_enabled)} /></>}
+  const [view, setView] = useUrlState("view", ["workspaces", "continuity", "assets"] as const, "workspaces");
+  return <section className="page-stack"><ViewToggle value={view} onChange={setView} options={[["workspaces", text("工作区", "Workspaces"), Layers3], ["continuity", text("工作交接", "Work continuity"), History], ["assets", text("Agent 资产与来源", "Agent assets and sources"), Database]]} />
+    {view === "workspaces" ? <DataPage page="workspaces" lang={lang} text={text} onNotice={onNotice} /> : <><SectionHeading title={view === "assets" ? text("Agent 资产与来源", "Agent assets and sources") : text("工作交接", "Work continuity")} subtitle={view === "assets" ? text("先选择安全域和 Agent，再管理资产绑定、只读来源同步与 Skill 推荐。", "Choose a Security Domain and an Agent to manage asset bindings, read-only sources and Skill recommendations.") : text("记录目标与验收条件，明确交接责任，保留修订和执行结果。", "Record objectives and acceptance criteria, assign handoff responsibility, and retain revisions and outcomes.")} text={text} /><ContinuityWorkbench key={view} assetsOnly={view === "assets"} request={api} text={text} principalId={String(me?.principal_id || "")} canWrite={canAction(capabilities, "workspaces.write")} canManage={canAction(capabilities, "platform.manage")} canOperateAgents={canAction(capabilities, "agents.operate")} modelRuntimeEnabled={Boolean(capabilities?.model_runtime_context_enabled)} /></>}
   </section>;
 }
 
@@ -2373,6 +2324,7 @@ function NativeAgentsPage({
   const [bootstrapFeedback, setBootstrapFeedback] = useState("");
   const [selected, setSelected] = useState<Row | null>(null);
   const [configuringAgent, setConfiguringAgent] = useState<Row | null>(null);
+  const [requestedModelAgent, setRequestedModelAgent] = useUrlParam("configure_agent");
   const [pageSize, setPageSize] = useState(20);
   const [cursorHistory, setCursorHistory] = useState<string[]>([""]);
   const [nextCursor, setNextCursor] = useState("");
@@ -2384,6 +2336,16 @@ function NativeAgentsPage({
   const canManage = canViewPlatformConfig && canAction(capabilities, "agents.manage");
   const canEnroll = canAction(capabilities, "agents.enroll");
   const canDecide = canAction(capabilities, "agents.manage");
+  useEffect(() => {
+    let current = true;
+    setConfiguringAgent(null);
+    if (requestedModelAgent && canManage) {
+      void api<Row>(`/api/native-agents/${encodeURIComponent(requestedModelAgent)}`)
+        .then(item => { if (current) setConfiguringAgent(item); })
+        .catch(error => { if (current) onNotice((error as Error).message); });
+    }
+    return () => { current = false; };
+  }, [requestedModelAgent, canManage]);
   const load = async (cursor = cursorHistory[cursorHistory.length - 1] || "", size = pageSize) => {
     setLoading(true);
     try {
@@ -2424,7 +2386,11 @@ function NativeAgentsPage({
   const agents = listPayload(data.agents, ["items"]);
   const templates = listPayload(data.templates, ["items"]);
   const manifests = listPayload(data.manifests, ["items"]);
-  const profiles = listPayload(data.profiles, ["items"]);
+  const profiles = listPayload(data.profiles, ["items"]).filter(item => String(item.status).toUpperCase() === "ACTIVE");
+  const modelLabel = (profileId: unknown) => {
+    const profile = profiles.find(item => item.profile_id === profileId);
+    return profile ? `${profile.profile_key} · ${profile.model_id}` : String(profileId || text("未配置", "Not configured"));
+  };
   const requests = listPayload(data.requests, ["items"]);
   const targets = listPayload(data.targets, ["items"]);
   const referenceAdapters = listPayload(data.targets, ["reference_adapters"]);
@@ -2464,9 +2430,9 @@ function NativeAgentsPage({
       await load(); onNotice(text("申请状态已更新并记录审计", "Request state was updated and audited"));
     } catch (error) { onNotice((error as Error).message); } finally { setBusy(false); }
   };
-  const activate = async (agent: Row, profileId = String(profiles[0]?.profile_id || "")) => {
+  const activate = async (agent: Row, profileId = String(agent.llm_profile_id || "")) => {
     if (!canManage) return;
-    if (!profileId) { onNotice(text("请先配置一个 LLM 服务商配置", "Configure an LLM Provider Profile first")); return; }
+    if (!profiles.some(item => item.profile_id === profileId)) { setRequestedModelAgent(String(agent.agent_id)); onNotice(text("请先为此 Agent 保存一个可用的模型配置，再单独激活。", "Save an available model profile for this Agent before activating it separately.")); return; }
     const why = promptInput(text("请输入激活原因", "Enter the activation reason")) || "";
     if (why.trim().length < 3) return;
     setBusy(true);
@@ -2506,7 +2472,7 @@ function NativeAgentsPage({
           }}><Bot className={busy ? "spin" : ""} size={15} />{busy ? text("处理中", "Working") : text("初始化或刷新状态", "Initialize or refresh status")}</button>}
         </InfoPanel>
       </div>
-        <InfoPanel title={text("平台内置管理智能体", "Built-in management Agents")} text={text}><p className="cx-form-hint">{text("内置管理智能体必须先绑定已批准的 LLM 服务商配置，配置和激活均写入审计。", "Built-in management Agents require an approved LLM Provider Profile; configuration and activation are audited.")}</p><CursorPager pageSize={pageSize} page={cursorHistory.length} totalItems={totalItems} hasMore={Boolean(nextCursor)} loading={loading} onPageSize={changePageSize} onPrevious={previousPage} onNext={nextPage} text={text} /><DataTable headers={[text("智能体", "Agent"), text("来源", "Source"), text("状态", "Status"), text("模型配置", "LLM profile"), text("操作", "Action")]} rows={agents.map((item) => [<button type="button" className="table-link" onClick={() => setSelected(item)}>{String(item.agent_name || item.display_name || item.agent_id)}</button>, statusLabel(item.source), statusLabel(item.status), String(item.llm_profile_id || text("未配置", "Not configured")), canManage ? <span className="actions-row"><button type="button" className="small-button" disabled={busy} onClick={() => setConfiguringAgent(item)}>{text("配置模型", "Configure model")}</button>{String(item.status).toUpperCase() !== "ACTIVE" && <><button type="button" className="small-button" disabled={busy || !profiles.length} onClick={() => void activate(item)} title={!profiles.length ? text("请先创建 LLM 服务商配置", "Create an LLM Provider Profile first") : text("激活智能体", "Activate Agent")}>{text("激活", "Activate")}</button>{!profiles.length && <small className="button-hint">{text("请先配置模型", "Configure a model first")}</small>}</>} </span> : statusLabel(item.activation_state)])} empty={text("暂无可见原生智能体", "No visible native Agents")} text={text} /><CursorPager pageSize={pageSize} page={cursorHistory.length} totalItems={totalItems} hasMore={Boolean(nextCursor)} loading={loading} onPageSize={changePageSize} onPrevious={previousPage} onNext={nextPage} text={text} /></InfoPanel>
+        <InfoPanel title={text("平台内置管理智能体与业务 Agent", "Built-in management Agents and business Agents")} text={text}><p className="cx-form-hint">{text("在此为平台内置管理 Agent 和平台生成的业务 Agent 选择模型。保存模型与激活分别操作；所有变更均写入审计。", "Choose a model for built-in management Agents and platform-created business Agents here. Model selection and activation are separate audited actions.")}</p><CursorPager pageSize={pageSize} page={cursorHistory.length} totalItems={totalItems} hasMore={Boolean(nextCursor)} loading={loading} onPageSize={changePageSize} onPrevious={previousPage} onNext={nextPage} text={text} /><DataTable headers={[text("智能体", "Agent"), text("来源", "Source"), text("状态", "Status"), text("模型配置", "LLM profile"), text("操作", "Action")]} rows={agents.map((item) => [<button type="button" className="table-link" onClick={() => setSelected(item)}>{String(item.agent_name || item.display_name || item.agent_id)}</button>, statusLabel(item.source), statusLabel(item.status), modelLabel(item.llm_profile_id), canManage ? <span className="actions-row"><button type="button" className="small-button" disabled={busy} onClick={() => setRequestedModelAgent(String(item.agent_id))}>{text("配置模型", "Configure model")}</button>{String(item.status).toUpperCase() !== "ACTIVE" && <><button type="button" className="small-button" disabled={busy || !profiles.length} onClick={() => void activate(item)} title={!profiles.length ? text("请先创建 LLM 服务商配置", "Create an LLM Provider Profile first") : text("激活智能体", "Activate Agent")}>{text("激活", "Activate")}</button>{!profiles.length && <small className="button-hint">{text("请先配置模型", "Configure a model first")}</small>}</>} </span> : statusLabel(item.activation_state)])} empty={text("暂无可见原生智能体", "No visible native Agents")} text={text} /><CursorPager pageSize={pageSize} page={cursorHistory.length} totalItems={totalItems} hasMore={Boolean(nextCursor)} loading={loading} onPageSize={changePageSize} onPrevious={previousPage} onNext={nextPage} text={text} /></InfoPanel>
       <InfoPanel title={text("业务智能体申请", "Business Agent request")} text={text}><p className="cx-form-hint">{text("申请不会直接创建运行中的智能体；社区版由管理员直接处理，企业版按职责分离审批。", "A request does not create a running Agent directly; Community is handled by an administrator, while Enterprise uses separated approval.")}</p><form className="configuration-form native-request-form" onSubmit={submitRequest}><ConfigField label={text("智能体名称", "Agent name")} hint={text("面向业务的可读名称。", "Readable business-facing name.")}><input name="agent_name" required /></ConfigField><ConfigField label={text("受管模板", "Managed template")} hint={text("模板是能力倾向、隔离要求和安全基线的受管选项，不会直接授予数据库、网络、Skill 或 Tool 权限。", "A template is a managed option for capability tendencies, isolation requirements, and security baselines; it does not directly grant database, network, Skill, or Tool authority.")}><select name="template_key" required onChange={changeRequestTemplate}>{templates.filter((item) => String(item.template_kind).toUpperCase() === "BUSINESS").map((item) => <option key={item.template_key} value={item.template_key}>{item.display_name}</option>)}</select></ConfigField><ConfigField label={text("负责人", "Owner")} hint={text("按名称搜索已有人员；默认选择当前用户。", "Search for an existing person by name; the current user is selected by default.")}><PrincipalPicker name="owner_principal_id" text={text} kind="HUMAN" required defaultValue={String(me?.principal_id || me?.profile?.principal_id || "")} defaultDisplayName={String(me?.display_name || me?.profile?.display_name || me?.profile?.username || "")} /></ConfigField><ConfigField label={text("LLM 配置", "LLM profile")} hint={text("可延后配置，但激活前必须绑定已批准配置。", "May be set later, but is mandatory before activation.")}><select name="provider_profile_id" defaultValue=""><option value="">{text("稍后配置", "Configure later")}</option>{profiles.map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_key}</option>)}</select></ConfigField><ConfigField label={text("部署目标", "Deployment target")} hint={text("选择受管运行时或已接入的目标。", "Choose a managed runtime or connected target.")}><select name="deployment_target_id" defaultValue="DT_LOCAL_MANAGED">{targets.map((item) => <option key={item.target_id} value={item.target_id}>{item.target_key} · {item.target_type}</option>)}</select></ConfigField><ConfigField label={text("隔离级别", "Isolation level")} hint={text("隔离范围由部署适配器和数据库授权共同执行。", "Enforced by the deployment adapter and database authorization.")}><select name="isolation_level" defaultValue="DOMAIN_ISOLATED"><option value="DOMAIN_ISOLATED" disabled={templateIsolation(requestTemplateKey) !== "DOMAIN_ISOLATED"}>{text("域隔离", "Domain isolated")}</option><option value="DEDICATED_CONTAINER" disabled={templateIsolation(requestTemplateKey) === "DEDICATED_RUNTIME"}>{text("专用容器", "Dedicated container")}</option><option value="DEDICATED_RUNTIME">{text("专用运行时", "Dedicated runtime")}</option></select></ConfigField><ConfigField label={text("数据分类", "Data classification")} hint={text("用于审批和后续治理策略。", "Used for approval and downstream governance.")}><select name="classification" defaultValue="INTERNAL"><option value="INTERNAL">{text("内部", "Internal")}</option><option value="CONFIDENTIAL">{text("机密", "Confidential")}</option><option value="RESTRICTED">{text("受限", "Restricted")}</option></select></ConfigField><ConfigField label={text("业务目的", "Business purpose")} hint={text("说明预期工作及获准访问范围。", "Describe intended work and approved access scope.")} multiline><textarea name="purpose" required /></ConfigField><ConfigField label={text("申请原因", "Request reason")} hint={text("写入审计记录，至少三个字符。", "Written to audit; at least three characters.")}><input name="reason" required /></ConfigField><ConfigField label={text("操作", "Action")} hint={text("提交后进入处理队列。", "Submits the request for processing.")} action><button className="primary-button" disabled={busy || !canEnroll}><Plus size={15} />{text("提交申请", "Submit request")}</button></ConfigField></form></InfoPanel>
       <InfoPanel title={text("申请与审批", "Requests and approvals")} text={text}><DataTable headers={[text("名称", "Name"), text("模板", "Template"), text("隔离", "Isolation"), text("状态", "Status"), text("操作", "Action")]} rows={requests.map((item) => [String(item.agent_name), String(item.template_key), displayRowValue(lang, item.isolation_level), statusLabel(item.status), String(item.status).toUpperCase() === "APPROVAL_PENDING" && canDecide ? <span className="actions-row"><button className="small-button" disabled={busy} onClick={() => void decide(item, "APPROVE")}>{text("批准", "Approve")}</button><button className="small-button" disabled={busy} onClick={() => void decide(item, "REJECT")}>{text("拒绝", "Reject")}</button></span> : statusLabel(item.decided_by || item.applicant_principal_id)])} empty={text("暂无可见申请", "No visible requests")} text={text} /></InfoPanel>
       <div className="native-contract-panels">
@@ -2514,8 +2480,8 @@ function NativeAgentsPage({
         <InfoPanel title={text("部署适配器契约", "Deployment adapter contract")} text={text}><p className="cx-form-hint">{text("以下是平台提供的参考生命周期，不代表已经内置客户专属虚拟化、SaaS、MaaS 或 Agent 平台连接器。连接器必须保留数据库授权、隔离、回调校验和审计边界。", "These are reference lifecycle contracts, not built-in customer-specific virtualization, SaaS, MaaS, or Agent connectors. Every connector must preserve database authorization, isolation, callback validation, and audit boundaries.")}</p><DataTable headers={[text("类型", "Type"), text("生命周期", "Lifecycle"), text("网络调用", "Network calls"), text("说明", "Note")]} rows={referenceAdapters.map((item) => [item.target_type, (item.lifecycle || []).join(" · "), item.network_calls ? text("允许", "Allowed") : text("不执行", "None"), item.security_note])} empty={text("暂无适配器契约", "No adapter contracts")} text={text} /></InfoPanel>
       </div>
     </>}
-    <DetailDrawer open={Boolean(configuringAgent)} title={text("配置内置智能体模型", "Configure built-in Agent model")} onClose={() => setConfiguringAgent(null)} text={text}>
-      {configuringAgent && canManage && <form className="cx-form native-agent-activation-form" onSubmit={async (event) => {
+    <DetailDrawer open={Boolean(configuringAgent)} title={text("配置 Agent 模型", "Configure Agent model")} onClose={() => { setConfiguringAgent(null); setRequestedModelAgent(""); }} text={text}>
+      {configuringAgent && canManage && !loading && <form key={`${configuringAgent.agent_id}-${configuringAgent.llm_profile_id || ""}`} className="cx-form native-agent-model-form" onSubmit={async (event) => {
         event.preventDefault();
         if (!canManage) return;
         const form = new FormData(event.currentTarget);
@@ -2524,16 +2490,18 @@ function NativeAgentsPage({
         if (!profileId || why.length < 3) return;
         setBusy(true);
         try {
-          await api(`/api/native-agents/${encodeURIComponent(String(configuringAgent.agent_id))}/activate`, { method: "POST", body: JSON.stringify({ llm_profile_id: profileId, reason: why }) });
-          await load(); setConfiguringAgent(null);
-          onNotice(text("模型配置已绑定，智能体已激活", "Model profile was bound and the Agent activated"));
+          await api(`/api/native-agents/${encodeURIComponent(String(configuringAgent.agent_id))}/model-profile`, { method: "POST", body: JSON.stringify({ llm_profile_id: profileId, expected_llm_profile_id: String(configuringAgent.llm_profile_id || ""), reason: why }) });
+          await load(); setConfiguringAgent(null); setRequestedModelAgent("");
+          onNotice(text("模型配置已保存，Agent 的运行状态保持不变。", "Model profile saved. The Agent's lifecycle state is unchanged."));
         } catch (error) { onNotice((error as Error).message); }
         finally { setBusy(false); }
       }}>
-        <p className="cx-form-hint">{text("选择已批准的 LLM 服务商配置。提交会绑定该配置并激活此内置管理智能体；操作可审计。", "Select an approved LLM Provider Profile. Submitting binds it and activates this built-in management Agent; the action is audited.")}</p>
-        <ConfigField label={text("LLM 服务商配置", "LLM Provider Profile")} hint={text("只能选择已批准且可用的模型配置。", "Only an approved and available model profile may be selected.")}><select name="llm_profile_id" required defaultValue={String(configuringAgent.llm_profile_id || "")}><option value="" disabled>{text("请选择", "Select a profile")}</option>{profiles.map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_key} · {item.model_id}</option>)}</select></ConfigField>
-        <ConfigField label={text("配置原因", "Configuration reason")} hint={text("至少三个字符，并写入审计记录。", "At least three characters and written to the audit record.")} multiline><textarea name="reason" required /></ConfigField>
-        <ConfigField label={text("操作", "Action")} hint={text("绑定配置后才会激活智能体。", "The Agent is activated only after the profile is bound.")} action><button className="primary-button" disabled={busy || !profiles.length}><Check size={15} />{text("配置并激活", "Configure and activate")}</button></ConfigField>
+        <p><strong>{configuringAgent.agent_name || configuringAgent.agent_id}</strong></p>
+        <p className="cx-form-hint">{text("后续执行将读取此 Agent 绑定的模型。保存不会激活 Agent，也不会调用模型；执行和发布仍会复核当前配置。", "Subsequent executions read this Agent's model binding. Saving neither activates the Agent nor calls a model; execution and publication still recheck current configuration.")}</p>
+        <p className="cx-form-hint">{text("当前模型：", "Current model: ")}{modelLabel(configuringAgent.llm_profile_id)}</p>
+        <ConfigField label={text("LLM 服务商配置", "LLM Provider Profile")} hint={text("只能选择已批准且可用的模型配置。", "Only an approved and available model profile may be selected.")}><select name="llm_profile_id" required defaultValue={String(configuringAgent.llm_profile_id || "")}><option value="" disabled>{text("请选择", "Select a profile")}</option>{configuringAgent.llm_profile_id && !profiles.some(item => item.profile_id === configuringAgent.llm_profile_id) && <option value={String(configuringAgent.llm_profile_id)} disabled>{text("当前配置不可用，请重新选择", "Current profile unavailable; select another")}</option>}{profiles.map((item) => <option key={item.profile_id} value={item.profile_id}>{item.profile_key} · {item.model_id}</option>)}</select></ConfigField>
+        <ConfigField label={text("配置原因", "Configuration reason")} hint={text("至少三个字符，并写入审计记录。", "At least three characters and written to the audit record.")} multiline><textarea name="reason" required minLength={3} maxLength={2000} /></ConfigField>
+        <ConfigField label={text("操作", "Action")} hint={text("仅保存此 Agent 的模型绑定；激活需单独操作。", "Save this Agent's model binding; activation is a separate action.")} action><button className="primary-button" disabled={busy || !profiles.length}><Check size={15} />{text("保存模型配置", "Save model profile")}</button></ConfigField>
         {!profiles.length && <p className="cx-form-hint">{text("请先前往“平台配置 → 运行管理 → LLM 服务商配置”创建并测试模型配置。", "First create and test a model profile in Platform configuration → Operations → LLM Provider Profiles.")}</p>}
       </form>}
     </DetailDrawer>
@@ -2556,82 +2524,40 @@ function MemoryLifecyclePage({
     ["overview", "library", "chain", "workbench", "jobs"],
     "overview",
   );
-  const [payload, setPayload] = useState<Row>({ nodes: [], edges: [] });
-  const [jobs, setJobs] = useState<Row[]>([]);
-  const [candidates, setCandidates] = useState<Row[]>([]);
-  const [policies, setPolicies] = useState<Row[]>([]);
   const [selected, setSelected] = useState<Row | null>(null);
-  const [chainData, setChainData] = useState<Row>({ nodes: [], relations: [] });
-  const [loading, setLoading] = useState(true);
   const [libraryMode, setLibraryMode] = useUrlState<"list" | "graph">(
     "library",
     ["list", "graph"],
     "list",
   );
-  const [libraryItems, setLibraryItems] = useState<Row[]>([]);
   const [libraryPageSize, setLibraryPageSize] = useState(20);
   const [libraryCursorHistory, setLibraryCursorHistory] = useState<string[]>([""]);
-  const [libraryNextCursor, setLibraryNextCursor] = useState("");
-  const [libraryTotalItems, setLibraryTotalItems] = useState<number | undefined>(undefined);
-  const load = async () => {
-    setLoading(true);
-    try {
-      const [memory, jobValue, candidateValue, policyValue] = await Promise.all([
-        api<Row>("/api/memory"), api<Row>("/api/memory/jobs"),
-        api<Row>("/api/memory/candidates"), api<Row>("/api/memory/policies"),
-      ]);
-      setPayload(memory);
-      setJobs(listPayload(jobValue, ["jobs"]));
-      setCandidates(listPayload(candidateValue, ["candidates"]));
-      setPolicies(listPayload(policyValue, ["policies"]));
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : text("加载记忆生命周期失败", "Memory lifecycle loading failed"));
-    } finally {
-      setLoading(false);
-    }
-  };
-  useEffect(() => { void load(); }, []);
-  const loadLibrary = async (cursor = libraryCursorHistory[libraryCursorHistory.length - 1] || "", size = libraryPageSize) => {
-    setLoading(true);
-    try {
-      const value = await api<Row>(`/api/memory/inventory?page_size=${size}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
-      setLibraryItems(listPayload(value, ["memories", "items"]));
-      setLibraryNextCursor(String(value.next_cursor || ""));
-      setLibraryTotalItems(typeof value.total_items === "number" ? value.total_items : undefined);
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : text("加载记忆库失败", "Memory Library loading failed"));
-    } finally {
-      setLoading(false);
-    }
-  };
-  useEffect(() => {
-    if (view === "library" && libraryMode === "list") void loadLibrary();
-  }, [view, libraryMode]);
-  const changeLibraryPageSize = (size: number) => {
-    setLibraryPageSize(size); setLibraryCursorHistory([""]); setLibraryNextCursor(""); void loadLibrary("", size);
-  };
-  const nextLibraryPage = () => {
-    if (!libraryNextCursor) return;
-    const history = [...libraryCursorHistory, libraryNextCursor];
-    setLibraryCursorHistory(history); void loadLibrary(libraryNextCursor);
-  };
-  const previousLibraryPage = () => {
-    if (libraryCursorHistory.length <= 1) return;
-    const history = libraryCursorHistory.slice(0, -1);
-    setLibraryCursorHistory(history); void loadLibrary(history[history.length - 1]);
-  };
-  const openChain = async (item: Row) => {
-    setSelected(item);
-    setChainData({});
-    setView("chain");
-    if (!item.family_id) return;
-    setLoading(true);
-    try {
-      setChainData(await api<Row>(`/api/memory/${encodeURIComponent(String(item.family_id))}/chain`));
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : text("读取记忆链失败", "Memory chain loading failed"));
-    } finally { setLoading(false); }
-  };
+  const libraryCursor = libraryCursorHistory[libraryCursorHistory.length - 1] || "";
+  const inventory = usePageResource<Row>(
+    view === "overview" || view === "chain" || view === "workbench" || view === "library" && libraryMode === "list"
+      ? `/api/memory/inventory?page_size=${view === "library" ? libraryPageSize : 20}${view === "library" && libraryCursor ? `&cursor=${encodeURIComponent(libraryCursor)}` : ""}` : null,
+    api, {},
+  );
+  const graph = usePageResource<Row>(view === "library" && libraryMode === "graph" ? "/api/memory?limit=50" : null, api, {});
+  const jobResource = usePageResource<Row>(view === "jobs" ? "/api/memory/jobs" : null, api, {});
+  const policyResource = usePageResource<Row>(view === "jobs" ? "/api/memory/policies" : null, api, {});
+  const candidateResource = usePageResource<Row>(view === "workbench" ? "/api/memory/candidates" : null, api, {});
+  const chain = usePageResource<Row>(view === "chain" && selected?.family_id ? `/api/memory/${encodeURIComponent(String(selected.family_id))}/chain` : null, api, {});
+  const libraryItems = listPayload(inventory.data, ["memories", "items"]);
+  const libraryNextCursor = String(inventory.data.next_cursor || "");
+  const libraryTotalItems = typeof inventory.data.total_items === "number" ? inventory.data.total_items : undefined;
+  const jobs = listPayload(jobResource.data, ["jobs"]);
+  const policies = listPayload(policyResource.data, ["policies"]);
+  const candidates = listPayload(candidateResource.data, ["candidates"]);
+  const payload = graph.data;
+  const chainData = chain.data;
+  const resources = [inventory, graph, jobResource, policyResource, candidateResource, chain];
+  const loading = resources.some(resource => resource.loading);
+  const load = () => { resources.forEach(resource => resource.reload()); };
+  const changeLibraryPageSize = (size: number) => { setLibraryPageSize(size); setLibraryCursorHistory([""]); };
+  const nextLibraryPage = () => { if (libraryNextCursor) setLibraryCursorHistory([...libraryCursorHistory, libraryNextCursor]); };
+  const previousLibraryPage = () => { if (libraryCursorHistory.length > 1) setLibraryCursorHistory(libraryCursorHistory.slice(0, -1)); };
+  const openChain = (item: Row) => { setSelected(item); setView("chain"); };
   const startJob = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget).entries());
@@ -2655,7 +2581,7 @@ function MemoryLifecyclePage({
       await load();
     } catch (error) { onNotice(error instanceof Error ? error.message : text("候选提交失败", "Candidate submission failed")); }
   };
-  const nodes = payload.nodes || [];
+  const nodes = libraryItems.map((item: Row) => ({...item, id: item.family_id || item.entity_id, label: item.title}));
   const tabs: [MemoryView, string, string, typeof Layers3][] = [
     ["overview", "概览", "Overview", Layers3], ["library", "记忆库", "Library", List],
     ["chain", "记忆链", "Chain", Network], ["workbench", "整理工作台", "Consolidation workbench", GitCompareArrows],
@@ -2670,21 +2596,22 @@ function MemoryLifecyclePage({
         <ViewToggle className="hierarchical-secondary-tabs" value={libraryMode} options={[["list", text("列表", "List"), List], ["graph", text("关系图", "Graph"), Network]]} onChange={(value) => setLibraryMode(value as "list" | "graph")} />
       </>}
     </div>
-    {loading && <PageLoading text={text} />}
-    {!loading && view === "overview" && <div className="cx-metric-grid">
-      <InfoPanel title={text("当前可用版本", "Current usable versions")} text={text}><strong className="metric-value">{nodes.length}</strong><p>{text("不包含已归档、隔离和逻辑不可用版本。", "Archived, quarantined, and logically unavailable versions are excluded.")}</p></InfoPanel>
-      <InfoPanel title={text("待复核候选", "Candidates awaiting review")} text={text}><strong className="metric-value">{candidates.filter((item) => item.status === "PENDING").length}</strong><p>{text("语义合并、替换、冲突与范围扩展需要受控复核。", "Semantic merge, replacement, conflict, and scope expansion remain governed.")}</p></InfoPanel>
-      <InfoPanel title={text("整理作业", "Consolidation jobs")} text={text}><strong className="metric-value">{jobs.length}</strong><p>{text("先预览影响，再执行受策略约束的整理。", "Preview impact before policy-governed organization work.")}</p></InfoPanel>
+    {resources.map((resource, index) => resource.error && <p role="alert" key={index}>{resource.error} <button type="button" className="small-button" onClick={resource.reload}>{text("重试", "Retry")}</button></p>)}
+    {view === "overview" && <div className="cx-metric-grid">
+      <InfoPanel title={text("当前记忆预览", "Current Memory preview")} text={text}>{inventory.loading ? <PageLoading text={text} /> : <><strong className="metric-value">{libraryItems.length}</strong><p>{text("已加载的授权条目（最多 20 条），不是全库总数。", "Authorized entries loaded (up to 20), not a library total.")}</p><button className="small-button" onClick={() => setView("library")}>{text(libraryNextCursor ? "还有更多，打开记忆库" : "打开记忆库", libraryNextCursor ? "More available — open Library" : "Open Library")}</button></>}</InfoPanel>
+      <InfoPanel title={text("待复核候选", "Candidates awaiting review")} text={text}><p>{text("打开整理工作台后加载候选；语义变更仍需受控复核。", "Candidates load in the workbench; semantic changes still require governed review.")}</p><button className="small-button" onClick={() => setView("workbench")}>{text("打开整理工作台", "Open workbench")}</button></InfoPanel>
+      <InfoPanel title={text("策略与作业", "Policies and jobs")} text={text}><p>{text("按需查看策略与作业，先预览影响，再受控执行。", "Load policies and jobs when needed; preview impact before governed execution.")}</p><button className="small-button" onClick={() => setView("jobs")}>{text("打开策略与作业", "Open policies and jobs")}</button></InfoPanel>
     </div>}
     {view === "library" && <>
-      {libraryMode === "graph" ? <NetworkGraph nodes={nodes} edges={payload.edges || []} lang={lang} title={text("记忆关系图", "Memory relationship graph")} loading={loading} text={text} onSelect={openChain} showFilters /> : <InfoPanel title={text("当前记忆库", "Current Memory library")} text={text}><p className="cx-form-hint">{text("点击条目查看可授权的版本链与关系；历史内容不会在此预加载。", "Click an item to inspect its authorized version chain and relationships; historical bodies are not preloaded here.")}</p>{!loading && <CursorPager pageSize={libraryPageSize} page={libraryCursorHistory.length} totalItems={libraryTotalItems} hasMore={Boolean(libraryNextCursor)} loading={loading} onPageSize={changeLibraryPageSize} onPrevious={previousLibraryPage} onNext={nextLibraryPage} text={text} />}{loading ? <PageLoading text={text} /> : <DataTable headers={[text("标题", "Title"), text("类型", "Type"), text("范围", "Scope"), text("状态", "State"), text("版本", "Version")]} rows={libraryItems.map((item: Row) => [<button className="text-button" onClick={() => void openChain(item)}>{displayRowValue(lang, item.title || item.label)}</button>, displayRowValue(lang, item.memory_type || item.category), displayRowValue(lang, item.memory_scope), displayRowValue(lang, item.lifecycle_state), item.version_number || "-"])} empty={text("当前权限范围内没有可用记忆", "No usable Memory is visible in the current authorization scope")} text={text} />}{!loading && <CursorPager pageSize={libraryPageSize} page={libraryCursorHistory.length} totalItems={libraryTotalItems} hasMore={Boolean(libraryNextCursor)} loading={loading} onPageSize={changeLibraryPageSize} onPrevious={previousLibraryPage} onNext={nextLibraryPage} text={text} />}</InfoPanel>}
+      {libraryMode === "graph" && <p className="cx-form-hint">{text("显示最多 50 条当前授权记忆及其相邻的授权版本关系，不是全库图或全库总数。历史节点仅显示元数据。", "Shows up to 50 current authorized Memories and adjacent authorized versions, not the entire library or its total. Historical nodes contain metadata only.")}</p>}
+      {libraryMode === "graph" ? <NetworkGraph nodes={payload.nodes || []} edges={payload.edges || []} lang={lang} title={text("记忆关系图", "Memory relationship graph")} loading={loading} text={text} onSelect={openChain} showFilters /> : <InfoPanel title={text("当前记忆库", "Current Memory library")} text={text}><p className="cx-form-hint">{text("点击条目查看可授权的版本链与关系；历史内容不会在此预加载。", "Click an item to inspect its authorized version chain and relationships; historical bodies are not preloaded here.")}</p>{!loading && <CursorPager pageSize={libraryPageSize} page={libraryCursorHistory.length} totalItems={libraryTotalItems} hasMore={Boolean(libraryNextCursor)} loading={loading} onPageSize={changeLibraryPageSize} onPrevious={previousLibraryPage} onNext={nextLibraryPage} text={text} />}{loading ? <PageLoading text={text} /> : <DataTable headers={[text("标题", "Title"), text("类型", "Type"), text("范围", "Scope"), text("状态", "State"), text("版本", "Version")]} rows={libraryItems.map((item: Row) => [<button className="text-button" onClick={() => void openChain(item)}>{displayRowValue(lang, item.title || item.label)}</button>, displayRowValue(lang, item.memory_type || item.category), displayRowValue(lang, item.memory_scope), displayRowValue(lang, item.lifecycle_state), item.version_number || "-"])} empty={text("当前权限范围内没有可用记忆", "No usable Memory is visible in the current authorization scope")} text={text} />}{!loading && <CursorPager pageSize={libraryPageSize} page={libraryCursorHistory.length} totalItems={libraryTotalItems} hasMore={Boolean(libraryNextCursor)} loading={loading} onPageSize={changeLibraryPageSize} onPrevious={previousLibraryPage} onNext={nextLibraryPage} text={text} />}</InfoPanel>}
     </>}
-    {!loading && view === "chain" && <>
+    {view === "chain" && <>
       <InfoPanel title={text("记忆链", "Memory chain")} text={text}><p className="cx-form-hint">{text("链路使用有界关系遍历。推断关系是证据，不构成授权或事实权威。", "Chains use bounded traversal. Inferred relations are evidence, not authority or authorization.")}</p></InfoPanel>
       <label>{text("记忆条目", "Memory")}<select aria-label={text("记忆条目", "Memory")} value={selected?.family_id || ""} onChange={(event) => { const item = nodes.find((node: Row) => node.family_id === event.target.value); if (item) void openChain(item); }}><option value="">{text("请选择记忆", "Select a memory")}</option>{nodes.map((node: Row) => <option key={node.id} value={node.family_id}>{node.title || node.label}</option>)}</select></label>
-      <NetworkGraph nodes={(chainData.nodes || []).map((node: Row) => ({ ...node, id: node.version_id, label: node.title, entity_type: "MEMORY" }))} edges={(chainData.relations || []).map((item: Row) => ({ id: item.relation_id, from: item.source_version_id, to: item.target_version_id, label: item.relation_type, value: item.confidence || 1 }))} lang={lang} title={selected?.title || text("选择一条记忆", "Select a memory")} loading={false} text={text} onSelect={() => undefined} compact showFilters />
+      <NetworkGraph nodes={(chainData.nodes || []).map((node: Row) => ({ ...node, id: node.version_id, label: node.title, entity_type: "MEMORY" }))} edges={(chainData.relations || []).map((item: Row) => ({ id: item.relation_id, from: item.source_version_id, to: item.target_version_id, label: item.relation_type, value: item.confidence || 1 }))} lang={lang} title={selected?.title || text("选择一条记忆", "Select a memory")} loading={chain.loading} text={text} onSelect={() => undefined} compact showFilters />
     </>}
-    {!loading && view === "workbench" && <div className="cx-memory-workbench">
+    {view === "workbench" && <div className="cx-memory-workbench">
       <InfoPanel title={text("受控候选", "Governed candidate")} text={text}>
         <p className="cx-form-hint">{text("候选只进入复核队列，不会自动替换当前记忆。置信度仅用于排序，范围为 0 至 1。", "Candidates enter review only and never replace current Memory automatically. Confidence ranks review priority from 0 to 1.")}</p>
         <form className="workbench-form" onSubmit={propose}>
@@ -2706,7 +2633,8 @@ function MemoryLifecyclePage({
         </form>
       </InfoPanel>
     </div>}
-    {!loading && view === "jobs" && <><InfoPanel title={text("有效策略", "Effective policies")} text={text}><p className="cx-form-hint">{text("策略版本约束作业的可执行范围；策略本身不直接修改记忆。", "Policy versions constrain job execution scope; a policy does not modify Memory by itself.")}</p><DataTable headers={[text("名称", "Name"), text("版本", "Version"), text("状态", "State")]} rows={policies.map((item) => [item.policy_name, item.policy_version, item.status])} empty={text("没有可见策略", "No policy is visible")} text={text} /></InfoPanel><InfoPanel title={text("作业队列", "Job queue")} text={text}><p className="cx-form-hint">{text("作业先入队，再由持有有效租约的 Worker 处理；状态变化保留在数据库审计链中。", "Jobs queue first, then a Worker with a valid lease processes them; state changes remain in the database audit chain.")}</p><DataTable headers={[text("类型", "Type"), text("状态", "State"), text("模式", "Mode"), text("创建时间", "Created")]} rows={jobs.map((item) => [item.job_type, item.status, ["Y", "TRUE", "1"].includes(String(item.dry_run).toUpperCase()) ? text("仅预览", "Preview-only") : text("执行", "Execution"), displayRowValue(lang, item.created_at)])} empty={text("没有记忆作业", "No Memory jobs")} text={text} /></InfoPanel></>}
+    {view === "jobs" && <><InfoPanel title={text("有效策略", "Effective policies")} text={text}><p className="cx-form-hint">{text("策略版本约束作业的可执行范围；策略本身不直接修改记忆。", "Policy versions constrain job execution scope; a policy does not modify Memory by itself.")}</p>{policyResource.loading && <PageLoading text={text} />}<DataTable headers={[text("名称", "Name"), text("版本", "Version"), text("状态", "State")]} rows={policies.map((item) => [item.policy_name, item.policy_version, item.status])} empty={text("没有可见策略", "No policy is visible")} text={text} /></InfoPanel><InfoPanel title={text("作业队列", "Job queue")} text={text}><p className="cx-form-hint">{text("作业先入队，再由持有有效租约的 Worker 处理；状态变化保留在数据库审计链中。", "Jobs queue first, then a Worker with a valid lease processes them; state changes remain in the database audit chain.")}</p>{jobResource.loading && <PageLoading text={text} />}<DataTable headers={[text("类型", "Type"), text("状态", "State"), text("模式", "Mode"), text("创建时间", "Created")]} rows={jobs.map((item) => [item.job_type, item.status, ["Y", "TRUE", "1"].includes(String(item.dry_run).toUpperCase()) ? text("仅预览", "Preview-only") : text("执行", "Execution"), displayRowValue(lang, item.created_at)])} empty={text("没有记忆作业", "No Memory jobs")} text={text} /></InfoPanel></>}
+    {view === "workbench" && <InfoPanel title={text("候选队列", "Candidate queue")} text={text}><p className="cx-form-hint">{text("显示本次返回的授权候选；候选不会自动替换正式记忆。", "Shows authorized candidates returned in this response; candidates do not automatically replace Memory.")}</p>{candidateResource.loading ? <PageLoading text={text} /> : <DataTable headers={[text("类型", "Type"), text("状态", "State"), text("原因", "Reason")]} rows={candidates.map((item: Row) => [displayRowValue(lang, item.candidate_type), displayRowValue(lang, item.status), item.reason || "-"])} empty={text("暂无可见候选", "No candidates are visible")} text={text} />}</InfoPanel>}
   </section>;
 }
 
@@ -3250,10 +3178,7 @@ function DataPage({
   onNotice: (value: string) => void;
 }) {
   const config = dataPageConfigs[page] || dataPageConfigs.tasks;
-  const [items, setItems] = useState<Row[]>([]);
-  const [graphData, setGraphData] = useState<Row>({ nodes: [], edges: [] });
   const [detail, setDetail] = useState<Row | null>(null);
-  const [loading, setLoading] = useState(true);
   const [view, setView] = useUrlState<"list" | "graph">(
     "view",
     ["list", "graph"],
@@ -3261,37 +3186,21 @@ function DataPage({
   );
   const [pageSize, setPageSize] = useState(20);
   const [cursorHistory, setCursorHistory] = useState<string[]>([""]);
-  const [nextCursor, setNextCursor] = useState("");
-  const [totalItems, setTotalItems] = useState<number | undefined>(undefined);
   const [knowledgePolicy, setKnowledgePolicy] = useState<Row | null>(null);
   const [knowledgeOrganizations, setKnowledgeOrganizations] = useState<Row[]>([]);
-  const load = async (cursor = cursorHistory[cursorHistory.length - 1] || "", size = pageSize) => {
-    setLoading(true);
-    try {
-      const separator = config.endpoint.includes("?") ? "&" : "?";
-      const value = await api<Row>(`${config.endpoint}${separator}page_size=${size}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
-      setItems(listPayload(value, [...(config.payloadKeys || []), "nodes"]));
-      setNextCursor(String(value.next_cursor || ""));
-      setTotalItems(typeof value.total_items === "number" ? value.total_items : undefined);
-      if (visual) {
-        const graph = await api<Row>(page === "knowledge" ? "/api/knowledge?limit=200" : "/api/memory");
-        setGraphData({ nodes: graph.nodes || [], edges: graph.edges || [] });
-      } else {
-        setGraphData({ nodes: value.nodes || [], edges: value.edges || [] });
-      }
-    } catch (error) {
-      onNotice(
-        error instanceof Error
-          ? error.message
-          : text("加载失败", "Loading failed"),
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-  useEffect(() => {
-    void load();
-  }, [config.endpoint]);
+  const visual = ["knowledge", "memory"].includes(page);
+  const cursor = cursorHistory[cursorHistory.length - 1] || "";
+  const separator = config.endpoint.includes("?") ? "&" : "?";
+  const endpoint = visual && view === "graph"
+    ? (page === "knowledge" ? "/api/knowledge?limit=200" : "/api/memory?limit=50")
+    : `${config.endpoint}${separator}page_size=${pageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+  const resource = usePageResource<Row>(endpoint, api, {});
+  const items = listPayload(resource.data, [...(config.payloadKeys || []), "nodes"]);
+  const graphData = {nodes: resource.data.nodes || [], edges: resource.data.edges || []};
+  const nextCursor = String(resource.data.next_cursor || "");
+  const totalItems = typeof resource.data.total_items === "number" ? resource.data.total_items : undefined;
+  const loading = resource.loading;
+  const load = () => resource.reload();
   useEffect(() => {
     if (page !== "knowledge" || !detail) {
       setKnowledgePolicy(null);
@@ -3310,19 +3219,9 @@ function DataPage({
       setKnowledgeOrganizations([]);
     });
   }, [page, detail]);
-  const changePageSize = (value: number) => {
-    setPageSize(value); setCursorHistory([""]); setNextCursor(""); void load("", value);
-  };
-  const nextPage = () => {
-    if (!nextCursor) return;
-    const history = [...cursorHistory, nextCursor];
-    setCursorHistory(history); void load(nextCursor);
-  };
-  const previousPage = () => {
-    if (cursorHistory.length <= 1) return;
-    const history = cursorHistory.slice(0, -1);
-    setCursorHistory(history); void load(history[history.length - 1]);
-  };
+  const changePageSize = (size: number) => { setPageSize(size); setCursorHistory([""]); };
+  const nextPage = () => { if (nextCursor) setCursorHistory([...cursorHistory, nextCursor]); };
+  const previousPage = () => { if (cursorHistory.length > 1) setCursorHistory(cursorHistory.slice(0, -1)); };
   const rows = items.map((row) =>
     config.fields.map((fields, index) => {
       const value = displayRowValue(lang, rowField(row, fields));
@@ -3339,7 +3238,6 @@ function DataPage({
     page === "knowledge"
       ? text("知识图谱", "Knowledge graph")
       : text("记忆图谱", "Memory graph");
-  const visual = ["knowledge", "memory"].includes(page);
   return (
     <section>
       <SectionHeading
@@ -3347,6 +3245,7 @@ function DataPage({
         subtitle={text(config.subtitle[0], config.subtitle[1])}
         text={text}
       />
+      {resource.error && <p role="alert">{resource.error} <button className="small-button" onClick={resource.reload}>{text("重试", "Retry")}</button></p>}
       {page === 'knowledge' && <PlatformLearning request={api} text={text} />}
       {visual && (
         <ViewToggle
@@ -3358,6 +3257,7 @@ function DataPage({
           onChange={(value) => setView(value as "list" | "graph")}
         />
       )}{" "}
+      {visual && view === "graph" && <p className="cx-form-hint">{text(page === "knowledge" ? "显示最多 200 条授权知识及窗口内关系，不是全库图或全库总数。" : "显示最多 50 条当前授权记忆及相邻授权版本，不是全库图或全库总数。", page === "knowledge" ? "Shows up to 200 authorized Knowledge entries and relationships within this window, not the entire library or its total." : "Shows up to 50 current authorized Memories and adjacent authorized versions, not the entire library or its total.")}</p>}
       {visual && view === "graph" ? (
         <NetworkGraph
           nodes={graphData.nodes || []}
@@ -6272,7 +6172,7 @@ function AgentsPage({
       sourceCategory(item) === "PLATFORM" ? text("平台生成", "Platform-generated") : text("外部注册", "External"),
       displayRowValue(lang, item.status),
       displayRowValue(lang, item.relationship_role || item.db_status || "-"),
-      controls,
+      <span className="row-actions">{sourceCategory(item) === "PLATFORM" && canAction(capabilities, "platform.manage") && canAction(capabilities, "agents.manage") && <button type="button" className="small-button" onClick={() => { const url = new URL(window.location.href); url.searchParams.set("view", "native"); url.searchParams.set("configure_agent", String(item.agent_id)); window.history.pushState({}, "", url); window.dispatchEvent(new PopStateEvent("popstate")); }}>{text("配置模型", "Configure model")}</button>}{controls}</span>,
     ];
   });
   const agentViews: [string, string, React.ComponentType<{ size?: number }>?][] = [
@@ -6393,34 +6293,61 @@ function SecurityDomainsPage({
   const [bindings, setBindings] = useState<Row[]>([]);
   const [draft, setDraft] = useState<Row | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialLoad, setInitialLoad] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [filters, setFilters] = useState({ query: "", classification: "", status: "" });
+  const [atLimit, setAtLimit] = useState(false);
+  const [inventoryError, setInventoryError] = useState("");
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [groupRefresh, setGroupRefresh] = useState(0);
+  const inventoryGeneration = useRef(0);
+  const detailGeneration = useRef(0);
 
   const loadSelected = async (domain: Row) => {
+    const generation = ++detailGeneration.current;
+    setMembers([]); setBindings([]); setDetailsLoading(true);
     const id = encodeURIComponent(String(domain.security_domain_id));
-    const [memberValue, bindingValue] = await Promise.all([
-      api<Row>(`/api/security-domains/${id}/members`),
-      api<Row>(`/api/security-domains/${id}/bindings`),
-    ]);
-    setMembers(memberValue.items || []);
-    setBindings(bindingValue.items || []);
+    try {
+      const [memberValue, bindingValue] = await Promise.all([
+        api<Row>(`/api/security-domains/${id}/members`),
+        api<Row>(`/api/security-domains/${id}/bindings`),
+      ]);
+      if (generation !== detailGeneration.current) return;
+      setMembers(memberValue.items || []); setBindings(bindingValue.items || []);
+    } catch (error) {
+      if (generation === detailGeneration.current) onNotice((error as Error).message);
+    } finally { if (generation === detailGeneration.current) setDetailsLoading(false); }
   };
   const load = async () => {
+    const generation = ++inventoryGeneration.current;
     setLoading(true);
+    setInventoryError("");
     try {
-      const [domainValue, groupValue] = await Promise.all([
-        api<Row>("/api/security-domains?limit=300&include_inactive=true"),
-        api<Row>("/api/security-domains/collaboration-groups?limit=300"),
-      ]);
+      const params = new URLSearchParams({ limit: "300", include_inactive: "true", query: filters.query.trim(), classification: filters.classification, domain_status: filters.status });
+      const domainValue = await api<Row>(`/api/security-domains?${params}`);
+      if (generation !== inventoryGeneration.current) return;
       const next = domainValue.items || [];
-      setDomains(next); setGroups(groupValue.items || []);
-      if (!selected && next[0]) setSelected(next[0]);
+      setDomains(next); setAtLimit(Boolean(domainValue.at_limit));
+      setSelected(previous => next.find((item: Row) => item.security_domain_id === previous?.security_domain_id) || next[0] || null);
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : text("安全域数据加载失败", "Security Domain data could not be loaded"));
-    } finally { setLoading(false); }
+      if (generation === inventoryGeneration.current) { setDomains([]); setSelected(null); setInventoryError(error instanceof Error ? error.message : text("安全域数据加载失败", "Security Domain data could not be loaded")); }
+    } finally { if (generation === inventoryGeneration.current) { setLoading(false); setInitialLoad(false); } }
   };
-  useEffect(() => { void load(); }, []);
-  useEffect(() => { if (selected) void loadSelected(selected); }, [selected]);
-  const refresh = async () => { await load(); if (selected) await loadSelected(selected); };
+  useEffect(() => {
+    inventoryGeneration.current++; setLoading(true); setDomains([]); setSelected(null);
+    const timer = window.setTimeout(() => void load(), 250);
+    return () => { window.clearTimeout(timer); inventoryGeneration.current++; };
+  }, [filters]);
+  useEffect(() => {
+    let current = true;
+    void api<Row>("/api/security-domains/collaboration-groups?limit=300").then(value => { if (current) setGroups(value.items || []); }).catch(error => { if (current) onNotice((error as Error).message); });
+    return () => { current = false; };
+  }, [groupRefresh]);
+  useEffect(() => {
+    if (selected) void loadSelected(selected);
+    else { setMembers([]); setBindings([]); setDetailsLoading(false); }
+    return () => { detailGeneration.current++; };
+  }, [selected]);
   const createDomain = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true);
     const form = event.currentTarget;
@@ -6444,7 +6371,7 @@ function SecurityDomainsPage({
     try {
       const data = Object.fromEntries(new FormData(event.currentTarget).entries());
       await api(`/api/security-domains/${encodeURIComponent(String(selected.security_domain_id))}/bindings`, { method: "POST", body: JSON.stringify({ ...data, binding_type: "LEGACY_COLLAB_GROUP" }) });
-      await loadSelected(selected); await load(); onNotice(text("协作组已完成受控绑定，历史成员和共享策略未被转换为权限。", "Collaboration group bound under governance; historic members and sharing policy were not converted into authority."));
+      await loadSelected(selected); await load(); setGroupRefresh(previous => previous + 1); onNotice(text("协作组已完成受控绑定，历史成员和共享策略未被转换为权限。", "Collaboration group bound under governance; historic members and sharing policy were not converted into authority."));
     } catch (error) { onNotice(error instanceof Error ? error.message : text("协作组绑定失败", "Collaboration group binding failed")); }
     finally { setBusy(false); }
   };
@@ -6475,16 +6402,26 @@ function SecurityDomainsPage({
     setBusy(true);
     try {
       const result = await api<Row>(`/api/security-domains/conversion-drafts/${encodeURIComponent(String(draft.draft_id))}/apply`, { method: "POST", body: JSON.stringify({ reason }) });
+      setGroupRefresh(previous => previous + 1);
       await load(); setDraft(await api<Row>(`/api/security-domains/conversion-drafts/${encodeURIComponent(String(draft.draft_id))}`));
       onNotice(text(`转换已应用，已确认 ${result.confirmed_members || 0} 位主体。`, `Conversion applied with ${result.confirmed_members || 0} confirmed Principal(s).`));
     } catch (error) { onNotice(error instanceof Error ? error.message : text("转换草稿应用失败", "Conversion draft could not be applied")); }
     finally { setBusy(false); }
   };
-  if (loading) return <section><SectionHeading title={text("安全域", "Security Domains")} subtitle={text("定义人、智能体、频道与协作组的零信任边界。", "Define zero-trust boundaries for Humans, Agents, Channels, and collaboration groups.")} text={text} /><PageLoading text={text} /></section>;
+  if (initialLoad) return <section><SectionHeading title={text("安全域", "Security Domains")} subtitle={text("定义人、智能体、频道与协作组的零信任边界。", "Define zero-trust boundaries for Humans, Agents, Channels, and collaboration groups.")} text={text} /><PageLoading text={text} /></section>;
   return <section>
     <SectionHeading title={text("安全域", "Security Domains")} subtitle={text("安全域是授权边界；频道与协作组只在该边界内协作，不能由消息、提示词或历史成员关系扩大权限。", "A Security Domain is the authorization boundary. Channels and collaboration groups work inside it; messages, prompts, and historical membership never expand authority.")} text={text} />
     <div className="domain-page-grid">
       <InfoPanel title={text("安全域清单", "Security Domain inventory")} text={text}>
+        <div className="domain-inventory-filters">
+          <label className="inline-field domain-keyword"><span>{text("名称或 ID", "Name or ID")}</span><input type="search" value={filters.query} maxLength={256} placeholder={text("搜索安全域", "Search Security Domains")} onChange={event => setFilters(previous => ({ ...previous, query: event.target.value }))} /></label>
+          <label className="inline-field"><span>{text("数据分级", "Classification")}</span><select aria-label={text("数据分级", "Classification")} value={filters.classification} onChange={event => setFilters(previous => ({ ...previous, classification: event.target.value }))}><option value="">{text("全部分级", "All classifications")}</option>{["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].map(value => <option key={value} value={value}>{displayRowValue(lang, value)}</option>)}</select></label>
+          <label className="inline-field"><span>{text("状态", "Status")}</span><select aria-label={text("状态", "Status")} value={filters.status} onChange={event => setFilters(previous => ({ ...previous, status: event.target.value }))}><option value="">{text("全部可见状态", "All visible statuses")}</option>{["DRAFT", "ACTIVE", "SUSPENDED", "REVOKED"].map(value => <option key={value} value={value}>{displayRowValue(lang, value)}</option>)}</select></label>
+          <div className="row-actions"><button type="button" className="small-button" disabled={!filters.query && !filters.classification && !filters.status} onClick={() => setFilters({ query: "", classification: "", status: "" })}>{text("清空筛选", "Clear filters")}</button><button type="button" className="small-button" disabled={loading} onClick={() => void load()}>{text("刷新", "Refresh")}</button></div>
+        </div>
+        <p className="cx-form-hint" aria-live="polite">{loading ? text("正在筛选…", "Filtering…") : atLimit ? text("已显示前 300 条匹配项，请收窄筛选范围。", "Showing the first 300 matches. Narrow the filters to find more.") : text(`找到 ${domains.length} 个可见安全域`, `${domains.length} visible Security Domain(s) found`)}</p>
+        {inventoryError && <p role="alert">{inventoryError}</p>}
+        {!loading && !inventoryError && !domains.length && <p className="empty-text">{text("没有符合筛选条件的安全域。", "No Security Domains match these filters.")}</p>}
         <div className="domain-list">{domains.map((item) => <button key={item.security_domain_id} className={`list-row ${selected?.security_domain_id === item.security_domain_id ? "active" : ""}`} onClick={() => setSelected(item)}><span><b>{item.domain_name}</b><small>{item.security_domain_id} · {displayRowValue(lang, item.classification)} · {displayRowValue(lang, item.status)}</small></span><span className="tag">{item.member_count ?? 0}</span></button>)}</div>
       </InfoPanel>
       <InfoPanel title={text("创建项目安全域", "Create project Security Domain")} text={text}>
@@ -6502,6 +6439,7 @@ function SecurityDomainsPage({
     </div>
     {selected && <div className="domain-detail-grid">
       <InfoPanel title={`${text("成员与有效期", "Members and validity")} · ${selected.domain_name}`} text={text}>
+        {detailsLoading && <p role="status">{text("正在加载所选安全域详情…", "Loading selected Domain details…")}</p>}
         <p className="cx-form-hint">{text("主体必须先成为安全域成员，才能被加入频道或以该安全域运行。暂停或撤销会在下一次受保护操作时阻断访问。", "A Principal must enter the Security Domain before Channel admission or runtime use. Suspension or revocation blocks access at the next guarded operation.")}</p>
         <div className="member-list">{members.map((item) => <div className="member-row" key={item.membership_id}><span><b>{item.display_name || item.principal_id}</b><small>{displayRowValue(lang, item.principal_type)} · {displayRowValue(lang, item.membership_tier)} · {displayRowValue(lang, item.status)}</small></span><span className="tag">{item.valid_until ? String(item.valid_until) : text("长期", "No expiry")}</span></div>)}</div>
         <form className="domain-inline-form domain-member-form" onSubmit={updateMember}>
@@ -6805,10 +6743,18 @@ function Channels({
       void loadSelected(selected);
       const dispatches = Array.isArray(result.agent_dispatches) ? result.agent_dispatches : [];
       const dispatchErrors = Array.isArray(result.agent_dispatch_errors) ? result.agent_dispatch_errors : [];
+      const rawDispatchReason = String(dispatchErrors[0]?.reason || "");
+      const dispatchReason = rawDispatchReason === "COMMAND_REASON_REQUIRED"
+        ? text("命令原因至少需要 3 个字符；只读命令也可省略原因。请补充后重新发送命令。", "The command reason requires at least 3 characters. Read-only commands may omit it. Correct the command before sending again.")
+        : rawDispatchReason.startsWith("COMMAND_PARAMETER_REQUIRED")
+        ? text("命令缺少必填参数，请查看“平台命令”中的格式后重新发送。", "A required command parameter is missing. Check its syntax under Platform commands before sending again.")
+        : rawDispatchReason === "UNKNOWN_PLATFORM_COMMAND"
+        ? text("未找到该命令，请从“平台命令”中选择，或使用 /platform HELP。", "Unknown command. Choose a Platform command or use /platform HELP.")
+        : rawDispatchReason || text("未就绪", "not ready");
       const message = dispatches.length
         ? text(`消息已发送，已派发给 ${dispatches.length} 个智能体，正在等待回复。`, `Message sent and dispatched to ${dispatches.length} Agent(s); awaiting responses.`)
         : dispatchErrors.length
-        ? text(`消息已写入审计，但智能体暂未派发：${String(dispatchErrors[0]?.reason || "未就绪")}`, `Message was recorded, but Agent dispatch is unavailable: ${String(dispatchErrors[0]?.reason || "not ready")}`)
+        ? text(`消息已保存，命令或智能体未执行：${dispatchReason}`, `Message saved; command or Agent was not executed: ${dispatchReason}`)
         : mentions.length
         ? text(`消息已发送，已提及 ${mentions.length} 位频道成员。`, `Message sent; mentioned ${mentions.length} Channel member(s).`)
         : text("消息已发送并已写入审计。", "Message sent and recorded in audit.");
@@ -7208,6 +7154,7 @@ function Channels({
             >
               <div className="platform-command-panel">
                 <div className="subhead"><b>{text("可用平台命令", "Available platform commands")}</b></div>
+                <p className="cx-form-hint">{text("只读命令可省略原因；如填写，至少需要 3 个字符。变更命令须提供完整参数和原因，并遵守审批要求。", "Read-only commands may omit the reason; when supplied it requires at least 3 characters. Change commands require complete parameters, a reason, and any required approvals.")}</p>
                 {(commandCatalog || []).map((item) => (
                   <button type="button" key={String(item.command_id)} onClick={() => insertCommand(item)}>
                     <span>
@@ -9420,7 +9367,7 @@ function LegacyOperations({
           <label className="workbench-field"><span>{text("工作区 ID", "Workspace ID")}</span><input name="workspace_id" required /><small>{text("指定新分支所属的工作区。", "Sets the workspace that owns the new Branch.")}</small></label>
           <label className="workbench-field"><span>{text("起始上下文 ID", "Fork context ID")}</span><input name="fork_context_id" /><small>{text("可选；指定从哪一条上下文开始分叉。", "Optional; identifies the context from which to fork.")}</small></label>
           <label className="workbench-field"><span>{text("分支名称", "Branch name")}</span><input name="branch_name" required /><small>{text("用于列表和审计中的可读标识。", "A readable identifier for lists and audit.")}</small></label>
-          <label className="workbench-field"><span>{text("分支类型", "Branch type")}</span><select name="branch_type" defaultValue="EXPERIMENT"><option value="EXPERIMENT">{text("实验", "Experiment")}</option><option value="HANDOFF">{text("移交", "Handoff")}</option><option value="PARALLEL">{text("并行", "Parallel")}</option></select><small>{text("说明分支的协作意图，不授予额外权限。", "Records collaboration intent; it grants no extra authority.")}</small></label>
+          <label className="workbench-field"><span>{text("分支类型", "Branch type")}</span><select name="branch_type" defaultValue="EXPLORATION"><option value="EXPLORATION">{text("探索", "Exploration")}</option><option value="HANDOFF">{text("移交", "Handoff")}</option><option value="PARALLEL">{text("并行", "Parallel")}</option></select><small>{text("说明分支的协作意图，不授予额外权限。", "Records collaboration intent; it grants no extra authority.")}</small></label>
           <label className="workbench-field"><span>{text("目标智能体", "Target Agent")}</span><PrincipalPicker name="agent_id" text={text} kind="AGENT" required /><small>{text("指定承载该分支的智能体。", "Sets the Agent responsible for this Branch.")}</small></label>
           <label className="workbench-field"><span>{text("源智能体", "Source Agent")}</span><PrincipalPicker name="source_agent_id" text={text} kind="AGENT" /><small>{text("可选；记录来源智能体，便于交接追溯。", "Optional; records the source Agent for handoff traceability.")}</small></label>
           <label className="workbench-field"><span>{text("分支目的", "Branch purpose")}</span><input name="purpose" required /><small>{text("写入审计记录，说明为何需要该分支。", "Written to audit records to explain the Branch.")}</small></label>

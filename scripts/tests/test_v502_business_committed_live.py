@@ -20,8 +20,9 @@ from lib import db4a2a, graph_compat, graph_runtime, loop_api, processing_graph
 from lib import processing_recovery, task_plan_api, workspace_api
 from .release_target import classified_current_target
 
-pytestmark = pytest.mark.skipif(os.environ.get('CX_V502_NATIVE_BUSINESS_LIVE') != '1',
-    reason='explicit exact classified v5.0.2 native business acceptance required')
+pytestmark = pytest.mark.skipif(
+    os.environ.get('CX_V502_NATIVE_BUSINESS_LIVE') != '1' and os.environ.get('CX_NATIVE_BUSINESS_LIVE') != '1',
+    reason='explicit exact classified native business acceptance required')
 
 
 def one(sql, params=None):
@@ -44,9 +45,17 @@ def native_agent(agent):
 
 @pytest.fixture
 def business(record_property):
-    assert classified_current_target()
     from lib.product_identity import read_manifest
-    assert read_manifest()['version'] == '5.0.2'
+    if os.environ.get('CX_NATIVE_BUSINESS_LIVE') == '1':
+        from pathlib import Path
+        from version_validation_runtime import selected
+        package, target, _state, version = selected()
+        assert version == '5.0.5' and read_manifest()['version'] == version
+        assert target['classification'] == 'temporary'
+        assert Path(connection.__file__).resolve().is_relative_to(package/'scripts')
+    else:
+        assert classified_current_target()
+        assert read_manifest()['version'] == '5.0.2'
     assert processing_recovery.schema_enabled(), 'Never disable current processing for native acceptance'
     assert connection.get_current_agent_id() is None
     humans = connection.execute_query("SELECT PRINCIPAL_ID FROM CX_PRINCIPALS WHERE PRINCIPAL_TYPE='HUMAN' AND STATUS='ACTIVE'")
@@ -190,6 +199,33 @@ def test_native_db4a2a_domain_revocation_denies_effect_without_budget_reset(busi
     assert dispatch_budget(dispatch) == before
     assert one('SELECT CHILD_BRANCH_ID FROM CX_DB4A2A_DISPATCHES WHERE DISPATCH_ID=:dispatch',
                {'dispatch':dispatch['dispatch_id']})['child_branch_id'] is None
+
+
+def test_native_pg_context_self_read_does_not_open_other_rows_or_writes(business):
+    if connection.DATABASE_DIALECT not in {'pg','postgres','postgresql'} or os.environ.get('CX_NATIVE_BUSINESS_LIVE') != '1':
+        pytest.skip('v5.0.5 PostgreSQL native self-read migration')
+    from psycopg2.errors import InsufficientPrivilege
+    state = business
+    workspace = workspace_api.create_workspace(name=state.key, isolation_mode='ISOLATED')
+    own = workspace_api.save_context(workspace, state.agent, 'CHECKPOINT', {'fact':state.key}, visibility='PRIVATE')
+    other = one('SELECT AGENT_ID FROM AGENT_REGISTRY WHERE AGENT_ID<>:agent ORDER BY AGENT_ID FETCH FIRST 1 ROWS ONLY', {'agent':state.agent})
+    assert other, 'A second registered identity is required for the cross-owner control'
+    unowned = workspace_api.save_context(workspace, other['agent_id'], 'CHECKPOINT', {'fact':'other'}, visibility='SHARED')
+    with native_agent(state.agent):
+        assert one('SELECT CONTEXT_ID FROM WORKSPACE_CONTEXT WHERE CONTEXT_ID=:id', {'id':own})
+        assert not one('SELECT CONTEXT_ID FROM WORKSPACE_CONTEXT WHERE CONTEXT_ID=:id', {'id':unowned})
+        try:
+            changed = connection.execute('UPDATE WORKSPACE_CONTEXT SET CONTEXT_DATA=CONTEXT_DATA WHERE CONTEXT_ID=:id', {'id':own})
+        except InsufficientPrivilege:
+            pass
+        else:
+            assert changed == 0
+        with connection.get_connection_for_agent() as native:
+            with native.cursor() as cursor:
+                cursor.execute("SELECT set_config('app.current_agent_id', 'forged-agent', true)")
+                cursor.execute('SELECT CONTEXT_ID FROM WORKSPACE_CONTEXT WHERE CONTEXT_ID=%s', (own,))
+                assert cursor.fetchone() is None
+            native.rollback()
 
 
 def new_loop(state):

@@ -1,6 +1,6 @@
 # Chuanxu Community Edition / 川序社区版
 
-Version: 5.0.2. Package: `AI-Agent-Infra-with-DB-Community-Edition`.
+Version: 5.0.5. Package: `AI-Agent-Infra-with-DB-Community-Edition`.
 Edition: Community. License: Apache-2.0.
 Supported database keys / 支持的数据库标识: `oracle, pg, yashandb`.
 
@@ -34,7 +34,7 @@ installs native libraries only for that backend. Use a separate virtual
 environment per backend. See the three paths in [deployment](docs/deployment.md).
 
 The database administrator prepares the dedicated empty target and native
-prerequisites. For v5.0.1 Oracle/YashanDB, SYS separately runs the packaged
+prerequisites. On Oracle/YashanDB, SYS separately runs the packaged
 `0_<database>_v5_0_1_native_identity_prerequisites.sql` in the exact application
 PDB for both fresh deployment and existing-database upgrade. Its narrow
 `SYS.CX_AGENT_ACCOUNT_STATUS` view gives only the configured Owner read access;
@@ -42,8 +42,11 @@ the application does not create it or repair grants. A missing or incompatible
 view blocks preflight; PostgreSQL does not use it. Follow
 [native identity prerequisites](docs/native-identity.md) before proceeding.
 
-For the v5.0.2 runtime contract, install and verify the complete migration chain
-through 110 on PostgreSQL or 109 on Oracle/YashanDB. Keep every model request bound to its original credential, source,
+For v5.0.5, install and verify the complete migration chain through 121
+on PostgreSQL or 119 on Oracle/YashanDB; migration 120 precedes 119 on
+PostgreSQL. Verify 121's own-context reads and other/forged/write denials.
+See [migration](docs/migration.md) for the v5.0.4 upgrade and historical chains.
+Keep every model request bound to its original credential, source,
 Profile revision and Worker fence. Reading diagnostics never authorizes a
 generation. Reconcile unknown effects first, retain consumed budgets and use
 explicit bounded Human recovery. A replay key cannot grant response access.
@@ -57,7 +60,7 @@ From the package root, run:
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_offline.sh --database pg
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.5 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ./start_web_server.sh start
@@ -200,7 +203,7 @@ Schema Owner。是否成功以返回的实体和状态为准。
 `requirements.txt` 仅含公共依赖，安装器选择一份完整的
 `requirements/数据库标识.txt`，仅安装对应驱动和客户端。不同底座使用独立虚拟
 环境，三种安装路径见[中文部署](docs/deployment_zh.md)。
-DBA 先准备专用空 PDB/数据库及最小前置权限。v5.0.1 的 Oracle、YashanDB 无论
+DBA 先准备专用空 PDB/数据库及最小前置权限。Oracle、YashanDB 无论
 新部署还是已有数据库升级，还需由 SYS 在确切应用 PDB 中单独执行包内
 `0_<database>_v5_0_1_native_identity_prerequisites.sql`。窄视图
 `SYS.CX_AGENT_ACCOUNT_STATUS` 只向配置 Owner 提供只读访问；应用不会自动创建
@@ -208,7 +211,9 @@ DBA 先准备专用空 PDB/数据库及最小前置权限。v5.0.1 的 Oracle、
 [原生身份前置](docs/native-identity_zh.md)核验，再按实际包替换以下命令中的
 数据库和社区版/企业版参数：
 
-v5.0.2 运行契约需安装并验证完整迁移链：PostgreSQL 至 110，Oracle/YashanDB 至 109。每次模型请求保留原凭据、
+v5.0.5 需安装并验证完整迁移链：PostgreSQL 至 121，Oracle/YashanDB 至 119；
+PostgreSQL 的 120 在 119 前执行。核验 121 的自有上下文读取，以及其他上下文、伪造身份、
+直接写入拒绝。v5.0.4 升级与历史链见[迁移](docs/migration_zh.md)。每次模型请求保留原凭据、
 来源、Profile 修订和 Worker 栅栏。读取诊断不授权生成；先核对未知结果，保留
 已用预算，再由 Human 显式批准有限恢复。重放键不授予旧响应读取权限。详见
 [模型容量](docs/model-endpoint-capacity_zh.md)、[受控模型工作流](docs/model-workflows_zh.md)、
@@ -218,7 +223,7 @@ v5.0.2 运行契约需安装并验证完整迁移链：PostgreSQL 至 110，Orac
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_offline.sh --database pg
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.2 \
+  --database pg --edition community --version 5.0.5 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ./start_web_server.sh start

@@ -1,9 +1,9 @@
 {
-  "version": "5.0.4",
+  "version": "5.0.5",
   "database": "pg",
   "fresh_install": true,
   "deployment": "bootstrap-deployment-agent",
-  "required_terminal_migration": "120_v5_0_4_pg_source_kind_repair.sql",
+  "required_terminal_migration": "121_v5_0_5_pg_context_self_read.sql",
   "historical_chain": "retained-for-audit",
   "withdrawn_upgrade_sources": [
     "4.4.8"

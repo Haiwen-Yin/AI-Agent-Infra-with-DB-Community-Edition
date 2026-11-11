@@ -1,4 +1,4 @@
-# Migration guide v5.0.4
+# Migration guide v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -50,6 +50,16 @@ nearest existing release record first; a failed, running or changed record
 cannot fall back to an older success. Native objects and SQL checksums remain
 required, and historical records are never relabelled.
 
+v5.0.5 PostgreSQL, including Community and AgentX, appends migration 121 to
+restore ACTIVE Agents' native reads of their own workspace context. It uses
+the registered dedicated login and existing `current_agent_identity()`;
+it grants no shared-context or write access. Fresh installations execute 121
+after the complete historical chain. An explicit `--from-version 5.0.4`
+upgrade verifies that chain before applying 121. Oracle and YashanDB retain
+terminal 119 and use an application upgrade. Preserve the original database
+backup and historical SQL/checksums; verify own reads, other-context denials,
+forged-identity denials and direct-write denials alongside deployment checks.
+
 Single-backend baselines are at `scripts/deploy/baseline_v*.json`. In the
 unified Community package, each backend has exactly one baseline under
 `scripts/deploy/<database>/`. Use only the selected backend's scripts, driver
@@ -64,6 +74,8 @@ and configuration. OpenTenBase AgentX can only use the PostgreSQL chain.
 | v5.0.0 | 102 |
 | v5.0.1 | 105 |
 | v5.0.2 | PostgreSQL 110; Oracle/YashanDB 109 |
+| v5.0.3 | PostgreSQL/YashanDB 117; Oracle 118 |
+| v5.0.4 | PostgreSQL 120; Oracle/YashanDB 119 |
 
 These versions were normal releases. Historical migration filenames describe
 when a structure was introduced, not the target version to pass to a current
@@ -88,7 +100,7 @@ or support archive. Confirm prerequisites from the selected backend and
 [minimum privileges](minimum-privileges.md); an ordinary Agent must not acquire
 the deployment owner's credentials.
 
-Before upgrading an Oracle or YashanDB installation to v5.0.1, have SYS apply
+Before upgrading an Oracle or YashanDB installation, have SYS apply
 the selected backend's separate `0_<database>_v5_0_1_native_identity_prerequisites.sql`
 in the exact existing application PDB. It creates the narrowly projected,
 read-only `SYS.CX_AGENT_ACCOUNT_STATUS` interface and grants only the exact
@@ -105,15 +117,17 @@ Use the installed package's Python environment and work from its root:
 
 ```bash
 bash scripts/install_platform.sh upgrade \
-  --database pg --edition community --version 5.0.4 \
-  --from-version 5.0.2 \
+  --database pg --edition community --version 5.0.5 \
+  --from-version 5.0.4 \
   --config /absolute/path/config.json \
   --confirm-database-backup
 ```
 
-For the v5.0.2 to v5.0.3 transition, `--from-version 5.0.2` checks the actual
-predecessor objects and APPLIED checksums before any new migration. It selects
-only the backend's v5.0.3 tail above. A resumed upgrade retains the declared
+For the v5.0.4 to v5.0.5 transition, `--from-version 5.0.4` checks the actual
+predecessor objects and APPLIED checksums before any new migration. PostgreSQL
+then applies 121; the other supported backends retain terminal 119. Use the
+matching historical package for each earlier transition; this command does not
+support skipping releases. A resumed upgrade retains the declared
 predecessor in its original journal; an older undeclared journal cannot be
 relabelled as a checked transition. Do not use this argument for initialization
 or another version transition.
@@ -162,6 +176,9 @@ checked, not discarded.
 | 111–116 (backend-selected subset) | Guided Knowledge metadata, native shared-write boundaries and backend-specific body search |
 | 117 | Observed Task Step start/completion times; historical unknowns stay NULL |
 | 118 (Oracle) | Explicit child document key; preserve the complete collaboration JSON projection |
+| 119 | Bounded STATUSPAGE Source kind; collection remains separate from review/promotion |
+| 120 (PostgreSQL, before 119) | Exact historical Source-kind constraint repair |
+| 121 (PostgreSQL) | ACTIVE Agent reads of its own context; no shared-context or write grant |
 
 For a v5.0.1 target, verify all three added scripts and schema manifests, including
 their actual tables, keys, constraints and native protection. A successful 105
@@ -184,10 +201,10 @@ checksum, skip a failed fragment or assume an interrupted statement committed.
 
 ```bash
 bash scripts/install_platform.sh status \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 bash scripts/install_platform.sh resume \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config /absolute/path/config.json --run-id YOUR_RECORDED_RUN_ID
 ```
 
@@ -201,7 +218,7 @@ verified, stop and use the database's documented recovery procedure.
 
 ```bash
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config /absolute/path/config.json
 ```
 

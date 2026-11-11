@@ -186,14 +186,23 @@ def search(actor: str, agent: str, query: str, *, limit: int = 8, entity_ids: li
                           "rank_meaning": "ORDERED_RELEVANCE_NOT_PROBABILITY"}}
 
 
-def _keyword_candidates(actor, agent, terms, *, entity_ids,artifact_domain=None,candidate_scope=None):
+def _keyword_candidates(actor, agent, terms, *, entity_ids,artifact_domain=None,candidate_scope=None,title_query=None):
     """ID-only lexical candidates; bodies are loaded under fresh authority."""
     params: dict[str, Any] = {"actor": actor, "agent": agent, "lim": 100}
     predicates = ["e.ENTITY_TYPE='KNOWLEDGE'", "e.STATUS='ACTIVE'",
         "(e.EXPIRES_AT IS NULL OR e.EXPIRES_AT>CURRENT_TIMESTAMP)",
         knowledge_api.knowledge_access_predicate("e", ":actor"), knowledge_api.knowledge_access_predicate("e", ":agent")]
     predicates.extend(artifact_domain_predicate('e',params,artifact_domain))
-    if terms:
+    if title_query is not None:
+        # An exact complete title at the start of the question is an explicit
+        # locator, not a semantic truth claim. Keep normal dual-reader, native
+        # scope, expiry and later original-source checks on this route as well.
+        predicates.append("LENGTH(e.TITLE)>=8 AND (LOWER(:title_query)=LOWER(e.TITLE) OR "
+            "(LOWER(SUBSTR(:title_query,1,LENGTH(e.TITLE)))=LOWER(e.TITLE) AND "
+            "SUBSTR(:title_query,LENGTH(e.TITLE)+1,1) IN (' ',':','：','，',',')))")
+        params['title_query']=title_query.strip()
+        relevance='LENGTH(e.TITLE)'
+    elif terms:
         predicates.append("(" + " AND ".join(f"(LOWER(e.TITLE) LIKE :q{i} ESCAPE '!' OR LOWER(e.SUMMARY) LIKE :q{i} ESCAPE '!' OR LOWER(e.CONTENT) LIKE :q{i} ESCAPE '!')" for i in range(len(terms))) + ")")
         params.update({f"q{i}": "%" + term.replace('!', '!!').replace('%', '!%').replace('_', '!_') + "%" for i, term in enumerate(terms)})
         relevance = " + ".join(
@@ -294,6 +303,8 @@ def _multi_route_search(actor, agent, query, *, limit, entity_ids, strategy, bou
         channels["keyword"] = [{"entity_id": str(next(value for key, value in row.items() if key.lower() == "entity_id"))}
                                for row in _keyword_candidates(actor, agent, terms, entity_ids=entity_ids,**scope)][:40]
     if terms and len(terms) <= 24 and entity_ids != [] and strategy == "hybrid":
+        channels['title'] = [{"entity_id": str(next(value for key,value in row.items() if key.lower()=='entity_id'))}
+            for row in _keyword_candidates(actor,agent,[],entity_ids=entity_ids,title_query=query,**scope)][:40]
         for channel in ("relational", "tag"):
             try:
                 channels[channel] = knowledge_signals.candidates(
@@ -309,7 +320,10 @@ def _multi_route_search(actor, agent, query, *, limit, entity_ids, strategy, bou
                 except embedding_api.AuthorizedSearchUnavailable:
                     unavailable.append({"channel": "graph", "reason": "CHANNEL_UNAVAILABLE"})
     ranked = _fuse_channels(channels)
-    ordered = list(ranked)[:40]
+    def ordered_candidates():
+        anchors=[str(row['entity_id']) for row in channels.get('title',[]) if str(row['entity_id']) in ranked]
+        return list(dict.fromkeys([*anchors,*ranked]))[:40]
+    ordered = ordered_candidates()
     options={'transaction':transaction} if transaction is not None else {}
     loaded = {item["entity_id"]: item for item in _load_candidates(actor, agent, ordered,**options)} if ordered else {}
     loaded = {key:item for key,item in loaded.items() if knowledge_applicability.matches(item,bound)}
@@ -337,7 +351,7 @@ def _multi_route_search(actor, agent, query, *, limit, entity_ids, strategy, bou
             unavailable.append({'channel':'graph','reason':'LINEAGE_UNAVAILABLE'})
             channels.pop('graph',None)
             ranked=_fuse_channels(channels)
-            ordered=list(ranked)[:40]
+            ordered=ordered_candidates()
             links=[]
         incoming={}
         for link in links:

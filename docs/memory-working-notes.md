@@ -1,4 +1,4 @@
-# Memory evidence, working notes and retrospectives v5.0.4
+# Memory evidence, working notes and retrospectives v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 

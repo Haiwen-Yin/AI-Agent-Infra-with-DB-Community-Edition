@@ -1,4 +1,4 @@
-# 数据库最小权限 v5.0.4
+# 数据库最小权限 v5.0.5
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -29,7 +29,7 @@ Oracle 社区版和企业版的数据库身份边界都使用受支持的 End Us
 使用继承角色权限时，必须直接授权。综合前置脚本创建仅具 CREATE SESSION 的
 `DEEP_SEC_SESSION_ROLE`，并为 Owner 提供受管附加所需的 ADMIN OPTION。
 
-v5.0.1 还需由 SYS 在确切应用 PDB 中单独执行
+本版仍需由 SYS 在确切应用 PDB 中单独执行 v5.0.1 引入的前置脚本
 `0_oracle_v5_0_1_native_identity_prerequisites.sql`。视图
 `SYS.CX_AGENT_ACCOUNT_STATUS` 从 `SYS.DBA_END_USERS` 仅投影
 `USERNAME, ACCOUNT_STATUS`，显式使用 `WITH READ ONLY`。只向配置中的确切
@@ -44,7 +44,7 @@ Owner 开放完整源目录。
 
 DBA 在独立应用 PDB 中执行 `0_yashandb_database_prerequisites.sql`。受限 Owner 除结构 DDL 外，还需要 CREATE USER、ALTER USER，以创建和轮换独立 Agent 登录。前置脚本建立最小会话角色及 Owner 管理授权，不授予 DBA、SYSDBA 或无限制对象访问。
 
-v5.0.1 还需由 SYS 在确切应用 PDB 中单独执行
+本版仍需由 SYS 在确切应用 PDB 中单独执行 v5.0.1 引入的前置脚本
 `0_yashandb_v5_0_1_native_identity_prerequisites.sql`。只读视图
 `SYS.CX_AGENT_ACCOUNT_STATUS` 从 `SYS.DBA_USERS` 仅投影
 `USERNAME, ACCOUNT_STATUS`，显式使用 `WITH READ ONLY`。只向确切 Owner
@@ -58,7 +58,7 @@ Owner 开放完整 `DBA_USERS`。
 按[部署](deployment_zh.md)运行当前带账本预检和 `verify`，再完成[迁移](migration_zh.md)后的核验。检查所需结构、无效对象、迁移摘要、凭据创建和原生拒绝访问测试。仅列出授权不能证明执行有效。
 
 原生账户状态接口属于独立 DBA 前置，不是自动补授权，也不修改已应用迁移。
-缺失或结构不兼容时，v5.0.1 预检必须阻断。确切 PDB 核验与仅阻断新登录的撤销
+缺失或结构不兼容时，当前预检必须阻断。确切 PDB 核验与仅阻断新登录的撤销
 边界见[原生身份操作](native-identity_zh.md)。
 
 撤销过大权限前，明确主体、当前依赖、替代授权和恢复路径。DDL 与拒绝测试使用独立临时目标，不能把历史破坏性示例用于基线或生产结构。

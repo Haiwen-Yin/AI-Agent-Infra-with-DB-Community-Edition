@@ -112,8 +112,8 @@ def test_native_agent_and_embedding_forms_expose_guarded_configuration_controls(
     assert all(metric in ui for metric in ("COSINE", "EUCLIDEAN", "DOT_PRODUCT"))
     assert "config-multiline" in ui
     assert "this does not make Agents produce identical vectors" in ui
-    assert "Configure built-in Agent model" in ui
-    assert "Configure and activate" in ui
+    assert "Configure Agent model" in ui
+    assert "Save model profile" in ui
     assert ".configuration-form" in css and ".policy-form" in css
     assert ".config-field.config-multiline" in css
 

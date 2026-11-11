@@ -1,4 +1,4 @@
-# Agent extensions — Chuanxu v5.0.4
+# Agent extensions — Chuanxu v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -8,7 +8,8 @@ This guide applies to both editions. Database entities retain identity,
 authorization, exact revisions, source lineage, attempts, leases and audit facts.
 An integration setting does not grant permissions. Install the complete additive
 migration chain for the exact package and verify deployment before starting new
-workers. v5.0.0 ends at 102; v5.0.1 requires 103–105 as well.
+workers. For v5.0.5, PostgreSQL ends at 121 and Oracle/YashanDB at 119;
+verify the complete chain and native controls in [migration](migration.md).
 The package's generated baseline manifest determines the actual migration list.
 
 ## Model support and answer quality
@@ -97,7 +98,7 @@ unknown-send reconciliation; see [continuity operations](continuity-operations.m
 Start `scripts/agent_integration_worker.py` under the operator's service manager
 to deliver registered telemetry and reconcile uncertain calls. Prepare a new
 framework rootfs with `scripts/prepare_framework_rootfs.py --rootfs
-/var/lib/chuanxu/framework-v5.0.4`, then configure its verified Linux
+/var/lib/chuanxu/framework-v5.0.5`, then configure its verified Linux
 sandbox target. The framework receives bounded messages; platform entities remain
 the source of execution and authorization facts. Generic framework execution,
 live effect replay, live migration and global autonomy remain disabled.

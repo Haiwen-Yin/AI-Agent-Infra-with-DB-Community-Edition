@@ -15,6 +15,17 @@ from .test_v502_ingress_credentials import add_machine_credential, ingress, muta
 from .test_v502_model_capacity import ledger
 
 
+@pytest.mark.parametrize('screening', ['BOUNDED_RULES_NOT_SEMANTIC_VERIFICATION','VERIFIED',None])
+def test_public_answer_metadata_cannot_assert_calibration_or_semantic_verification(screening):
+    value=native_runtime._safe_answer_metadata(dict(probability_calibration='VERIFIED',
+        answer_correctness_probability=.99,rank_meaning='PROBABILITY',publication_screening=screening))
+    assert value['probability_calibration']=='UNAVAILABLE'
+    assert 'answer_correctness_probability' not in value
+    assert value['rank_meaning']=='RECIPROCAL_RANK_NOT_PROBABILITY'
+    assert value['publication_screening']==('BOUNDED_RULES_NOT_SEMANTIC_VERIFICATION'
+        if screening=='BOUNDED_RULES_NOT_SEMANTIC_VERIFICATION' else 'UNASSESSED')
+
+
 @pytest.fixture
 def worker(ingress, monkeypatch):
     state = ingress
@@ -425,6 +436,50 @@ def test_business_channel_uses_original_source_stream_and_atomic_publication(wor
     assert admission['source_kind'] == 'CHANNEL' and admission['source_id'] == execution_id
     assert admission['status'] == 'COMPLETED' and len(worker.sends) == 1
     assert worker.sends[0]['stream'] is True
+
+
+@pytest.mark.parametrize('unsafe', [False, True])
+def test_grounded_expression_contract_buffers_partials_and_keeps_usage(worker, monkeypatch, unsafe):
+    monkeypatch.setattr(business.answer_planning, 'retrieve', lambda *args, **kwargs:
+        {'status': 'MATCHED', 'items': [{'entity_id': 'source', 'digest': 'source-digest',
+            'title': 'Synthetic reference', 'content': 'The observed loss is unknown.'}], 'missing_parts': []})
+    execution_id = enqueue_channel(worker)
+    stored = json.loads(execution(worker, execution_id)['input_json'])
+    assert stored['answer_expression_contract']['references'][0]['entity_id'] == 'source'
+    published = []
+    original = identity_api.update_channel_agent_response
+    def publish(*args, **kwargs):
+        published.append(dict(content=args[2], completed=kwargs.get('completed')))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(identity_api, 'update_channel_agent_response', publish)
+    if unsafe:
+        def send(request, **kwargs):
+            worker.sends.append(json.loads(request.data))
+            parts = ['I am ', '95%', ' confident that the answer is correct.']
+            events = [{'model': 'model', 'choices': [{'delta': {'content': part}}]} for part in parts]
+            events.extend([{'model': 'model', 'choices': [{'delta': {}, 'finish_reason': 'stop'}]},
+                           {'model': 'model', 'choices': [], 'usage': {'total_tokens': 12}}])
+            class Response:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    return False
+                def __iter__(self):
+                    for event in events:
+                        yield ('data: '+json.dumps(event)+'\n\n').encode()
+                    yield b'data: [DONE]\n\n'
+            return Response()
+        monkeypatch.setattr(model_dispatch, 'open_controlled', send)
+    result = native_runtime.execute_one('worker', 'node')
+    assert result['status'] == 'COMPLETED', execution(worker, execution_id)['failure_reason']
+    assert len(published) == 1 and published[0]['completed'] is True
+    assert len(worker.sends) == 1 and worker.sends[0]['stream'] is True
+    assert read_admissions(worker)[0]['status'] == 'COMPLETED'
+    assert '95%' not in channel_reply(worker)['body_text']
+    if unsafe:
+        assert 'was withheld' in channel_reply(worker)['body_text']
+    else:
+        assert 'Quantum tunneling' in channel_reply(worker)['body_text']
 
 
 @pytest.mark.parametrize('sql', [

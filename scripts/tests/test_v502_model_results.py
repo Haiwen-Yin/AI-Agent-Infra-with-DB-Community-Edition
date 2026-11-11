@@ -193,6 +193,109 @@ def test_stream_accepts_terminal_usage_without_promoting_hidden_reasoning():
     assert "hidden" not in json.dumps(value)
 
 
+def cumulative_stream():
+    """Sanitized OCI 2026-11-10 shape; content/reasoning are synthetic."""
+    events = []
+    for index, count in enumerate((0, 1, 4, 5, 10, 14, 19, 20, 22, 25, 26, 31)):
+        final = count == 31
+        event = chunk("OK" if final else None, finish="stop" if final else None,
+                      **({"reasoning_content": "hidden"} if index else {}))
+        event['usage'] = {'prompt_tokens': 88, 'completion_tokens': count, 'total_tokens': 88+count,
+                          'prompt_tokens_details': {'cached_tokens': 0}}
+        events.append(event)
+    return events + [{'model': MODEL, 'choices': [], 'usage': copy.deepcopy(events[-1]['usage'])}, '[DONE]']
+
+
+def test_cumulative_choice_usage_reports_only_the_final_snapshot():
+    value = parsed_stream(cumulative_stream())
+    assert value['content'] == 'OK' and value['reasoning_present']
+    assert value['usage']['prompt_tokens'] == 88
+    assert value['usage']['completion_tokens'] == 31
+    assert value['usage']['total_tokens'] == 119
+    assert value['usage']['cached_tokens'] == 0
+    assert value['usage']['reasoning_tokens'] is None
+    assert 'hidden' not in json.dumps(value)
+
+
+def test_zero_placeholders_are_replaced_by_terminal_usage_without_a_usage_only_event():
+    zero = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0,
+            'prompt_tokens_details': {'cached_tokens': 0}, 'completion_tokens_details': {'reasoning_tokens': 0}}
+    events = [chunk(), chunk('OK'), chunk(finish='stop')]
+    events[0]['usage'] = copy.deepcopy(zero)
+    events[1]['usage'] = copy.deepcopy(zero)
+    events[2]['usage'] = {**zero, 'prompt_tokens': 9, 'completion_tokens': 1, 'total_tokens': 10}
+    value = parsed_stream(events + ['[DONE]'])
+    assert value['content'] == 'OK' and not value['reasoning_present']
+    assert value['usage']['total_tokens'] == 10 and value['usage']['reasoning_tokens'] == 0
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda usage: usage.update(completion_tokens=0),
+    lambda usage: usage.update(prompt_tokens=87),
+    lambda usage: usage.update(total_tokens=88),
+    lambda usage: usage.pop('completion_tokens'),
+    lambda usage: usage.update(completion_tokens=True),
+    lambda usage: usage.update(completion_tokens=1.5),
+    lambda usage: usage.update(prompt_tokens_details={'cached_tokens': None}),
+])
+def test_cumulative_usage_cannot_regress_or_lose_a_known_measurement(mutation):
+    events = cumulative_stream()
+    mutation(events[2]['usage'])
+    with pytest.raises(results.ModelResultError, match='CONFLICTING_USAGE'):
+        parsed_stream(events)
+
+
+@pytest.mark.parametrize('finish_with_usage', [False, True])
+def test_usage_freezes_on_the_first_terminal_snapshot(finish_with_usage):
+    events = cumulative_stream()
+    if not finish_with_usage:
+        events[-3].pop('usage')
+    changed = copy.deepcopy(events[-2])
+    changed['usage'].update(completion_tokens=32, total_tokens=120)
+    events.insert(-1, changed)
+    with pytest.raises(results.ModelResultError, match='CONFLICTING_USAGE'):
+        parsed_stream(events)
+
+
+def test_terminal_usage_can_add_supplemental_details_without_changing_counts():
+    events = cumulative_stream()
+    # Observed on OCI: the final usage-only event adds this unsupported detail.
+    events[-2]['usage']['prompt_tokens_details']['created_cache_tokens'] = 0
+    result = parsed_stream(events)
+    assert result['usage']['total_tokens'] == 119
+    assert result['usage']['cache_write_tokens'] is None  # No new alias is inferred.
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda usage: usage['prompt_tokens_details'].update(created_cache_tokens=1),
+    lambda usage: usage['prompt_tokens_details'].pop('created_cache_tokens'),
+    lambda usage: usage['prompt_tokens_details'].update(created_cache_tokens=False),
+])
+def test_supplemental_terminal_fields_cannot_later_change_or_disappear(mutation):
+    events = cumulative_stream()
+    events[-2]['usage']['prompt_tokens_details']['created_cache_tokens'] = 0
+    changed = copy.deepcopy(events[-2])
+    mutation(changed['usage'])
+    events.insert(-1, changed)
+    with pytest.raises(results.ModelResultError, match='CONFLICTING_USAGE'):
+        parsed_stream(events)
+
+
+def test_final_usage_may_follow_a_terminal_choice_without_usage():
+    events = cumulative_stream()
+    events[-3].pop('usage')
+    assert parsed_stream(events)['usage']['total_tokens'] == 119
+
+
+def test_cumulative_usage_does_not_prove_protocol_completion():
+    events = cumulative_stream()
+    with pytest.raises(results.ModelResultError, match='STREAM_COMPLETION_MISMATCH'):
+        parsed_stream(events[:-1])
+    events[-3]['choices'][0]['finish_reason'] = 'length'
+    with pytest.raises(results.ModelResultError, match='OUTPUT_TRUNCATED'):
+        parsed_stream(events)
+
+
 @pytest.mark.parametrize("events", [
     [chunk("answer"), "[DONE]"], [chunk("answer"), chunk(finish="stop")],
     ["[DONE]"], [chunk(reasoning_content="hidden"), chunk(finish="stop"), "[DONE]"],
@@ -287,6 +390,21 @@ def test_routes_keep_terminal_usage_and_never_disclose_reasoning(routes, route):
         assert b"answer" in emitted and b"private thought" not in emitted
         assert observed["usage"][0][5]["total_tokens"] == 150
     assert len(observed["sends"]) == 1
+
+
+@pytest.mark.parametrize('route', ['native', 'gateway'])
+def test_routes_accept_cumulative_usage_without_retry_or_duplicate_accounting(routes, route):
+    profile, observed, install = routes
+    install(cumulative_stream(), stream=True)
+    if route == 'native':
+        delivered = []
+        value = native_runtime._stream_llm(profile, [{'role': 'user', 'content': 'question'}], delivered.append)
+        assert delivered == ['OK'] and value['usage']['total_tokens'] == 119
+    else:
+        emitted = b''.join(gateway.stream_forward('actor', 'profile', [{'role': 'user', 'content': 'question'}]))
+        assert b'OK' in emitted and b'hidden' not in emitted
+        assert len(observed['usage']) == 1 and observed['usage'][0][5]['total_tokens'] == 119
+    assert len(observed['sends']) == 1
 
 
 @pytest.mark.parametrize("route", ["native", "gateway"])

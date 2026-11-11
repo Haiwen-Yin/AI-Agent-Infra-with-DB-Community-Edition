@@ -7,6 +7,8 @@ are checked again. Published content remains behind ordinary review/publication.
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import http.client
@@ -215,11 +217,18 @@ def https_get(url, *, allowed_hosts, headers=None, max_bytes=262144):
         client.close()
 
 
-def _authority(tx, actor, source, *, write=False, active=True):
+def _authority(tx, actor, source, *, write=False, active=True, _read_batch=None):
     from .agent_assets import _agent
-    _agent(tx, actor, source['security_domain_id'], source['agent_id'], write=write)
+    cache = _read_batch if not write and _read_batch is not None else {}
+    agent_key = ('agent', actor, source['security_domain_id'], source['agent_id'])
+    if agent_key not in cache:
+        _agent(tx, actor, source['security_domain_id'], source['agent_id'], write=write)
+        cache[agent_key] = True
     action = 'knowledge.write' if write else 'knowledge.read'
-    access = identity_api.effective_access(actor, action, resource={'security_domain_id': source['security_domain_id']})
+    access_key = ('access', actor, action, source['security_domain_id'])
+    if access_key not in cache:
+        cache[access_key] = identity_api.effective_access(actor, action, resource={'security_domain_id': source['security_domain_id']})
+    access = cache[access_key]
     if access.get('decision') != 'ALLOW' or (actor not in {source['owner_principal_id'], source['agent_id']} and 'ALL' not in access.get('scopes', [])):
         raise PermissionError('Source access denied')
     if active and source['status'] != 'ACTIVE':
@@ -228,11 +237,11 @@ def _authority(tx, actor, source, *, write=False, active=True):
         _credential(source)
 
 
-def _source(tx, actor, source_id, *, write=False, active=True):
+def _source(tx, actor, source_id, *, write=False, active=True, _read_batch=None):
     source = tx.query_one("SELECT * FROM CX_AGENT_SOURCES WHERE SOURCE_ID=:source" + (' FOR UPDATE' if write else ''), {'source': source_id})
     if not source:
         raise PermissionError('Source access denied')
-    _authority(tx, actor, source, write=write, active=active)
+    _authority(tx, actor, source, write=write, active=active, **({'_read_batch': _read_batch} if _read_batch is not None else {}))
     return source
 
 
@@ -637,6 +646,10 @@ def resolve_source_batch(tx, actor, domain, references, *, omit_denied=False):
     Shared source/Agent grants are evaluated once per source before and after
     loading this bounded batch. Every distinct revision still undergoes the
     original authenticated decryption, body digest and curator binding checks.
+    Shared Agent/domain decisions are scoped to one before/after phase, not
+    retained between those phases or calls. Each source retains its own owner,
+    state and host-credential checks. Only authenticated body decoding may use
+    up to four threads; native transactions and authority checks stay serial.
     No authority or decrypted content survives this call.
     """
     from .continuity_sources import read_ids
@@ -645,9 +658,10 @@ def resolve_source_batch(tx, actor, domain, references, *, omit_denied=False):
         raise ValueError('A bounded configured-source batch is required')
     if not refs:return []
     sources={}
+    authority_phase={}
     def authorize(source_id):
         try:
-            source=_source(tx,actor,source_id)
+            source=_source(tx,actor,source_id,_read_batch=authority_phase)
             if source['security_domain_id']!=domain:
                 raise PermissionError('Source evidence must retain its original domain')
             return source
@@ -673,18 +687,33 @@ def resolve_source_batch(tx, actor, domain, references, *, omit_denied=False):
             and row['lifecycle_state']=='AVAILABLE' and row['content_digest']==ref.content_digest)
     body_ids=[item.revision_id for item in selected if eligible(item)]
     records=revisions(body_ids,body=True)
-    result=[]
+    eligible_refs=[]
     for ref in refs:
         row=records.get((ref.entity_id,ref.revision_id))
         if not eligible(ref):
             if not omit_denied:raise PermissionError('Source evidence is unavailable')
-            result.append(None)
         else:
             if row is None or {key:value for key,value in row.items() if key!='content_cipher'}!=metadata[(ref.entity_id,ref.revision_id)]:
                 raise ContinuityConflict('STALE_CONTENT','Source revision changed before body loading')
-            result.append(_resolved_source(domain,ref,row))
+            eligible_refs.append(ref)
+    unique={tuple(ref.model_dump(mode='json').items()):ref for ref in eligible_refs}
+    def decode(ref):
+        return _resolved_source(domain,ref,records[(ref.entity_id,ref.revision_id)])
+    if len(unique)>1:
+        # Initialize an existing envelope key on the caller before workers can
+        # read it. This also avoids concurrent key-file initialization on a
+        # broken installation; JSON test doubles need no real key store.
+        from .connection_crypto import ENVELOPE_PREFIX, get_master_key
+        if any(str(row['content_cipher']).startswith(ENVELOPE_PREFIX) for row in records.values()):
+            get_master_key()
+        with ThreadPoolExecutor(max_workers=min(4,len(unique)),thread_name_prefix='cx-source-decode') as pool:
+            decoded=dict(zip(unique,pool.map(decode,unique.values())))
+    else:
+        decoded={key:decode(ref) for key,ref in unique.items()}
+    result=[deepcopy(decoded.get(tuple(ref.model_dump(mode='json').items()))) if eligible(ref) else None for ref in refs]
     if revisions(selected_ids)!=metadata or revisions(body_ids,body=True)!=records:
         raise ContinuityConflict('STALE_CONTENT','Source revisions changed during body loading')
+    authority_phase.clear()
     for source_id,previous in sources.items():
         if previous is None:continue
         current=authorize(source_id)

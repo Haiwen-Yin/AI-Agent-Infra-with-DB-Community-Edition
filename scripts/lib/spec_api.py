@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.4 - Community Edition - Spec API
+"""AI Agent Infra v5.0.5 - Community Edition - Spec API
 
 Spec Driven Development: create/manage specification documents with plan linkage and validation.
 """

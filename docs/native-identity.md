@@ -1,4 +1,4 @@
-# Native Agent identity operations v5.0.4
+# Native Agent identity operations v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -20,7 +20,7 @@ authorize a guessed account name or an Owner fallback.
 
 ## Oracle and YashanDB administrator prerequisite
 
-For v5.0.1, SYS prepares a read-only status interface in the exact application
+Since v5.0.1, including v5.0.5, SYS prepares a read-only status interface in the exact application
 PDB before initialization, upgrade, resume or verification. This is separate
 from the existing database prerequisites and application migration chain:
 

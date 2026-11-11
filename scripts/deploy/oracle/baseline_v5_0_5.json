@@ -1,6 +1,6 @@
 {
-  "version": "5.0.4",
-  "database": "yashandb",
+  "version": "5.0.5",
+  "database": "oracle",
   "fresh_install": true,
   "deployment": "bootstrap-deployment-agent",
   "required_terminal_migration": "119_v5_0_4_incident_sources.sql",

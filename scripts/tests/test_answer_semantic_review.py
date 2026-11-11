@@ -9,6 +9,56 @@ from lib import answer_evidence as evidence, answer_planning as planning
 QUESTION = '配额不足时，能否删除等待队列以继续执行？'
 
 
+@pytest.mark.parametrize('question', [
+    'INC-2027-0402 每月费用是多少？',
+    'INC-2027-0402 当前审批超时是多久？',
+    'INC-2027-0402 故障从 10:01 还是 10:04 开始？',
+    'INC-2027-0402 Does this value mean a calibrated probability?',
+    'INC-2027-0402 Has the recovery already succeeded?',
+])
+def test_natural_question_after_record_locator_retains_unassessed_source(question):
+    row = reference(body='INC-2027-0402\n仅有历史观察，未验证当前结论。')
+    result = evidence.assess_for_answer(question, [row])
+    assert result['items'] == [row] and result['status'] == 'PARTIAL_MATCH'
+    assert result['evidence_decision']['semantic_review']['status'] == 'REQUIRED'
+
+
+def test_decomposition_carries_the_explicit_record_constraint_to_each_part():
+    question = 'INC-2027-0402 当前值是多少？同时说明此前的值。'
+    assert planning._parts(question) == ['INC-2027-0402 当前值是多少？', 'inc-2027-0402 说明此前的值。']
+
+
+def test_literal_record_clause_survives_an_unrelated_second_question(monkeypatch):
+    row = reference(body='INC-2027-0402 routing uses the authorized route label jade-501.')
+    other = reference('b', 'Quantum tunneling permits barrier penetration.')
+    monkeypatch.setattr(planning.knowledge_grounding, 'search', lambda *_a, **_k: {'items': [row, other]})
+    question = 'INC-2027-0402 routing and explain quantum tunneling briefly.'
+    result = planning.retrieve('reader', 'agent', question)
+    assert result['items'] == [row] and result['status'] == 'PARTIAL_MATCH'
+    assert result['missing_parts'] == ['inc-2027-0402 explain quantum tunneling briefly.']
+    plan = planning.prepare(question, 'profile', dict(mode='KNOWLEDGE_FIRST',
+        allow_model_supplement='Y', disclosure_profiles=['profile']), result)
+    assert plan['answer_source'] == 'MIXED_SOURCES'
+    assert plan['answer_source_scope'] == {'uncovered_question_parts': [2]}
+    assert [item['entity_id'] for item in plan['citations']] == ['a']
+
+
+@pytest.mark.parametrize('body,extra', [
+    ('INC-2027-0403 routing uses jade-501.', {}),
+    ('INC-2027-0402 an unrelated topic.', {}),
+    ('INC-2027-0402 routing uses jade-501.', {'valid_until': '2000-01-01T00:00:00Z'}),
+    ('INC-2027-0402 v3.2.0 routing uses jade-501.', {}),
+])
+def test_partial_record_recovery_keeps_locator_claim_validity_and_version(monkeypatch, body, extra):
+    row = reference(body=body, **extra)
+    monkeypatch.setattr(planning.knowledge_grounding, 'search', lambda *_a, **_k: {'items': [row]})
+    question = 'INC-2027-0402 routing and explain quantum tunneling briefly.'
+    if 'v3.2.0' in body:
+        question = question.replace(' routing', ' v3.2.1 routing')
+    result = planning.retrieve('reader', 'agent', question)
+    assert result['items'] == [] and result['status'] == 'NO_MATCH'
+
+
 def reference(key='a', body='容量耗尽后暂停调度。保持等待队列，先由值班人员核实可用容量。', **extra):
     return dict(entity_id=key, title='调度操作指南', content=body, digest=key*64, **extra)
 
@@ -24,6 +74,18 @@ def test_paraphrased_reference_is_unassessed_and_never_turns_rank_into_support()
     assert decision['semantic_review']['candidates'][0]['coverage'] == 'UNASSESSED_NOT_SUPPORTED'
     assert decision['rank_used_as_confidence'] is False
     assert 'SEMANTIC_EVIDENCE_REVIEW' in result['missing_parts']
+
+
+def test_natural_review_keeps_an_explicit_record_locator_as_a_hard_constraint(monkeypatch):
+    good = reference('a', 'INC-2027-0402\n事件时间未知，首次观察在 08:58。')
+    unrelated = reference('b', '事故响应需要检查当前任务。')
+    question = 'INC-2027-0402 告警发生在什么时候？'
+    result = evidence.assess_for_answer(question, [unrelated, good])
+    assert result['items'] == [good]
+    assert {'entity_id': 'b', 'reason': 'EXPLICIT_LOCATOR_UNSUPPORTED'} in result['evidence_decision']['rejected_sources']
+    monkeypatch.setattr(planning.knowledge_grounding, 'search', lambda *_a, **_k: {'items': [unrelated]})
+    denied = planning.retrieve('reader', 'agent', question+' 同时说明如何处置。')
+    assert denied['status'] == 'NO_MATCH' and denied['items'] == []
 
 
 @pytest.mark.parametrize('question', [

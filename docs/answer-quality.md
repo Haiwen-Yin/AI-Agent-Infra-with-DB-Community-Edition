@@ -1,4 +1,4 @@
-# Shared answers and final-answer evaluation v5.0.4
+# Shared answers and final-answer evaluation v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -41,6 +41,36 @@ access, changed Profile binding or a now-disabled supplement policy blocks a
 queued answer; changing policy does not authorize the old payload. Historical
 answers also recheck current source readers. See
 [Channel knowledge](channel-knowledge.md) for operational diagnosis.
+
+## v5.0.5 expression and publication checks
+
+The server binds `answer_expression_contract` to the final authorized reference
+window: citation number, entity, digest, revision and declared applicability.
+Source assertions remain assertions, not platform certification. Ranking,
+source counts and model self-ratings supply no calibrated answer-correctness
+probability; public metadata records `probability_calibration=UNAVAILABLE`.
+
+Model input distinguishes source statements, local projections/calculations,
+conditional inference, advice, unknowns and conflicts. Missing values are not
+zero; advice establishes no approval or execution. Bounded publication rules
+screen some explicit Chinese and English numerical self-confidence assertions.
+A match withholds that generated answer without automatic resending or
+resampling. Source failure rates and statistical confidence intervals retain
+their stated subjects. A nonmatch is not claim-by-claim fact verification.
+
+Numeric prose references must exist in the final authorized window. An invalid
+marker withholds generated text and shows labelled authorized extracts. Another
+bounded rule detects some categorical negative action outcomes when an extract
+explicitly reports missing execution/verification records. It shows extracts
+instead of asserting an outcome, without another model call. The conservative
+rule may withhold otherwise supported wording; it cannot establish success,
+failure or non-execution. Original Provider responses remain recorded.
+
+Grounded Channel answers carrying this contract receive the full Provider
+stream internally, then publish after existing completion, model identity,
+accounting and authorization checks and expression screening. Unscreened body
+fragments are not shown first. Other runtime paths retain their declared
+streaming behavior.
 
 ## Prepare an evaluation
 

@@ -182,6 +182,19 @@ export const statusLabels: Record<string, [string, string]> = {
   CONFIRMED: ["已确认", "Confirmed"],
   OMITTED: ["已省略", "Omitted"],
   AVAILABLE: ["可用", "Available"],
+  QUEUED: ["排队中", "Queued"],
+  RESERVED: ["已预留", "Reserved"],
+  QUEUE_CANCELLED: ["已取消排队", "Queue cancelled"],
+  REMOTE_CONFIRMED: ["远端已确认", "Remote confirmed"],
+  RECONCILED: ["已核对", "Reconciled"],
+  KNOWN_NO_SEND: ["确认未发送", "Known no send"],
+  EMPTY: ["空", "Empty"],
+  RECOVERY_ACCEPTED: ["已受理恢复", "Recovery accepted"],
+  ACCEPTED: ["已受理", "Accepted"],
+  DISPATCHED: ["已派发", "Dispatched"],
+  PROPOSING: ["提议中", "Proposing"],
+  TOOL_PENDING: ["等待工具", "Tool pending"],
+  FINALIZING: ["收尾中", "Finalizing"],
 };
 
 // Translate display values only; API values and raw evidence remain unchanged.

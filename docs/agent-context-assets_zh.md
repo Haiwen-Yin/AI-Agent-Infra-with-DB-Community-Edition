@@ -1,4 +1,4 @@
-# Agent 资产与查询感知上下文 v5.0.4
+# Agent 资产与查询感知上下文 v5.0.5
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -10,9 +10,16 @@ Agent 资产通过绑定关系引用已有知识、记忆、Skill、已采集图
 
 ## 准备权限并选择资产
 
-在 Dashboard 打开“工作区 → 工作交接”，选择安全域。“Agent 资产”区域分别提供
-资产绑定、来源同步和 Skill 推荐。从授权目录中选择激活的 Agent。操作者和 Agent
+在 Dashboard 打开“工作区 → Agent 资产与来源”，显式选择安全域和目标 Agent。
+工作交接内的原有入口仍可使用。该区域分别提供资产绑定、来源同步和 Skill 推荐。
+从授权目录中选择激活的 Agent。操作者和 Agent
 都必须保留当前安全域与来源访问权限；把私有来源绑定给 Agent 不会使其变成共享资料。
+
+页面地址 `/app/workspaces?view=assets` 支持保存 `domain`、`asset_agent` 及
+`assets_view` 选择；链接只恢复界面状态，不能授予权限。无域或无 Agent 时显示
+选择提示，不隐式代选。窄屏表单换行，长标识保留可读布局。普通 HTTP 下缺少
+原生 `crypto.randomUUID` 时使用安全随机源；安全随机源不可用时显示受控错误。
+待确认操作的重试保留同一幂等身份，内容摘要使用兼容路径，均不代替传输加密。
 
 下文 HTTP 前缀为 `/api/agent-extensions`。人用户先通过 `POST /api/auth/login`
 登录 Dashboard，完成所需 MFA/初始化设置，保存会话 Cookie 和返回的 `csrf_token`。

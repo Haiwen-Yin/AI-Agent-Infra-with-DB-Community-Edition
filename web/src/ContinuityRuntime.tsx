@@ -1,3 +1,4 @@
+import { newRequestId } from "./requestId";
 import React, { useRef, useState } from "react";
 import RuntimeObservations from "./RuntimeObservations";
 import ProcessingRecovery from "./ProcessingRecovery";
@@ -37,7 +38,7 @@ export default function ContinuityRuntime({ request, text, domain, workId, sourc
           context: { security_domain_id: domain, work_contract_id: form.get("work") ? workId : null, sources,
             ...(knowledgeSearch ? { query_text: String(form.get("knowledge_query")), knowledge_retrieval: "hybrid" } : {}),
             purpose: String(form.get("reason")), token_budget: Number(form.get("budget")), entry_limit: 100, ttl_seconds: 900 } };
-        const signature = JSON.stringify(body), id = crypto.randomUUID();
+        const signature = JSON.stringify(body), id = newRequestId();
         const payload = pending.current.get(signature) || { ...body, idempotency_key: id, context: { ...body.context, request_id: id, idempotency_key: id } };
         pending.current.set(signature, payload);
         const receipt = await request("/api/context/runtime-executions", { method: "POST", body: JSON.stringify(payload) });

@@ -1,4 +1,4 @@
-"""AI Agent Infra v5.0.4 - Community Edition - Knowledge API
+"""AI Agent Infra v5.0.5 - Community Edition - Knowledge API
 
 Knowledge CRUD, graph edges, spaced-review, and tagging.
 Operates on ENTITIES (ENTITY_TYPE='KNOWLEDGE') + KNOWLEDGE_META + ENTITY_EDGES.
@@ -105,6 +105,10 @@ def get_knowledge_context(entity_id: str, *, transaction=None) -> Optional[Dict[
     )
     if not row:
         return None
+    return _knowledge_context_row(row)
+
+
+def _knowledge_context_row(row) -> Dict[str, Any]:
     result = {str(k).lower(): v for k, v in dict(row).items()}
     for key in ("organization_chain_json", "responsible_groups_json", "execution_groups_json"):
         raw = result.pop(key, None)
@@ -113,6 +117,36 @@ def get_knowledge_context(entity_id: str, *, transaction=None) -> Optional[Dict[
         except (TypeError, ValueError):
             result[key.removesuffix("_json")] = []
     return result
+
+
+def knowledge_graph_details(entity_ids) -> Dict[str, Any]:
+    """Read edges and saved context for an already authorized graph window.
+
+    The HTTP caller selects and authorizes the Knowledge rows, including their
+    original sources, before calling this helper. Restrict both edge endpoints
+    to that exact window. Never query neighbours outside the selected window.
+    This is a projection helper, not an independently authorized read entry.
+    """
+    ids = list(dict.fromkeys(str(value) for value in entity_ids))
+    if len(ids) > 200:
+        raise ValueError('Knowledge graph window cannot exceed 200 entries')
+    if not ids:
+        return dict(edges=[], contexts={})
+    params = {'graph_entity_'+str(index): value for index, value in enumerate(ids)}
+    placeholders = ','.join(':'+key for key in params)
+    edges = execute_query(
+        'SELECT EDGE_ID,SOURCE_ID,TARGET_ID,EDGE_TYPE,STRENGTH,CONFIDENCE FROM ENTITY_EDGES '
+        f'WHERE SOURCE_ID IN ({placeholders}) AND TARGET_ID IN ({placeholders})', params)
+    contexts = execute_query(
+        'SELECT CONTEXT_ID,ENTITY_ID,AGENT_ID,PRINCIPAL_ID,ORGANIZATION_ID,'
+        'ORGANIZATION_CHAIN_JSON,RESPONSIBLE_GROUPS_JSON,EXECUTION_GROUPS_JSON,'
+        'SHARING_SCOPE,GRAPH_SNAPSHOT_DIGEST FROM CX_KNOWLEDGE_CONTEXTS '
+        f'WHERE ENTITY_ID IN ({placeholders})', params)
+    selected = set(ids)
+    return dict(edges=[edge for edge in edges
+                      if str(edge.get('source_id')) in selected and str(edge.get('target_id')) in selected],
+                contexts={str(row['entity_id']): _knowledge_context_row(row) for row in contexts
+                          if str(row.get('entity_id')) in selected})
 
 
 def capture_agent_knowledge_context(entity_id: str, agent_id: str, *, sharing_scope: str = "ORGANIZATION_SUBTREE",
@@ -483,10 +517,15 @@ def search_knowledge(
         if not full_inventory:
             params["principal_id"] = principal_id
         neighbour_access = "1=1" if full_inventory else knowledge_access_predicate("neighbour", ":principal_id")
-        order = ("CASE WHEN EXISTS (SELECT 1 FROM ENTITY_EDGES link JOIN ENTITIES neighbour "
-                 "ON ((link.SOURCE_ID=e.ENTITY_ID AND neighbour.ENTITY_ID=link.TARGET_ID) "
-                 "OR (link.TARGET_ID=e.ENTITY_ID AND neighbour.ENTITY_ID=link.SOURCE_ID)) "
-                 "WHERE neighbour.ENTITY_TYPE='KNOWLEDGE' AND " + neighbour_access + ") THEN 0 ELSE 1 END, " + order)
+        # Separate the two indexed directions. An OR inside the correlated
+        # join makes YashanDB scan the edge/entity product for each candidate.
+        outgoing = ("EXISTS (SELECT 1 FROM ENTITY_EDGES link JOIN ENTITIES neighbour "
+                    "ON neighbour.ENTITY_ID=link.TARGET_ID WHERE link.SOURCE_ID=e.ENTITY_ID "
+                    "AND neighbour.ENTITY_TYPE='KNOWLEDGE' AND " + neighbour_access + ")")
+        incoming = ("EXISTS (SELECT 1 FROM ENTITY_EDGES link JOIN ENTITIES neighbour "
+                    "ON neighbour.ENTITY_ID=link.SOURCE_ID WHERE link.TARGET_ID=e.ENTITY_ID "
+                    "AND neighbour.ENTITY_TYPE='KNOWLEDGE' AND " + neighbour_access + ")")
+        order = "CASE WHEN " + outgoing + " OR " + incoming + " THEN 0 ELSE 1 END, " + order
     sql = f"""
         SELECT e.ENTITY_ID, e.ENTITY_TYPE, e.TITLE, e.CONTENT, e.SUMMARY, e.CATEGORY,
                e.IMPORTANCE, e.STATUS, e.OWNED_BY_AGENT, e.SOURCE_AGENT, e.VISIBILITY,

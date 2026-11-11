@@ -219,6 +219,8 @@ def enqueue(actor: str, channel_id: str, message_id: str, agent_id: str,
         payload['retrieval_status'] = planned['retrieval_status']
         payload['answer_metadata'] = planned['answer_metadata']
         payload['answer_source_scope'] = planned['answer_source_scope']
+        payload['answer_expression_contract'] = planned['answer_expression_contract']
+        payload['reference_extracts'] = planned['reference_extracts']
         payload['knowledge_citations'] = planned['citations']
         payload['answer_context_selection'] = planned['context_selection']
         if planned['knowledge_reply'] is not None:

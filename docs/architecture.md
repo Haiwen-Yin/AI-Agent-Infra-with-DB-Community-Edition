@@ -1,4 +1,4 @@
-# Chuanxu Community Edition architecture v5.0.4
+# Chuanxu Community Edition architecture v5.0.5
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
@@ -158,6 +158,11 @@ checksums, steps, readiness and handoff. It does not turn model text into SQL or
 privileges. v5.0.0 ends at 102; v5.0.1 adds 103–105 to the complete chain.
 Use this package's generated baseline and verify actual objects as well as
 APPLIED checksums. Historical SQL filenames remain unchanged.
+
+For v5.0.5, the current terminal is 121 on PostgreSQL and 119 on
+Oracle/YashanDB. PostgreSQL 120 executes before 119; 121 restores only an ACTIVE
+Agent's own-context reads through its registered native identity. The complete
+chain and native access boundaries are described in [migration](migration.md).
 
 Process restart recovery uses database leases and recorded outcomes. Database
 backup, replication, standby promotion and RPO/RTO remain deployment

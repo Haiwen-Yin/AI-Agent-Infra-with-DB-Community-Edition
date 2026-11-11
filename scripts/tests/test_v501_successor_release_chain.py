@@ -8,7 +8,7 @@ from lib import continuity_schema_validation
 from lib.package_layout import active_database, deployment_dir
 
 
-CHAIN = ('4.4.15', '4.4.16', '4.5.0', '4.5.1', '4.5.2', '5.0.0', '5.0.1', '5.0.2', '5.0.3', '5.0.4')
+CHAIN = ('4.4.15', '4.4.16', '4.5.0', '4.5.1', '4.5.2', '5.0.0', '5.0.1', '5.0.2', '5.0.3', '5.0.4', '5.0.5')
 HISTORICAL_CASES = [(release, previous) for index, release in enumerate(CHAIN)
                     for previous in CHAIN[:index]]
 
@@ -72,7 +72,7 @@ def test_nearest_present_invalid_row_never_falls_back_to_older_applied(
     assert calls == expected[:expected.index(nearest) + 1]
 
 
-@pytest.mark.parametrize('release', ['4.4.14', '5.0.5', '99.0.0', ''])
+@pytest.mark.parametrize('release', ['4.4.14', '5.0.6', '99.0.0', ''])
 def test_unrecognized_release_has_no_inferred_historical_trust(monkeypatch, release):
     calls = []
 

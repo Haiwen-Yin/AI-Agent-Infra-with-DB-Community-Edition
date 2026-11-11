@@ -44,9 +44,25 @@ class Question:
         return list(dict.fromkeys((*self.subject_terms,*(item.value for item in self.qualifiers))))
 
 
+def _is_qualifier(match, text):
+    if match.lastgroup != 'version' or match.group().lower().startswith('v') or match.group().count('.') >= 2:
+        return True
+    # A decimal measurement is not an implicit release selector. Keep it as
+    # literal query data unless a two-component version is explicitly labelled.
+    return bool(re.search(r'(?:\bversion|\brelease|\brevision|版本|修订)\s*[:：]?\s*$',
+                          text[max(0, match.start()-32):match.start()], re.I)
+                or re.match(r'\s*版', text[match.end():]))
+
+
+def _without_qualifiers(text):
+    return _QUALIFIER.sub(lambda match: ' ' if _is_qualifier(match, text) else match.group(), text)
+
+
 def qualifiers(text):
     result=[]
     for match in _QUALIFIER.finditer(text.casefold()):
+        if not _is_qualifier(match, text):
+            continue
         kind=match.lastgroup;value=match.group()
         if kind=='version':value=value.removeprefix('v')
         item=Qualifier(kind,value)
@@ -82,7 +98,19 @@ def _attributes(text,language):
 
 def claim_terms(text):
     """Literal claim terms, without guessing synonyms or dropping constraints."""
-    return _literal_terms(_QUALIFIER.sub(' ',text))
+    return _literal_terms(_without_qualifiers(text))
+
+
+def leading_locator(text):
+    """Retain an explicit leading record identifier in a natural question.
+
+    Ordinary opening words and version numbers do not select this grammar.
+    This is a literal constraint, never a permission or a truth assertion.
+    """
+    match = re.match(r'^\s*([A-Za-z][A-Za-z0-9_-]{7,127})(?=\s|[:：,，]|$)', text)
+    if match and re.search(r'\d', match[1]) and re.search(r'[_-]', match[1]):
+        return match[1].casefold()
+    return None
 
 
 def _requirements(question):
@@ -115,7 +143,7 @@ def interpret(question):
         match=pattern.fullmatch(question.strip())
         if not match:continue
         frame_candidate=True
-        context=_QUALIFIER.sub(' ',match['context']).strip()
+        context=_without_qualifiers(match['context']).strip()
         if language=='zh':
             known=bool(re.search(r'资料|文档',context)) and not re.sub(r'\s+','',_ZH_CONTEXT.sub('',context))
         else:
@@ -125,14 +153,14 @@ def interpret(question):
         focus=match['subject'].strip()
         # A second subject delimiter, URL or additional instruction is outside
         # this grammar. Its original terms must continue to constrain evidence.
-        if (known and parsed_attributes and _literal_terms(_QUALIFIER.sub(' ',focus))
+        if (known and parsed_attributes and _literal_terms(_without_qualifiers(focus))
                 and not re.search(r'[;；\n]',focus)):
             subject=focus;attributes=parsed_attributes;framed=True
         break
     requirements=()
     if not frame_candidate:
         subject,requirements=_requirements(question)
-    subject_terms=_literal_terms(_QUALIFIER.sub(' ',subject))
+    subject_terms=_literal_terms(_without_qualifiers(subject))
     return Question(subject,subject_terms,qualifiers(question),attributes,framed,frame_candidate,requirements)
 
 

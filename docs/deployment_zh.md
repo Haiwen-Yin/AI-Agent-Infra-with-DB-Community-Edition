@@ -1,4 +1,4 @@
-# 部署指南 v5.0.4
+# 部署指南 v5.0.5
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
@@ -111,7 +111,7 @@ YashanDB 的 `yaspy` 是包内原生扩展而非 pip 发行包，须使用
 `0_*_database_prerequisites.sql`。授予 Schema Owner 的部署权限与普通 Agent
 运行权限不同，不能给业务 Agent 填入 Owner 凭据作为后备连接。
 
-v5.0.1 的 Oracle、YashanDB 目标还需由 DBA 在确切的应用 PDB 中，审阅并单独执行
+Oracle、YashanDB 目标还需由 DBA 在确切的应用 PDB 中，审阅并单独执行
 对应的原生身份前置脚本：
 
 | 底座 | 新增管理员脚本 |
@@ -156,7 +156,13 @@ PostgreSQL 修复保留四种受支持实体、非法类型拒绝、审批状态
 同一事务提交。当前权限下读取/导出、原始捕获证据的独立核验仍各自必需；记录了
 审核不代表最终发布验收已完成。详见[已观测回答审核接口](api-reference_zh.md#已观测回答的-human-审核)。
 
-v5.0.1 部署后同时检查时间/便签/复盘、上下文/资产/来源、回答质量的实际对象、
+v5.0.5 的 PostgreSQL（含 AgentX）终点为 121，Oracle/YashanDB 为 119。
+v5.0.3 引入按底座选择的 111–118 尾链；v5.0.4 新增 119 和 PostgreSQL 的 120
+前置，120 在 119 前执行。PostgreSQL 121 恢复 ACTIVE Agent 对自己上下文的原生读取，
+不授予共享上下文或写权限。新装及明确指定从 v5.0.4 升级时，均须核验完整链、实际对象、
+APPLIED 摘要及原生拒绝检查，精确顺序见[迁移](migration_zh.md)。
+
+v5.0.1 引入的结构仍须在部署后检查，包括时间/便签/复盘、上下文/资产/来源、回答质量的实际对象、
 APPLIED 记录及脚本摘要；不能用终点 105 的账本记录代替缺失的 103、104 结构。
 这些服务不能对旧结构启动。已有数据、业务 Agent 原生 SQL 拒绝以及原 Task/Step/
 连续性依赖仍属于验证范围；空库初始化通过不能证明已有数据库的转换已通过。
@@ -166,7 +172,7 @@ APPLIED 记录及脚本摘要；不能用终点 105 的账本记录代替缺失�
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh initialize \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config "$CX_CONFIG_PATH" \
   --admin-password-file /absolute/path/admin.password
 ```
@@ -190,7 +196,7 @@ bash scripts/install_platform.sh initialize \
 ```bash
 export CX_CONFIG_PATH=/absolute/path/config.json
 bash scripts/install_platform.sh verify \
-  --database pg --edition community --version 5.0.4 \
+  --database pg --edition community --version 5.0.5 \
   --config "$CX_CONFIG_PATH"
 ./start_web_server.sh start
 ./start_web_server.sh status

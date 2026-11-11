@@ -886,6 +886,9 @@ def _safe_answer_metadata(value: Any) -> Dict[str, Any]:
         "contradiction_count": max(0, min(100, value.get("contradiction_count", 0)))
             if type(value.get("contradiction_count", 0)) is int else 0,
         "rank_meaning": "RECIPROCAL_RANK_NOT_PROBABILITY",
+        "probability_calibration": "UNAVAILABLE",
+        "publication_screening": "BOUNDED_RULES_NOT_SEMANTIC_VERIFICATION"
+            if value.get("publication_screening") == "BOUNDED_RULES_NOT_SEMANTIC_VERIFICATION" else "UNASSESSED",
     }
 
 
@@ -1124,7 +1127,7 @@ def execute_one(worker_id: str = "", node_id: str = "") -> Dict[str, Any]:
                 try:
                     output = provider_call(
                         _stream_llm, profile, messages if isinstance(messages, list) else [],
-                        lambda content: publish_channel(
+                        lambda content: None if input_payload.get('answer_expression_contract') else publish_channel(
                             str(agent.get("agent_id") or ""), channel_id,
                             answer_planning.render_reply(content, input_payload),
                         ),

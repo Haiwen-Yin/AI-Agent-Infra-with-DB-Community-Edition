@@ -629,6 +629,21 @@ def list_native_agents(actor: str, limit: int = 100) -> List[Dict[str, Any]]:
     return _rows(rows)
 
 
+def get_native_agent(actor: str, agent_id: str) -> Dict[str, Any]:
+    identity_api._require(actor, "agents.read")
+    if not identity_api._agent_visible_to(actor, agent_id):
+        raise PermissionError("Agent is outside the delegated scope")
+    agent = _row(connection.execute_query_one(
+        "SELECT a.AGENT_ID,p.DISPLAY_NAME AS AGENT_NAME,a.SOURCE,a.AGENT_KIND,a.STATUS,"
+        "a.ACTIVATION_STATE,a.LLM_PROFILE_ID,a.SECURITY_DOMAIN_ID,a.IS_PROTECTED "
+        "FROM CX_NATIVE_AGENTS a LEFT JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID=a.AGENT_ID "
+        "WHERE a.AGENT_ID=:id", {"id": agent_id},
+    ))
+    if not agent or agent.get("source") not in {"PLATFORM_BUILTIN", "PLATFORM_CREATED"}:
+        raise NativeAgentError("platform-managed Agent is unavailable")
+    return agent
+
+
 def list_native_agents_cursor(actor: str, *, page_size: int = 20, cursor: str = "") -> Dict[str, Any]:
     """Return authorized platform-native Agents without a whole-inventory scan."""
     context = cursor_pagination.resolve(actor, "native_agents", {}, "agent_id:asc", page_size, cursor)
@@ -1232,6 +1247,44 @@ def decide_request(actor: str, request_id: str, decision: str, reason: str) -> D
         _audit(tx, actor, "AGENT_PROVISION_DECISION", "AGENT_REQUEST", request_id, "ALLOW", reason)
         return {"request_id": request_id, "status": status, "decision": decision,
                 "agent_id": created_agent_id or None}
+    return connection.execute_transaction_callback(work)
+
+
+def configure_agent_model(actor: str, agent_id: str, llm_profile_id: str,
+                          expected_llm_profile_id: str, reason: str) -> Dict[str, Any]:
+    """Change the runtime profile without activating or executing the Agent."""
+    identity_api._require(actor, "platform.manage")
+    identity_api._require(actor, "agents.manage")
+    llm_profile_id, reason = _text(llm_profile_id, 128), _text(reason, 2000)
+    if not llm_profile_id or len(reason) < 3:
+        raise NativeAgentError("an approved LLM profile and reason are required")
+    if not identity_api._agent_visible_to(actor, agent_id):
+        raise PermissionError("Agent is outside the delegated scope")
+
+    def work(tx: Any) -> Dict[str, Any]:
+        agent = _row(tx.query_one(
+            "SELECT AGENT_ID,SOURCE,STATUS,ACTIVATION_STATE,LLM_PROFILE_ID FROM CX_NATIVE_AGENTS "
+            "WHERE AGENT_ID=:id FOR UPDATE", {"id": agent_id},
+        ))
+        if not agent or agent.get("source") not in {"PLATFORM_BUILTIN", "PLATFORM_CREATED"}:
+            raise NativeAgentError("platform-managed Agent is unavailable")
+        previous = str(agent.get("llm_profile_id") or "")
+        if previous != expected_llm_profile_id:
+            raise NativeAgentConflict("Agent model profile changed concurrently; refresh before saving")
+        profile = _row(tx.query_one(
+            "SELECT PROFILE_ID,STATUS FROM CX_LLM_PROVIDER_PROFILES WHERE PROFILE_ID=:id FOR UPDATE",
+            {"id": llm_profile_id},
+        ))
+        if not profile or str(profile.get("status") or "").upper() != "ACTIVE":
+            raise NativeAgentError("LLM Provider Profile is unavailable")
+        tx.execute(
+            "UPDATE CX_NATIVE_AGENTS SET LLM_PROFILE_ID=:profile,UPDATED_AT=CURRENT_TIMESTAMP "
+            "WHERE AGENT_ID=:agent", {"profile": llm_profile_id, "agent": agent_id},
+        )
+        _audit(tx, actor, "NATIVE_AGENT_MODEL_CONFIGURE", "AGENT", agent_id, "ALLOW",
+               _json({"previous_profile_id": previous, "llm_profile_id": llm_profile_id, "reason": reason}))
+        return {"agent_id": agent_id, "status": agent["status"],
+                "activation_state": agent["activation_state"], "llm_profile_id": llm_profile_id}
     return connection.execute_transaction_callback(work)
 
 

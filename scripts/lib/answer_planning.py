@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from . import answer_evidence, knowledge_grounding, product_identity, answer_query
+from . import answer_evidence, knowledge_grounding, product_identity, answer_query, answer_expression
 
 
 _VENDOR_ONLY = {"oracle", "pg", "postgresql", "yashandb", "崖山数据库", "甲骨文"}
@@ -19,6 +19,7 @@ _METADATA_KEYS = (
     "policy_revision", "requested_strategy", "actual_strategies",
     "available_channels", "degradations", "evidence_status", "subject_type",
     "missing_parts_count", "contradiction_count", "rank_meaning",
+    "probability_calibration", "publication_screening",
 )
 
 
@@ -31,6 +32,9 @@ def _parts(question: str) -> list[str]:
     if answer_query.interpret(question).frame_candidate:
         return [question]
     parts = [part.strip() for part in re.split(r"[；;]|(?:以及|另外|同时)|\band\b", question, flags=re.I) if part.strip()]
+    locator = answer_query.leading_locator(question)
+    if locator and 2 <= len(parts) <= 4:
+        parts = [part if answer_query.leading_locator(part) == locator else locator + ' ' + part for part in parts]
     return parts if 2 <= len(parts) <= 4 else [question]
 
 
@@ -55,6 +59,8 @@ def _public_metadata(retrieval: dict[str, Any], evidence: dict[str, Any] | None 
         "missing_parts_count": len(retrieval.get("_query_missing_parts") or retrieval.get("missing_parts") or evidence.get("missing_parts") or []),
         "contradiction_count": len(evidence.get("contradictions") or []),
         "rank_meaning": str(info.get("rank_meaning") or "RECIPROCAL_RANK_NOT_PROBABILITY"),
+        "probability_calibration": "UNAVAILABLE",
+        "publication_screening": "BOUNDED_RULES_NOT_SEMANTIC_VERIFICATION",
     }
     return {key: metadata[key] for key in _METADATA_KEYS}
 
@@ -143,12 +149,37 @@ def retrieve(actor, agent, question, *, entity_ids=None, strategy="hybrid", appl
     # single candidate may support one part while lacking terms from another;
     # keep that candidate so the answer is explicitly partial rather than
     # turning useful authorized evidence into NO_MATCH.
-    if (not answer_query.interpret(question).requirements and len(_parts(question)) > 1 and original_items
+    if (not answer_query.interpret(question).requirements and not answer_query.leading_locator(question)
+            and len(_parts(question)) > 1 and original_items
             and not assessed.get("items") and not assessed.get("evidence_decision", {}).get("contradictions")):
         assessed["items"] = original_items
         assessed["status"] = "PARTIAL_MATCH"
         if isinstance(assessed.get("evidence_decision"), dict):
             assessed["evidence_decision"]["status"] = "PARTIAL_MATCH"
+    elif (not explicit and answer_query.leading_locator(question) and len(_parts(question)) > 1
+            and original_items and not assessed.get("items")
+            and not assessed.get("evidence_decision", {}).get("contradictions")):
+        # A literal record constraint applies to every clause, but an unrelated
+        # second question must not erase a supported first clause. Reassess
+        # clauses without restoring merely similar or unassessed candidates.
+        locator = answer_query.leading_locator(question)
+        qualifiers = answer_query.qualifiers(question)
+        eligible = [item for item in original_items if
+            answer_query.supports_term(str(item.get('title') or '')+'\n'+str(item.get('content') or ''), locator)
+            and all(answer_query.supports_qualifier(
+                str(item.get('title') or '')+'\n'+str(item.get('content') or ''), value) for value in qualifiers)]
+        coverage = [dict(part=part, source_ids=[item['entity_id'] for item in
+                    answer_evidence.assess(part, eligible).get('items', [])]) for part in _parts(question)]
+        supported = {key for row in coverage for key in row['source_ids']}
+        if supported:
+            assessed['items'] = [item for item in eligible if item['entity_id'] in supported]
+            assessed['missing_parts'] = [row['part'] for row in coverage if not row['source_ids']]
+            decision = assessed['evidence_decision']
+            decision['contradictions'] = answer_evidence._conflicts(assessed['items'])
+            assessed['status'] = 'AMBIGUOUS' if decision['contradictions'] else 'PARTIAL_MATCH'
+            decision.update(status=assessed['status'], decomposed_coverage=coverage)
+            decision['rejected_sources'] = [row for row in decision['rejected_sources']
+                                           if row['entity_id'] not in supported]
     # Preserve decomposed-query gaps and combine them with unsupported facets.
     merged["missing_parts"] = list(dict.fromkeys([*merged["missing_parts"], *(assessed.get("missing_parts") or [])]))
     merged["items"] = assessed.get("items", merged["items"])
@@ -194,6 +225,7 @@ def _prepare(question, profile_id, configured, retrieval, *, omitted=0):
     allowed = mode == "KNOWLEDGE_FIRST" and allow
     citations = [{key: value for key, value in item.items() if key != "content"} for item in sources]
     metadata = _public_metadata(retrieval)
+    expression = answer_expression.contract(sources, retrieval, omitted=omitted)
     conflicted=status=='AMBIGUOUS' and metadata['contradiction_count']>0
     semantic_review=(retrieval.get('evidence_decision') or {}).get('semantic_review')
     reply, messages, source = None, [], "INSUFFICIENT_KNOWLEDGE"
@@ -219,11 +251,19 @@ def _prepare(question, profile_id, configured, retrieval, *, omitted=0):
             source = "MODEL_SUPPLEMENT"
             instruction = (
                 "Use general knowledge; no enterprise source has been provided. Do not invent citations or an enterprise policy. "
-                "Before answering, identify what is actually known and what is merely suggested by the question. "
-                "Draft the smallest direct answer. Silently try ordinary counterexamples to every defining condition, "
-                "causal explanation and comparative claim; if they fit the question, remove that condition or state "
-                "the necessary assumption explicitly. Give definitions by their essential meaning, and comparisons "
-                "by criteria that apply to both sides."
+                "Answer directly; do not narrate drafting or self-review. "
+                "No accessible match is not proof that a record never existed or that this system cannot retain "
+                "information across sessions. In this information-management context, memories and work notes "
+                "are stored information records, not human recollections or work permits. Explain general semantics "
+                "without claiming to have observed a particular record's state. Validity, truth, authorization, "
+                "retention, archival and deletion are distinct. Expiry ends an allowed-use interval; it does not "
+                "itself archive or delete a note, fulfill its purpose or prove its content false. A future start "
+                "does not establish that a previous state is still valid. Neither a newer timestamp nor later "
+                "ingestion proves greater accuracy or supersession. An explicit correction identifies what it "
+                "supersedes; a later observation alone does not. Unknown event time cannot be inferred from "
+                "ingestion time. Forgetting or revocation excludes records from eligible future context, without "
+                "establishing falsehood, physical deletion or erasure from model weights. State necessary "
+                "conditions and unknowns."
             )
             instruction += (
                 " Do not fill gaps with a familiar story. Preserve established knowledge and useful explanations. "
@@ -274,7 +314,7 @@ def _prepare(question, profile_id, configured, retrieval, *, omitted=0):
             "so the reader can identify which release the description applies to. "
             "Do not invent any missing identity fact or silently resolve conflicting versions."
         )
-        if status=='PARTIAL_MATCH' or conflicted:
+        if conflicted:
             instruction += (
                 " Give an evidence-backed judgment in this order: (1) a basic assessment bounded by the evidence, "
                 "(2) the supported facts with exact citations and the conflicting or missing facts separately, "
@@ -284,6 +324,15 @@ def _prepare(question, profile_id, configured, retrieval, *, omitted=0):
                 "Label inference and uncertainty. A newer date, higher retrieval rank, duplicate count or document "
                 "version does not establish truth or override a source. Do not invent an enterprise policy, "
                 "resolve a contradiction silently, claim an unobserved action, or execute a recommendation."
+            )
+        elif status == 'PARTIAL_MATCH':
+            instruction += (
+                " Answer the requested facts directly and concisely, keeping supported values and unknowns separate. "
+                "An unlocated or unknown value is not a request to invent a substitute, a time range or a likely cause. "
+                "Do not add an advice section, hypothetical choices or operational recommendations unless asked. "
+                "When advice is requested, preserve the evidence limits; do not present an assumed value or interval "
+                "as an established observation or best practice. Use at most four concise sentences unless a longer "
+                "format is explicitly requested. Numbers in square brackets are only exact authorized reference markers."
             )
         if mixed:
             instruction += (
@@ -295,12 +344,33 @@ def _prepare(question, profile_id, configured, retrieval, *, omitted=0):
                 "present those parts as company policy or source-supported facts."
             )
         prompt = {"question": question, "missing_parts": retrieval.get("missing_parts", []),
+                  "evidence_expression_contract": expression,
                   "temporal_context": {"assessment_time_utc": retrieval['assessed_at'],
                       "meaning": "CURRENT_OBSERVATION_NOT_EVENT_TIME_OR_POLICY_ADOPTION"},
                   "authorized_sources": [{"citation": index + 1, "title": item.get("title", ""),
                                           "content": item.get("content", ""),
                                           **({'source_context':item['source_context']} if item.get('source_context') else {})}
                                          for index, item in enumerate(sources)]}
+        instruction += (
+            " The server-owned evidence_expression_contract binds only this final reference window. "
+            "It supplies no calibrated probability of answer correctness. Do not produce numerical self-confidence "
+            "or derive a correctness probability from rank, source count, a model self-rating or citation presence. "
+            "If confidence is requested, explain concrete supporting evidence and unresolved gaps in words. "
+            "For each critical claim distinguish an exact source statement, local projection/calculation, "
+            "conditional inference, proposal, unknown or conflict; keep its citation, revision and time scope. "
+            "Use each reference's server-computed applicability_at_assessment for its declared time interval. "
+            "WITHIN_DECLARED_INTERVAL means its declared start is at or before this assessment, not in the future; "
+            "it does not certify source truth or resolve conflicts. UNKNOWN supplies no event time or current status. "
+            "A source's own statistical probability may be reported only as that source's stated quantity, "
+            "with its subject and citation; it is not confidence in this answer. "
+            "Never turn a null into zero, a missing report field into an upstream API field, "
+            "or an unapproved recommendation into assigned or completed work. "
+            "Missing execution or verification evidence establishes neither success nor failure, "
+            "and an approval status alone does not prove that the action did or did not occur. "
+            "Describe the recorded status and leave the actual outcome unverified unless the source records it. "
+            "Keep related measurements, candidate labels and revision/effective-time qualifiers when they "
+            "distinguish the requested fact from a different metric, a final conclusion or an older state. "
+        )
         instruction += (
             " Compare explicit source timestamps, including their timezones, against temporal_context.assessment_time_utc "
             "or an explicit requested as_of filter. Do not assume a timestamp on the assessment date is in the future. "
@@ -410,6 +480,9 @@ def _prepare(question, profile_id, configured, retrieval, *, omitted=0):
     scope = {"uncovered_question_parts": [index for index, part in enumerate(parts, 1)
                                          if part in gaps]} if source == "MIXED_SOURCES" else {}
     return {"knowledge_reply": reply, "messages": messages, "citations": citations,
+            "reference_extracts": [{"citation": index, "content": item.get("content") or ""}
+                                   for index, item in enumerate(sources, 1)] if messages else [],
+            "answer_expression_contract": expression,
             "answer_source": source, "retrieval_status": status,
             "answer_metadata": metadata, "answer_source_scope": scope}
 
@@ -421,6 +494,7 @@ def render_reply(reply: str, planned: dict[str, Any]) -> str:
     This labels the evidence boundary; it does not validate generated claims.
     Permission, citation and policy checks remain the publisher's responsibility.
     """
+    reply = answer_expression.screen(reply, planned)
     if not reply or planned.get("answer_source") != "MIXED_SOURCES":
         return reply
     scope = planned.get("answer_source_scope") or {}
