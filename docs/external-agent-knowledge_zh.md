@@ -8,6 +8,10 @@ Linux/Python 安装要求不适用于纯 HTTP 客户端。
 
 ## 授权与令牌
 
+保存的实例已过期时，按[令牌与租约恢复](agent-session-recovery_zh.md)操作。
+`INSTANCE_LEASE_EXPIRED`（409）与 `SCOPE_DENIED`（403）不同；换发令牌不
+延长租约，需在令牌及租约均有效时心跳续租。
+
 注册、激活不自动授予知识读取权限。有权限的权限管理员进入 Dashboard
 “智能体管理 → 已注册 Agent → 业务权限”，为选定 Agent 允许 `knowledge.read`。
 签发令牌和读取内容时都会检查当前有效权限。不要使用人用户会话或数据库凭据。

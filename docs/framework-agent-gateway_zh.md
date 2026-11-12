@@ -8,6 +8,11 @@
 
 ## 信任边界
 
+令牌/租约维护及机器可读恢复原因见[会话恢复](agent-session-recovery_zh.md)。
+`build_token_request` 支持 `new_instance=True`，忽略旧实例 ID 并要求已授权的
+安全域/频道绑定。可移植 HTTP 参考为 `scripts/agent_gateway_session.py`，
+与此纯转换适配器分开。
+
 Agent Bearer 发现/读取已发布的平台指南，使用
 `/api/agent-gateway/continuity/learning` 及其精确正文接口，要求
 `knowledge.read`，无需加入频道。这些既有连续性接口不在下方框架适配器操作表内；

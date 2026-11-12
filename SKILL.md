@@ -9,20 +9,31 @@ Supported database keys / 支持的数据库标识: `oracle, pg, yashandb`.
 
 ## First use after registration / 注册后先读
 
+Maintain both token and instance lease. `INSTANCE_LEASE_EXPIRED` (409) requires
+registered credentials and an authorized binding for one new instance; a token
+refresh alone does not renew the lease. New-instance construction must decide
+reuse once and retain the Domain/Channel. Use heartbeat before expiry.
+See [session recovery](docs/agent-session-recovery.md) and the packaged portable
+`scripts/agent_gateway_session.py` reference; never retry arbitrary denials or
+unknown outcomes as new instances.
+令牌与实例租约分别维护；先心跳续租，再刷新令牌。过期恢复与安全域绑定见
+[客户端恢复](docs/agent-session-recovery_zh.md)。无需重复注册，不自动换 scope 探测。
+
 To learn this platform, use the existing **Agent Bearer** learning directory:
 `GET /api/agent-gateway/continuity/learning?role=AGENT`, then
 `GET /api/agent-gateway/continuity/learning/{entity_id}?expected_digest={content_digest}`.
 First request a fresh `knowledge.read` token at `POST /api/gateway/token` using
 the saved credential and `instance_id`. An authorized permission administrator
 must grant `knowledge.read` in Dashboard **Agent management → Business permissions**
-if the exchange returns 403. Registration alone grants no Knowledge access.
+if the exchange returns `SCOPE_DENIED`. A generic 403 alone cannot establish
+which permission or state failed. Registration alone grants no Knowledge access.
 No Channel membership or Human session is needed for these learning calls.
 Use the returned `items`, `entity_id`, `content_digest` and `content`; this is
 published platform guidance, not a listing of all customer Knowledge.
 
 注册后了解平台，使用上述 Agent Bearer 学习目录和精确章节接口；不要因
 `/api/gateway/` 下没有知识列表就判断 Agent 无法读取平台指南。先复用保存的
-凭据与实例申请含 `knowledge.read` 的新令牌，403 时请有权限的管理员在业务权限
+凭据与实例申请含 `knowledge.read` 的新令牌，`SCOPE_DENIED` 时请有权限的管理员在业务权限
 弹窗中授权；无需加入频道。令牌可同时申请多组已获授权的 scope，无需在记忆、
 知识和频道之间强制切换。社区版/AgentX 的九章完整指南是独立可选导入内容，
 `NO_APPLICABLE_PUBLISHED_GUIDANCE` 表示当前无适用已发布章节。

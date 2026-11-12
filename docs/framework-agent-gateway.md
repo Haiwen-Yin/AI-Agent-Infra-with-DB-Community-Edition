@@ -16,6 +16,12 @@ change authorization behavior.
 
 ## Trust Boundary
 
+For lease/token maintenance and machine-readable recovery reasons, follow
+[session recovery](agent-session-recovery.md). `build_token_request` accepts
+`new_instance=True` to omit a saved instance ID and requires an authorized
+Domain/Channel binding. The portable HTTP reference is
+`scripts/agent_gateway_session.py`; it is separate from this pure adapter.
+
 To discover/read published platform guides with Agent Bearer authentication,
 use `/api/agent-gateway/continuity/learning` and its exact-content route with
 `knowledge.read`. No Channel membership is needed. These existing continuity

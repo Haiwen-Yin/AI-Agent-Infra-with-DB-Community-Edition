@@ -22,6 +22,35 @@ from . import connection, identity_api
 class GatewayError(ValueError):
     """Safe protocol error that does not reveal credential state."""
 
+    def __init__(self, message, *, code="GATEWAY_REQUEST_REJECTED", status_code=403,
+                 recovery_action="CHECK_CURRENT_AUTHORITY"):
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.recovery_action = recovery_action
+
+
+def instance_lease(agent_id: str, instance_id: str) -> Dict[str, Any]:
+    """Read only this authenticated Agent's instance using the database clock."""
+    instance = identity_api._row(connection.execute_query_one(
+        "SELECT i.INSTANCE_ID,i.AGENT_ID,i.STATUS,i.SECURITY_DOMAIN_ID,i.CHANNEL_ID,"
+        "i.FENCING_TOKEN,i.LEASE_EXPIRES_AT,i.REVOKED_AT,p.STATUS AS AGENT_STATUS,"
+        "CURRENT_TIMESTAMP AS DB_CLOCK FROM CX_AGENT_INSTANCES i "
+        "JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID=i.AGENT_ID "
+        "WHERE i.INSTANCE_ID=:instance_id AND i.AGENT_ID=:agent_id",
+        {"instance_id": instance_id, "agent_id": agent_id}))
+    if not instance or instance.get("revoked_at") or str(instance.get("status") or "").upper() != "ACTIVE":
+        raise GatewayError("Agent instance is unavailable", code="INSTANCE_UNAVAILABLE")
+    if str(instance.get("agent_status") or "").upper() != "ACTIVE":
+        raise GatewayError("Agent is not active", code="AGENT_NOT_ACTIVE")
+    remaining = (instance["lease_expires_at"].replace(tzinfo=None) -
+                 instance["db_clock"].replace(tzinfo=None)).total_seconds()
+    if remaining <= 0:
+        raise GatewayError("Agent instance lease has expired", code="INSTANCE_LEASE_EXPIRED",
+                           status_code=409, recovery_action="CREATE_INSTANCE_WITH_REGISTERED_CREDENTIAL")
+    instance["lease_expires_in"] = max(0, int(remaining))
+    return instance
+
 
 def _compliance_allows(agent_id: str, operation: str) -> bool:
     """Recheck the current authoritative control state for every Gateway use."""
@@ -135,29 +164,19 @@ def authenticate_activation_client_secret(agent_id: str, client_secret: str) -> 
 def issue_access_token(agent_id: str, instance_id: str, scopes: Iterable[str], *, ttl_seconds: int = 300, lease_digest: str = "") -> Dict[str, Any]:
     if not agent_id or not instance_id:
         raise GatewayError("agent and instance are required")
-    instance = identity_api._row(connection.execute_query_one(
-        "SELECT i.INSTANCE_ID, i.AGENT_ID, i.STATUS, i.SECURITY_DOMAIN_ID, i.CHANNEL_ID, "
-        "i.FENCING_TOKEN, i.LEASE_EXPIRES_AT, p.STATUS AS AGENT_STATUS "
-        "FROM CX_AGENT_INSTANCES i JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID = i.AGENT_ID "
-        "WHERE i.INSTANCE_ID = :instance_id AND i.AGENT_ID = :agent_id "
-        "AND i.REVOKED_AT IS NULL AND i.LEASE_EXPIRES_AT>CURRENT_TIMESTAMP",
-        {"instance_id": instance_id, "agent_id": agent_id},
-    ))
-    if (not instance or str(instance.get("status") or "").upper() != "ACTIVE"
-            or str(instance.get("agent_status") or "").upper() != "ACTIVE"):
-        raise GatewayError("agent instance is unavailable")
+    instance = instance_lease(agent_id, instance_id)
     isolation = identity_api._row(connection.execute_query_one(
         "SELECT STATUS FROM CX_RUNTIME_ISOLATION_CONTRACTS WHERE AGENT_ID=:agent_id AND INSTANCE_ID=:instance_id",
         {"agent_id": agent_id, "instance_id": instance_id},
     ))
     if isolation and str(isolation.get("status") or "").upper() != "ACTIVE":
-        raise GatewayError("runtime isolation contract blocks token issuance")
+        raise GatewayError("Runtime isolation contract blocks token issuance", code="RUNTIME_ISOLATION_BLOCKED")
     scope_list = sorted({str(scope).strip() for scope in scopes if str(scope).strip()})
     from .agent_permissions import require_business_scopes
     require_business_scopes(agent_id, scope_list)
     operation = "remediation" if scope_list and set(scope_list) <= {"compliance.evidence", "compliance.remediation"} else "token"
     if not _compliance_allows(agent_id, operation):
-        raise GatewayError("agent control state blocks token issuance")
+        raise GatewayError("Agent control state blocks token issuance", code="AGENT_CONTROL_BLOCKED")
     ttl = max(30, min(int(ttl_seconds), 900))
     raw = secrets.token_urlsafe(32)
     # Use the database clock: application and database session timezones may
@@ -176,7 +195,9 @@ def issue_access_token(agent_id: str, instance_id: str, scopes: Iterable[str], *
                                           {"digest": _digest(raw, "agent-access-token")})["expires_at"]
     return {"access_token": raw, "agent_id": agent_id, "instance_id": instance_id,
             "scopes": scope_list, "expires_at": expires.isoformat() if hasattr(expires, "isoformat") else str(expires),
-            "expires_in": ttl, "lease_expires_at": str(instance.get("lease_expires_at") or "")}
+            "expires_in": ttl, "lease_expires_at": str(instance.get("lease_expires_at") or ""),
+            "lease_expires_in": instance["lease_expires_in"],
+            "heartbeat_after_seconds": max(1, min(ttl, instance["lease_expires_in"]) // 3)}
 
 
 def create_instance(agent_id: str, *, channel_id: str = "", security_domain_id: str = "",
@@ -187,9 +208,9 @@ def create_instance(agent_id: str, *, channel_id: str = "", security_domain_id: 
         {"agent_id": agent_id},
     ))
     if not agent or str(agent.get("status") or "").upper() not in {"ACTIVE", "PENDING_CONFIRMATION"}:
-        raise GatewayError("agent is unavailable")
+        raise GatewayError("Agent is unavailable", code="AGENT_NOT_ACTIVE")
     if str(agent.get("status") or "").upper() != "ACTIVE":
-        raise GatewayError("agent activation is required")
+        raise GatewayError("Agent activation is required", code="AGENT_NOT_ACTIVE")
     if channel_id == "CH_PLATFORM_ADMINISTRATION":
         try:
             from . import admin_management
@@ -203,7 +224,7 @@ def create_instance(agent_id: str, *, channel_id: str = "", security_domain_id: 
         except ImportError:
             raise GatewayError("Platform Administration control service is unavailable")
     if not _compliance_allows(agent_id, "work"):
-        raise GatewayError("agent control state blocks new work")
+        raise GatewayError("Agent control state blocks new work", code="AGENT_CONTROL_BLOCKED")
     if channel_id:
         membership = identity_api._row(connection.execute_query_one(
             "SELECT c.SECURITY_DOMAIN_ID, c.CLASSIFICATION, d.CLASSIFICATION AS DOMAIN_CLASSIFICATION "
@@ -218,23 +239,23 @@ def create_instance(agent_id: str, *, channel_id: str = "", security_domain_id: 
             {"channel_id": channel_id, "agent_id": agent_id},
         ))
         if not membership:
-            raise GatewayError("agent is not a Channel member")
+            raise GatewayError("Agent cannot access the requested Channel", code="CHANNEL_ACCESS_DENIED")
         if security_domain_id and security_domain_id != membership.get("security_domain_id"):
-            raise GatewayError("security domain binding failed")
+            raise GatewayError("Security Domain binding does not match the Channel", code="DOMAIN_BINDING_MISMATCH", status_code=422, recovery_action="FIX_INSTANCE_BINDING")
         security_domain_id = str(membership.get("security_domain_id") or security_domain_id)
         classification = str(membership.get("classification") or classification)
         try:
             classification = identity_api._classification(classification)
             if not identity_api._classification_meets_minimum(classification, membership.get("domain_classification") or "INTERNAL"):
-                raise GatewayError("instance classification is below the Security Domain minimum")
+                raise GatewayError("Instance classification is below the Security Domain minimum", code="CLASSIFICATION_DENIED")
         except (identity_api.IdentityError, KeyError) as exc:
-            raise GatewayError("instance classification is invalid") from exc
+            raise GatewayError("Instance classification is invalid", code="CLASSIFICATION_INVALID", status_code=422, recovery_action="FIX_INSTANCE_BINDING") from exc
     else:
         # An unbound instance must still be anchored to a real domain and an
         # active Agent membership. A caller cannot choose an arbitrary domain
         # merely by putting its identifier in the request body.
         if not security_domain_id:
-            raise GatewayError("security domain is required for an unbound instance")
+            raise GatewayError("A Security Domain or Channel binding is required for a new instance", code="DOMAIN_REQUIRED", status_code=422, recovery_action="SUPPLY_AUTHORIZED_DOMAIN_OR_CHANNEL")
         domain = identity_api._row(connection.execute_query_one(
             "SELECT d.SECURITY_DOMAIN_ID, d.CLASSIFICATION FROM CX_SECURITY_DOMAINS d "
             "JOIN CX_DOMAIN_MEMBERS dm ON dm.SECURITY_DOMAIN_ID = d.SECURITY_DOMAIN_ID "
@@ -244,13 +265,13 @@ def create_instance(agent_id: str, *, channel_id: str = "", security_domain_id: 
             {"agent_id": agent_id, "security_domain_id": security_domain_id},
         ))
         if not domain:
-            raise GatewayError("agent is not a member of the security domain")
+            raise GatewayError("Agent cannot access the requested Security Domain", code="DOMAIN_ACCESS_DENIED")
         try:
             classification = identity_api._classification(classification)
             if not identity_api._classification_meets_minimum(classification, domain.get("classification") or "INTERNAL"):
-                raise GatewayError("instance classification is below the Security Domain minimum")
+                raise GatewayError("Instance classification is below the Security Domain minimum", code="CLASSIFICATION_DENIED")
         except (identity_api.IdentityError, KeyError) as exc:
-            raise GatewayError("instance classification is invalid") from exc
+            raise GatewayError("Instance classification is invalid", code="CLASSIFICATION_INVALID", status_code=422, recovery_action="FIX_INSTANCE_BINDING") from exc
     instance_id = identity_api._id("INS")
     node_id = str(node_id or local_node_id())[:128]
     connection.execute(
@@ -274,6 +295,7 @@ def heartbeat_instance(agent_id: str, instance_id: str) -> bool:
         "UPDATE CX_AGENT_INSTANCES SET LAST_SEEN_AT = CURRENT_TIMESTAMP, "
         "LEASE_EXPIRES_AT = " + _five_minute_deadline_sql() + ", UPDATED_AT = CURRENT_TIMESTAMP "
         "WHERE INSTANCE_ID = :instance_id AND AGENT_ID = :agent_id AND STATUS = 'ACTIVE' "
+        "AND LEASE_EXPIRES_AT>CURRENT_TIMESTAMP "
         "AND REVOKED_AT IS NULL AND EXISTS (SELECT 1 FROM CX_PRINCIPALS p "
         "WHERE p.PRINCIPAL_ID = :agent_id AND p.STATUS = 'ACTIVE')",
         {"instance_id": instance_id, "agent_id": agent_id},

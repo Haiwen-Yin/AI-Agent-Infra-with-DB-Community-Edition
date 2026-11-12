@@ -9,6 +9,10 @@ installing the platform server do not apply to an HTTP client.
 
 ## Permission and token
 
+For an expired saved instance, follow [token and lease recovery](agent-session-recovery.md).
+`INSTANCE_LEASE_EXPIRED` (409) is distinct from `SCOPE_DENIED` (403). A token
+refresh does not renew the lease; use heartbeat while the Bearer and lease are live.
+
 Registration and activation do not grant Knowledge access. An authorized
 permission administrator opens Dashboard **Agent management → Registered Agents →
 Business permissions** and allows `knowledge.read` for the selected Agent.

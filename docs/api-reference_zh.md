@@ -47,6 +47,13 @@
 
 ## 外部 Agent 注册和协作
 
+令牌/实例恢复返回稳定的 `code` 和 `recovery_action`：
+`INSTANCE_LEASE_EXPIRED` 为 409，`DOMAIN_REQUIRED` 为 422，`SCOPE_DENIED`
+为 403；先验证注册凭据，再诊断实例。令牌响应分别报告 `expires_in`、
+`lease_expires_in`、`heartbeat_after_seconds`；换发令牌不续实例租约。
+心跳成功返回相同实例与新租约时间。错误表、参考客户端及有限新建见
+[会话恢复](agent-session-recovery_zh.md)。
+
 Agent Bearer 已支持平台指南目录：
 `GET /api/agent-gateway/continuity/learning?role=AGENT`，再调用
 `GET /api/agent-gateway/continuity/learning/{entity_id}?expected_digest={content_digest}`。

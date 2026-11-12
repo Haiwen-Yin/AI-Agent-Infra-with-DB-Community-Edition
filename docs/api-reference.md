@@ -70,6 +70,14 @@ existing sessions. Preconditions, request fields and recovery are in
 
 ## External Agent registration and collaboration
 
+Token/instance recovery uses stable `code` and `recovery_action` fields:
+`INSTANCE_LEASE_EXPIRED` → 409, `DOMAIN_REQUIRED` → 422, `SCOPE_DENIED` → 403.
+Credential authentication precedes instance diagnosis. Token responses separately
+report `expires_in`, `lease_expires_in`, `heartbeat_after_seconds`; refreshing a
+token does not renew its instance. Successful heartbeat returns the same instance
+and new lease timing. See [session recovery](agent-session-recovery.md) for the
+full error table, portable client and bounded new-instance construction.
+
 Published platform guides already support Agent Bearer discovery:
 `GET /api/agent-gateway/continuity/learning?role=AGENT`, followed by
 `GET /api/agent-gateway/continuity/learning/{entity_id}?expected_digest={content_digest}`.

@@ -630,6 +630,7 @@ def build_token_request(
     security_domain_id: str = "",
     node_id: str = "",
     scopes: Any = None,
+    new_instance: bool = False,
 ) -> Dict[str, Any]:
     """Build the bootstrap exchange for an instance-scoped access token.
 
@@ -654,8 +655,11 @@ def build_token_request(
         body["challenge"] = _ephemeral_secret(challenge, "challenge", minimum=8, maximum=512)
     else:
         raise FrameworkAdapterError("a client secret or an Ed25519 proof is required")
+    reuse = bool(instance_id) and not new_instance
+    if new_instance and not (channel_id or security_domain_id):
+        raise FrameworkAdapterError("new instance requires channel_id or security_domain_id")
     optional_ids = (
-        ("instance_id", instance_id),
+        ("instance_id", instance_id if reuse else ""),
         ("channel_id", channel_id),
         ("security_domain_id", security_domain_id),
         ("node_id", node_id),
@@ -824,7 +828,8 @@ def validate_token_response(
     """Validate an instance-scoped bearer token without accepting its identity."""
     body = _response_body(response, "token response")
     allowed = frozenset({"access_token", "agent_id", "instance_id", "scopes", "expires_at",
-                         "expires_in", "lease_expires_at", "database_endpoint"})
+                         "expires_in", "lease_expires_at", "database_endpoint",
+                         "lease_expires_in", "heartbeat_after_seconds"})
     _reject_unknown(body, allowed, "token response")
     agent = _expected_identity(expected_agent_id, trusted_agent_id, "agent_id")
     instance = _expected_identity(expected_instance_id, trusted_instance_id, "instance_id")
@@ -845,6 +850,9 @@ def validate_token_response(
         result["expires_in"] = ttl
     if "lease_expires_at" in body:
         result["lease_expires_at"] = _optional_text(body["lease_expires_at"], "response.lease_expires_at", max_length=128)
+    for field in ("lease_expires_in", "heartbeat_after_seconds"):
+        if field in body:
+            result[field] = _nonnegative_int(body[field], "response." + field)
     # Database discovery has its own authenticated contract. Do not interpret
     # or propagate endpoint payloads into framework message envelopes.
     return result

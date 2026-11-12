@@ -129,7 +129,8 @@ def _correlation_id(request: Request) -> str:
     return current
 
 
-def _error_response(request: Request, status: int, code: str, message: str, retryable: Optional[bool] = None) -> JSONResponse:
+def _error_response(request: Request, status: int, code: str, message: str, retryable: Optional[bool] = None,
+                    recovery_action: str = "") -> JSONResponse:
     correlation = _correlation_id(request)
     safe_message = str(message or "Request failed")[:500]
     body = {
@@ -139,6 +140,8 @@ def _error_response(request: Request, status: int, code: str, message: str, retr
         "retryable": status in {408, 429, 502, 503, 504} if retryable is None else bool(retryable),
         "detail": safe_message,
     }
+    if recovery_action:
+        body["recovery_action"] = recovery_action[:96]
     return JSONResponse(body, status_code=status, headers={"X-Correlation-ID": correlation})
 
 
@@ -146,9 +149,10 @@ def _error_response(request: Request, status: int, code: str, message: str, retr
 async def governed_http_error(request: Request, exc: StarletteHTTPException):
     # Status/path/cause type are useful without logging bodies, credentials or
     # database exception text. Correlation survives handled service failures.
-    logger.warning("HTTP failure correlation_id=%s status=%s path=%s cause=%s",
+    logger.warning("HTTP failure correlation_id=%s status=%s path=%s cause=%s code=%s",
                    _correlation_id(request), exc.status_code, request.url.path,
-                   type(exc.__cause__).__name__ if exc.__cause__ else "none")
+                   type(exc.__cause__).__name__ if exc.__cause__ else "none",
+                   exc.detail.get("code", "HTTP_"+str(exc.status_code)) if isinstance(exc.detail, dict) else "HTTP_"+str(exc.status_code))
     detail = exc.detail
     code = "HTTP_" + str(exc.status_code)
     message = "Request failed"
@@ -159,7 +163,8 @@ async def governed_http_error(request: Request, exc: StarletteHTTPException):
         retryable = detail.get("retryable")
     else:
         message = str(detail or message)
-    return _error_response(request, int(exc.status_code), code, message, retryable)
+    return _error_response(request, int(exc.status_code), code, message, retryable,
+                           str(detail.get("recovery_action") or "") if isinstance(detail, dict) else "")
 
 
 @app.exception_handler(RequestValidationError)
@@ -1511,6 +1516,14 @@ class GatewayTokenBody(BaseModel):
 
 class GatewayActivationBody(GatewayTokenBody):
     baseline: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GatewayInstanceBody(BaseModel):
+    # Optional legacy claim is checked, never used to select the acting Agent.
+    agent_id: str = Field(default="", max_length=128)
+    channel_id: str = Field(default="", max_length=128)
+    security_domain_id: str = Field(default="", max_length=128)
+    node_id: str = Field(default="", max_length=128)
 
 
 class GatewayEvidenceBody(BaseModel):
@@ -6445,6 +6458,11 @@ def gateway_activate(body: GatewayActivationBody) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail="Agent activation service unavailable") from exc
 
 
+def _gateway_protocol_error(exc):
+    return HTTPException(status_code=exc.status_code, detail={
+        "code":exc.code, "message":str(exc), "recovery_action":exc.recovery_action, "retryable":False})
+
+
 @app.post("/api/gateway/token")
 @app.post("/api/agent-gateway/token")
 @_gateway_request_context
@@ -6474,16 +6492,16 @@ def gateway_token(body: GatewayTokenBody) -> Dict[str, Any]:
         ):
             credential = None
     if not credential:
-        raise HTTPException(status_code=401, detail="Agent credential is invalid")
+        raise HTTPException(status_code=401, detail={"code":"AGENT_CREDENTIAL_INVALID", "message":"Agent credential is invalid", "recovery_action":"CHECK_REGISTERED_CREDENTIAL", "retryable":False})
     requested = body.scopes or ["channels.read", "channels.write"]
     allowed = {"channels.read", "channels.write", "barriers.arrive", "actions.propose", "events.read", "compliance.evidence", "compliance.remediation", "embedding.probe", "embedding.generate", "database.endpoint", "skills.read", "tools.read", "memory.propose", "memory.read", "memory.write", "knowledge.read", "knowledge.write", "workspaces.read", "workspaces.write", "agents.operate"}
     if not set(requested) <= allowed:
-        raise HTTPException(status_code=403, detail="Requested Agent scope is not allowed")
+        raise HTTPException(status_code=403, detail={"code":"SCOPE_NOT_ALLOWED", "message":"Requested Agent scope is not allowed", "recovery_action":"FIX_REQUESTED_SCOPES", "retryable":False})
     from lib import agent_permissions
     try:
         agent_permissions.require_business_scopes(body.agent_id, requested)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail={"code":"SCOPE_DENIED", "message":"Requested Agent business scope is not authorized", "recovery_action":"REQUEST_BUSINESS_PERMISSION", "retryable":False}) from exc
     if not instance_id:
         try:
             instance = agent_gateway_api.create_instance(
@@ -6491,8 +6509,12 @@ def gateway_token(body: GatewayTokenBody) -> Dict[str, Any]:
                 security_domain_id=body.security_domain_id, node_id=body.node_id,
             )
             instance_id = instance["instance_id"]
-        except (agent_gateway_api.GatewayError, PermissionError) as exc:
-            raise HTTPException(status_code=403, detail="Agent instance could not be created") from exc
+        except agent_gateway_api.GatewayError as exc:
+            raise _gateway_protocol_error(exc) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail={"code":"INSTANCE_ACCESS_DENIED", "message":"Agent instance creation denied", "retryable":False}) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Agent instance service unavailable") from exc
     if "embedding.generate" in requested:
         try:
             embedding_governance.require_embedding_gateway_access(body.agent_id)
@@ -6505,8 +6527,12 @@ def gateway_token(body: GatewayTokenBody) -> Dict[str, Any]:
         # included; the endpoint resolver applies the enrollment-grant scope.
         issued["database_endpoint"] = platform_agent_pool.discover_agent_endpoint(body.agent_id)
         return issued
-    except (agent_gateway_api.GatewayError, PermissionError) as exc:
-        raise HTTPException(status_code=403, detail="Agent token could not be issued") from exc
+    except agent_gateway_api.GatewayError as exc:
+        raise _gateway_protocol_error(exc) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={"code":"TOKEN_ACCESS_DENIED", "message":"Agent token access denied", "recovery_action":"CHECK_CURRENT_AUTHORITY", "retryable":False}) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Agent token service unavailable") from exc
 
 
 @app.get("/api/gateway/database-endpoint")
@@ -6528,17 +6554,19 @@ def gateway_database_endpoint(request: Request) -> Dict[str, Any]:
 
 @app.post("/api/gateway/instances")
 @_gateway_request_context
-def gateway_instance(body: GatewayTokenBody, request: Request) -> Dict[str, Any]:
+def gateway_instance(body: GatewayInstanceBody, request: Request) -> Dict[str, Any]:
     context = _gateway_context(
         request, operation="instances.create", attach_agent_database_context=False,
     )
+    if body.agent_id and body.agent_id != str(context["agent_id"]):
+        raise HTTPException(status_code=403, detail={"code":"INSTANCE_ACCESS_DENIED", "message":"Agent identity does not match the authenticated instance", "retryable":False})
     try:
         return agent_gateway_api.create_instance(
             str(context["agent_id"]), channel_id=body.channel_id,
             security_domain_id=body.security_domain_id, node_id=body.node_id,
         )
     except agent_gateway_api.GatewayError as exc:
-        raise HTTPException(status_code=403, detail="Agent instance could not be created") from exc
+        raise _gateway_protocol_error(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Agent instance service unavailable") from exc
 
@@ -6617,7 +6645,14 @@ def gateway_heartbeat(request: Request) -> Dict[str, Any]:
         request, operation="heartbeat", attach_agent_database_context=False,
     )
     try:
-        return {"success": agent_gateway_api.heartbeat_instance(str(context["agent_id"]), str(context["instance_id"]))}
+        agent, instance = str(context["agent_id"]), str(context["instance_id"])
+        if not agent_gateway_api.heartbeat_instance(agent, instance):
+            raise agent_gateway_api.GatewayError("Instance heartbeat was rejected", code="INSTANCE_UNAVAILABLE")
+        lease = agent_gateway_api.instance_lease(agent, instance)
+        return {"success":True, "instance_id":instance, "lease_expires_at":str(lease["lease_expires_at"]),
+                "lease_expires_in":lease["lease_expires_in"]}
+    except agent_gateway_api.GatewayError as exc:
+        raise _gateway_protocol_error(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Agent instance service unavailable") from exc
 

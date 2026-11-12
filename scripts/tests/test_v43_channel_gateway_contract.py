@@ -123,9 +123,9 @@ def test_channel_and_instance_scope_cannot_lower_security_classification():
     gateway = _source("shared/lib/agent_gateway_api.py")
     assert "_classification_meets_minimum(classification, domain.get(\"classification\")" in identity
     assert "Channel classification is below the Security Domain minimum" in identity
-    assert "security domain is required for an unbound instance" in gateway
-    assert "agent is not a member of the security domain" in gateway
-    assert "instance classification is below the Security Domain minimum" in gateway
+    assert 'code="DOMAIN_REQUIRED"' in gateway
+    assert 'code="DOMAIN_ACCESS_DENIED"' in gateway
+    assert 'code="CLASSIFICATION_DENIED"' in gateway
 
 
 def test_channel_member_addition_requires_domain_membership_and_reason():
