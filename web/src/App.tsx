@@ -5943,6 +5943,86 @@ function CompliancePage({
   </section>;
 }
 
+function AgentPermissionsDialog({ agentId, text, onClose }: {
+  agentId: string; text: (zh: string, en: string) => string;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [data, setData] = useState<Row | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [action, setAction] = useState("memory.read");
+  const [effect, setEffect] = useState("ALLOW");
+  const [reason, setReason] = useState("");
+  const load = async () => {
+    setData(null);
+    setLoadError("");
+    try { setData(await api<Row>(`/api/agents/${encodeURIComponent(agentId)}/permissions`)); }
+    catch (error) { setLoadError(error instanceof Error ? error.message : String(error)); }
+  };
+  useEffect(() => { void load(); }, [agentId]);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    dialog?.showModal();
+    document.body.style.overflow = "hidden";
+    return () => {
+      dialog?.close();
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!data || busy) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await api(`/api/agents/${encodeURIComponent(agentId)}/permissions`, { method: "POST", body: JSON.stringify({
+        resource_action: action, effect, data_scope: "OWNED", reason,
+        expected_permission_version: data.permission_version,
+      }) });
+      setReason(""); await load();
+      setFeedback({ message: text("智能体权限已更新", "Agent permissions updated"), error: false });
+    } catch (error) {
+      setFeedback({ message: error instanceof Error ? error.message : String(error), error: true }); await load();
+    } finally { setBusy(false); }
+  };
+  const names: Record<string, string> = {
+    "memory.read": text("读取自身记忆", "Read own Memory"),
+    "memory.write": text("写入自身记忆", "Write own Memory"),
+    "knowledge.read": text("读取授权知识", "Read authorized Knowledge"),
+    "knowledge.write": text("创建私有知识", "Create private Knowledge"),
+  };
+  return <dialog ref={dialogRef} className="catalog-dialog agent-permissions-dialog" aria-labelledby="agent-permissions-title"
+    onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+    onKeyDown={event => {
+      if (event.key !== "Tab") return;
+      const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), summary"))
+        .filter(node => node.getClientRects().length > 0);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }}>
+    <div className="subhead"><h2 id="agent-permissions-title">{text("智能体业务权限", "Agent business permissions")}</h2><button type="button" className="icon-button" disabled={busy} onClick={onClose} aria-label={text("关闭", "Close")}><X size={16} /></button></div>
+    <p className="agent-permissions-identity">{agentId}</p>
+    <p className="cx-form-hint">{text("当前负责人可管理自身记忆读写；权限管理员还可管理知识权限。安全域、私有归属和共享内容审核始终独立校验。", "Current owners can manage own-Memory access; permission administrators can also manage Knowledge access. Security Domains, private ownership and shared-content review are checked independently.")}</p>
+    {feedback && <p className={`agent-permissions-feedback${feedback.error ? " is-error" : ""}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</p>}
+    {!data ? loadError ? <p role="alert">{loadError} <button type="button" className="small-button" onClick={() => void load()}>{text("重新读取", "Retry")}</button></p> : <p role="status">{text("正在读取权限…", "Loading permissions…")}</p> : <>
+      <DataTable headers={[text("能力", "Capability"), text("实际权限", "Effective access"), text("数据边界", "Data boundary")]} rows={(data.items || []).map((item: Row) => [names[item.resource_action] || item.resource_action, item.decision === "ALLOW" ? text("允许", "Allowed") : text("拒绝", "Denied"), item.resource_action.startsWith("memory.") ? text("自身记忆与当前负责人", "Own Memory and current owner") : text("按知识访问策略", "Current Knowledge policy")])} empty={text("暂无权限", "No permissions")} text={text} />
+      {data.manageable_actions?.length > 0 && <form className="agent-permissions-form" onSubmit={save}>
+        <label className="filter-field"><span>{text("能力", "Capability")}</span><select value={action} onChange={e => setAction(e.target.value)}>{data.manageable_actions.map((value: string) => <option key={value} value={value}>{names[value] || value}</option>)}</select></label>
+        <label className="filter-field"><span>{text("操作", "Action")}</span><select value={effect} onChange={e => setEffect(e.target.value)}><option value="ALLOW">{text("允许", "Allow")}</option><option value="DENY">{text("拒绝", "Deny")}</option><option value="RESET">{text("恢复角色权限", "Use role permissions")}</option></select></label>
+        <label className="filter-field"><span>{text("修改原因", "Reason")}</span><input value={reason} onChange={e => setReason(e.target.value)} required maxLength={2000} /></label>
+        <button type="submit" className="primary-button" disabled={busy || !reason.trim()}>{text("保存权限", "Save permissions")}</button>
+      </form>}
+      <details><summary>{text("当前直接授权记录", "Current direct grants")}</summary><DataTable headers={[text("能力", "Capability"), text("效果", "Effect"), text("范围", "Scope"), text("原因", "Reason")]} rows={(data.direct_overrides || []).map((item: Row) => [item.resource_action, item.effect, item.data_scope, item.reason])} empty={text("无直接授权记录", "No direct grants")} text={text} /></details>
+    </>}
+  </dialog>;
+}
+
 function AgentsPage({
   lang,
   me,
@@ -5968,6 +6048,7 @@ function AgentsPage({
   const [externalPolicy, setExternalPolicy] = useState<Row>({});
   const [token, setToken] = useState<Row | null>(null);
   const [agentSearch, setAgentSearch] = useState("");
+  const [permissionsAgent, setPermissionsAgent] = useState("");
   const [agentSourceFilter, setAgentSourceFilter] = useState("ALL");
   const [agentStatusFilter, setAgentStatusFilter] = useState("ALL");
   const [pageSize, setPageSize] = useState(20);
@@ -6132,6 +6213,7 @@ function AgentsPage({
     const governed = item.inventory_source === "GOVERNED";
     const controls = governed ? (
       <span className="row-actions">
+        <button type="button" className="small-button" onClick={() => setPermissionsAgent(String(item.agent_id))}>{text("业务权限", "Business permissions")}</button>
         {current === "ACTIVE" && (
           <button
             className="small-button"
@@ -6219,6 +6301,7 @@ function AgentsPage({
         text={text}
       />
       <ViewToggle value={view} onChange={(value) => setView(value as "registered" | "external" | "native")} options={agentViews} />
+      {permissionsAgent && <AgentPermissionsDialog key={permissionsAgent} agentId={permissionsAgent} text={text} onClose={() => setPermissionsAgent("")} />}
       <InfoPanel
           title={text("已注册智能体", "Registered Agents")}
           text={text}

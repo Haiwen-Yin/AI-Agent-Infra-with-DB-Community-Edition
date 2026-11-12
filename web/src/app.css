@@ -1812,6 +1812,23 @@ form:has(input[name="roles"][value="ADMIN_AGENT"]) {
 .catalog-dialog { width: min(560px, calc(100vw - 32px)); max-height: 80vh; overflow: auto; padding: 20px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .principal-dialog { width: min(680px, calc(100vw - 32px)); background: var(--surface-strong); }
 .principal-dialog > form { min-width: 0; }
+.agent-permissions-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); background: var(--surface-strong); box-shadow: var(--shadow); }
+.agent-permissions-dialog .subhead { margin-bottom: 8px; gap: 12px; }
+.agent-permissions-dialog .subhead h2 { margin: 0; min-width: 0; font-size: 18px; }
+.agent-permissions-identity { margin: 0 0 12px; overflow-wrap: anywhere; font-weight: 700; font-size: 13px; }
+.agent-permissions-dialog .table-wrap { min-width: 0; }
+.agent-permissions-dialog details { margin-top: 16px; }
+.agent-permissions-form { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(140px, 1fr) minmax(180px, 1.6fr) auto; align-items: end; gap: 12px; margin-top: 16px; }
+.agent-permissions-form .filter-field { min-width: 0; }
+.agent-permissions-form input, .agent-permissions-form select, .agent-permissions-form > .primary-button { height: 38px; min-height: 38px; margin: 0; }
+.agent-permissions-form > .primary-button { white-space: nowrap; }
+.agent-permissions-feedback { padding: 8px 12px; border-left: 3px solid var(--brand); background: var(--surface-soft); color: var(--brand-deep); font-size: 13px; }
+.agent-permissions-feedback.is-error { border-color: var(--danger); color: var(--danger); }
+@media (max-width: 760px) {
+  .agent-permissions-dialog { padding: 16px; }
+  .agent-permissions-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .agent-permissions-form > .primary-button { justify-self: start; }
+}
 .tool-import-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .tool-import-layout > .info-panel { min-width: 0; margin: 0 0 14px; }
 .tool-import-layout > .info-panel:last-child { margin-bottom: 0; }

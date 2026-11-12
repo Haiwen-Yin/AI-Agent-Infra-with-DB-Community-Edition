@@ -139,7 +139,8 @@ def issue_access_token(agent_id: str, instance_id: str, scopes: Iterable[str], *
         "SELECT i.INSTANCE_ID, i.AGENT_ID, i.STATUS, i.SECURITY_DOMAIN_ID, i.CHANNEL_ID, "
         "i.FENCING_TOKEN, i.LEASE_EXPIRES_AT, p.STATUS AS AGENT_STATUS "
         "FROM CX_AGENT_INSTANCES i JOIN CX_PRINCIPALS p ON p.PRINCIPAL_ID = i.AGENT_ID "
-        "WHERE i.INSTANCE_ID = :instance_id AND i.AGENT_ID = :agent_id",
+        "WHERE i.INSTANCE_ID = :instance_id AND i.AGENT_ID = :agent_id "
+        "AND i.REVOKED_AT IS NULL AND i.LEASE_EXPIRES_AT>CURRENT_TIMESTAMP",
         {"instance_id": instance_id, "agent_id": agent_id},
     ))
     if (not instance or str(instance.get("status") or "").upper() != "ACTIVE"
@@ -152,21 +153,30 @@ def issue_access_token(agent_id: str, instance_id: str, scopes: Iterable[str], *
     if isolation and str(isolation.get("status") or "").upper() != "ACTIVE":
         raise GatewayError("runtime isolation contract blocks token issuance")
     scope_list = sorted({str(scope).strip() for scope in scopes if str(scope).strip()})
+    from .agent_permissions import require_business_scopes
+    require_business_scopes(agent_id, scope_list)
     operation = "remediation" if scope_list and set(scope_list) <= {"compliance.evidence", "compliance.remediation"} else "token"
     if not _compliance_allows(agent_id, operation):
         raise GatewayError("agent control state blocks token issuance")
     ttl = max(30, min(int(ttl_seconds), 900))
     raw = secrets.token_urlsafe(32)
-    expires = _now() + timedelta(seconds=ttl)
+    # Use the database clock: application and database session timezones may
+    # differ, while token/lease TIMESTAMP columns have no timezone.
+    deadline = (f"CURRENT_TIMESTAMP + INTERVAL '{ttl} seconds'" if
+                str(getattr(connection, "DATABASE_DIALECT", "")).lower() in {"postgresql", "pg"}
+                else f"CURRENT_TIMESTAMP + INTERVAL '{ttl}' SECOND")
     connection.execute(
         "INSERT INTO CX_AGENT_ACCESS_TOKENS(TOKEN_DIGEST, AGENT_ID, INSTANCE_ID, SCOPE_JSON, LEASE_DIGEST, FENCING_TOKEN, EXPIRES_AT) "
-        "VALUES (:token_digest, :agent_id, :instance_id, :scope_json, :lease_digest, :fencing_token, :expires_at)",
+        "VALUES (:token_digest, :agent_id, :instance_id, :scope_json, :lease_digest, :fencing_token, " + deadline + ")",
         {"token_digest": _digest(raw, "agent-access-token"), "agent_id": agent_id,
          "instance_id": instance_id, "scope_json": json.dumps(scope_list, separators=(",", ":"), sort_keys=True),
-         "lease_digest": lease_digest or None, "fencing_token": instance["fencing_token"], "expires_at": expires},
+         "lease_digest": lease_digest or None, "fencing_token": instance["fencing_token"]},
     )
+    expires = connection.execute_query_one("SELECT EXPIRES_AT FROM CX_AGENT_ACCESS_TOKENS WHERE TOKEN_DIGEST=:digest",
+                                          {"digest": _digest(raw, "agent-access-token")})["expires_at"]
     return {"access_token": raw, "agent_id": agent_id, "instance_id": instance_id,
-            "scopes": scope_list, "expires_at": expires.isoformat()}
+            "scopes": scope_list, "expires_at": expires.isoformat() if hasattr(expires, "isoformat") else str(expires),
+            "expires_in": ttl, "lease_expires_at": str(instance.get("lease_expires_at") or "")}
 
 
 def create_instance(agent_id: str, *, channel_id: str = "", security_domain_id: str = "",

@@ -43,6 +43,11 @@ def candidate_db(fixture,monkeypatch):
         CREATE TABLE CX_MEMORY_RELATIONS(RELATION_ID TEXT,SOURCE_VERSION_ID TEXT,TARGET_VERSION_ID TEXT,RELATION_TYPE TEXT,RELATION_STATE TEXT,DETERMINISTIC TEXT,METHOD TEXT,EVIDENCE_JSON TEXT,CREATED_BY TEXT);
     ''')
     from lib import memory_quality
+    from lib import memory_lifecycle
+    def memory_query_one(sql, params):
+        row = db.execute(sql, params).fetchone()
+        return {key.lower(): row[key] for key in row.keys()} if row else None
+    monkeypatch.setattr(memory_lifecycle, 'execute_query_one', memory_query_one)
     for statement in memory_quality.schema_statements('pg'):
         db.execute(statement)
     hid=handoff.offer('owner',wid,offer_request())['handoff_id']

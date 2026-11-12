@@ -19,6 +19,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from . import connection, identity_api, cursor_pagination
 from .connection import execute, execute_query, execute_query_one, execute_transaction_callback
+from .continuity_state import ContinuityConflict
 
 MEMORY_TYPES = frozenset({"EPISODIC", "FACT", "PREFERENCE", "DECISION", "PROCEDURAL", "EXPERIENCE"})
 MEMORY_SCOPES = frozenset({"RUNTIME_CONTEXT", "CHANNEL_MEMORY", "AGENT_MEMORY", "WORKSPACE_MEMORY", "ENTERPRISE_KNOWLEDGE"})
@@ -202,7 +203,14 @@ def _require_memory_access(principal_id: str, version: Mapping[str, Any], *, pur
             raise _safe_error()
     scopes = {str(value).upper() for value in access.get("scopes") or []}
     owner = str(version.get("owner_principal_id") or "")
-    if "ALL" not in scopes and owner and owner != principal_id and "ASSIGNED" not in scopes and "ORG_SUBTREE" not in scopes:
+    from .agent_permissions import is_owner
+    owner_row = (execute_query_one("SELECT * FROM CX_PRINCIPALS WHERE PRINCIPAL_ID=:owner", {"owner": owner})
+                 if owner and owner != principal_id and str(version.get("memory_scope") or "").upper() == "AGENT_MEMORY" else None)
+    private_agent = str((owner_row or {}).get("principal_type") or "").upper() == "AGENT"
+    if private_agent and owner != principal_id:
+        if not is_owner(owner, principal_id):
+            raise _safe_error()
+    elif "ALL" not in scopes and owner and owner != principal_id and "ASSIGNED" not in scopes and "ORG_SUBTREE" not in scopes:
         raise _safe_error()
     if agent_instance_id:
         instance = execute_query_one(
@@ -298,6 +306,21 @@ def current_memories_cursor(
     from .memory_quality import applicable_sql
     conditions = ["f.CURRENT_VERSION_ID = v.VERSION_ID", applicable_sql()]
     params: dict[str, Any] = {"lim": int(context["page_size"]) + 1}
+    from .agent_permissions import owner_predicate
+    conditions.append("(v.MEMORY_SCOPE<>'AGENT_MEMORY' OR NOT EXISTS (SELECT 1 FROM CX_PRINCIPALS ap "
+                      "WHERE ap.PRINCIPAL_ID=v.OWNER_PRINCIPAL_ID AND ap.PRINCIPAL_TYPE='AGENT') "
+                      "OR v.OWNER_PRINCIPAL_ID=:reader OR " + owner_predicate("v.OWNER_PRINCIPAL_ID", ":reader") + ")")
+    params["reader"] = principal_id
+    access = identity_api.effective_access(principal_id, "memory.read")
+    if access.get("decision") != "ALLOW":
+        raise _safe_error()
+    if "ALL" not in set(access.get("scopes") or []):
+        conditions.append("(v.SECURITY_DOMAIN_ID IS NULL OR EXISTS (SELECT 1 FROM CX_DOMAIN_MEMBERS md "
+                          "WHERE md.PRINCIPAL_ID=:reader AND md.SECURITY_DOMAIN_ID=v.SECURITY_DOMAIN_ID "
+                          "AND md.STATUS='ACTIVE' AND (md.VALID_UNTIL IS NULL OR md.VALID_UNTIL>CURRENT_TIMESTAMP)))")
+    if not set(access.get("scopes") or []) & {"ALL", "ASSIGNED", "ORG_SUBTREE"}:
+        conditions.append("(v.OWNER_PRINCIPAL_ID IS NULL OR v.OWNER_PRINCIPAL_ID=:reader OR " +
+                          owner_predicate("v.OWNER_PRINCIPAL_ID", ":reader") + ")")
     if lifecycle_state:
         state = _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state")
         if state not in ORDINARY_VISIBLE_STATES:
@@ -341,6 +364,8 @@ def current_memories_cursor(
         "JOIN CX_MEMORY_VERSIONS v ON v.VERSION_ID=f.CURRENT_VERSION_ID WHERE " + " AND ".join(conditions) +
         " ORDER BY f.FAMILY_ID FETCH FIRST :lim ROWS ONLY", params,
     )
+    # Apply authority before LIMIT/count/cursor so hidden rows cannot truncate
+    # a page or expose its total. No per-row authorization query is needed.
     values = [_version_row(row) for row in rows]
     result = cursor_pagination.page(values, context, lambda item: {"family_id": str(item["family_id"])})
     count_conditions = [condition for condition in conditions if condition != "f.FAMILY_ID > :after"]
@@ -420,7 +445,8 @@ def adopt_legacy_memory(entity_id: str, *, actor: Optional[str] = None) -> Optio
     return execute_transaction_callback(commit)
 
 
-def create_family(request_value: Mapping[str, Any] | VersionRequest, *, actor: str, idempotency_key: Optional[str] = None) -> dict[str, Any]:
+def create_family(request_value: Mapping[str, Any] | VersionRequest, *, actor: str, idempotency_key: Optional[str] = None,
+                  _transaction=None, _family_id=None, _request_digest=None) -> dict[str, Any]:
     request = _request(request_value)
     if request.corrects_version_id:
         raise MemoryLifecycleError('INVALID_ARGUMENT','A correction must target an existing family successor')
@@ -428,20 +454,21 @@ def create_family(request_value: Mapping[str, Any] | VersionRequest, *, actor: s
     if inspection["quarantine_recommended"]:
         # Persist immutable evidence, but fail closed from ordinary retrieval.
         request = VersionRequest(**{**request.__dict__, "reason": (request.reason + " | ingestion signals: " + ",".join(inspection["signals"]))[:1800]})
-    family_id, version_id = _id("MF"), _id("MV")
+    family_id, version_id = _family_id or _id("MF"), _id("MV")
     digest = _digest(request.title, request.body, request.memory_type, request.memory_scope, request.classification)
     def commit(tx: Any) -> dict[str, Any]:
         tx.execute("INSERT INTO CX_MEMORY_FAMILIES (FAMILY_ID,CURRENT_VERSION_ID,FAMILY_STATE,OWNER_PRINCIPAL_ID,WORKSPACE_ID,SECURITY_DOMAIN_ID,CLASSIFICATION) VALUES (:family_id,:version_id,'ACTIVE',:actor,:workspace_id,:security_domain_id,:classification)", {"family_id": family_id, "version_id": version_id, "actor": request.owner_principal_id or actor, "workspace_id": request.workspace_id, "security_domain_id": request.security_domain_id, "classification": request.classification})
         _insert_version(tx, version_id, family_id, 1, request, digest, actor,
-                        lifecycle_state="QUARANTINED" if inspection["quarantine_recommended"] else "ACTIVE")
+                        lifecycle_state="QUARANTINED" if inspection["quarantine_recommended"] else "ACTIVE",
+                        metadata={"gateway_request_digest": _request_digest} if _request_digest else None)
         _insert_source_representation(tx, version_id, request.body, digest)
         for signal in inspection["signals"]:
             tx.execute("INSERT INTO CX_MEMORY_INGESTION_FINDINGS (FINDING_ID,VERSION_ID,FINDING_TYPE,SEVERITY,CONTENT_DIGEST,EVIDENCE_JSON,STATUS) VALUES (:finding_id,:version_id,:finding_type,:severity,:content_digest,:evidence,'OPEN')", {"finding_id": _id("MIF"), "version_id": version_id, "finding_type": signal, "severity": "HIGH" if signal != "LINK" else "LOW", "content_digest": inspection["digest"], "evidence": _json({"detector": "deterministic-v1"})})
-        _outbox(tx, "FAMILY", family_id, "CURRENT_VERSION_CHANGED", {"family_id": family_id, "version_id": version_id, "idempotency_key": idempotency_key, "ingestion": inspection})
+        _outbox(tx, "FAMILY", family_id, "CURRENT_VERSION_CHANGED", {"family_id": family_id, "version_id": version_id, "idempotency_key": idempotency_key, "ingestion": inspection, "request_digest": _request_digest})
         return {"family_id": family_id, "version_id": version_id, "version_number": 1,
                 "lifecycle_state": "QUARANTINED" if inspection["quarantine_recommended"] else "ACTIVE",
                 "ingestion_signals": inspection["signals"]}
-    return execute_transaction_callback(commit)
+    return commit(_transaction) if _transaction is not None else execute_transaction_callback(commit)
 
 
 def create_successor(family_id: str, expected_version_id: str, request_value: Mapping[str, Any] | VersionRequest, *, actor: str, idempotency_key: Optional[str] = None, lifecycle_state: str = "ACTIVE") -> dict[str, Any]:
@@ -615,7 +642,7 @@ def _representation_metadata(reader,version_ids,*,limit,snapshot=False):
 
 def _version_metadata(reader,version_ids):
     from .continuity_sources import read_ids
-    rows=read_ids(reader,"SELECT VERSION_ID,FAMILY_ID,LIFECYCLE_STATE,CLASSIFICATION,SECURITY_DOMAIN_ID,OWNER_PRINCIPAL_ID "
+    rows=read_ids(reader,"SELECT VERSION_ID,FAMILY_ID,LIFECYCLE_STATE,CLASSIFICATION,SECURITY_DOMAIN_ID,OWNER_PRINCIPAL_ID,MEMORY_SCOPE "
         "FROM CX_MEMORY_VERSIONS WHERE VERSION_ID IN ({ids}) ORDER BY VERSION_ID FOR UPDATE",version_ids)
     return {str(row['version_id']):row for row in rows}
 
@@ -1595,8 +1622,8 @@ def record_usage(version_id: str, event_type: str, *, principal_id: Optional[str
     return event_id
 
 
-def _insert_version(tx: Any, version_id: str, family_id: str, number: int, request: VersionRequest, digest: str, actor: str, *, lifecycle_state: str = "ACTIVE") -> None:
-    tx.execute("INSERT INTO CX_MEMORY_VERSIONS (VERSION_ID,FAMILY_ID,VERSION_NUMBER,TITLE,BODY_TEXT,CONTENT_DIGEST,MEMORY_TYPE,MEMORY_SCOPE,LIFECYCLE_STATE,CLASSIFICATION,SOURCE_REF,SOURCE_DIGEST,OWNER_PRINCIPAL_ID,OWNER_AGENT_ID,WORKSPACE_ID,SECURITY_DOMAIN_ID,VALID_UNTIL,POLICY_VERSION,CREATED_BY,REASON,METADATA_JSON) VALUES (:version_id,:family_id,:version_number,:title,:body,:digest,:memory_type,:memory_scope,:lifecycle_state,:classification,:source_ref,:source_digest,:owner_principal_id,:owner_agent_id,:workspace_id,:security_domain_id,:valid_until,:policy_version,:actor,:reason,'{}')", {"version_id": version_id, "family_id": family_id, "version_number": number, "title": request.title, "body": request.body, "digest": digest, "memory_type": request.memory_type.upper(), "memory_scope": request.memory_scope.upper(), "lifecycle_state": _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state"), "classification": request.classification, "source_ref": request.source_ref, "source_digest": request.source_digest, "owner_principal_id": request.owner_principal_id, "owner_agent_id": request.owner_agent_id, "workspace_id": request.workspace_id, "security_domain_id": request.security_domain_id, "valid_until": request.valid_until, "policy_version": request.policy_version, "actor": actor, "reason": request.reason})
+def _insert_version(tx: Any, version_id: str, family_id: str, number: int, request: VersionRequest, digest: str, actor: str, *, lifecycle_state: str = "ACTIVE", metadata=None) -> None:
+    tx.execute("INSERT INTO CX_MEMORY_VERSIONS (VERSION_ID,FAMILY_ID,VERSION_NUMBER,TITLE,BODY_TEXT,CONTENT_DIGEST,MEMORY_TYPE,MEMORY_SCOPE,LIFECYCLE_STATE,CLASSIFICATION,SOURCE_REF,SOURCE_DIGEST,OWNER_PRINCIPAL_ID,OWNER_AGENT_ID,WORKSPACE_ID,SECURITY_DOMAIN_ID,VALID_UNTIL,POLICY_VERSION,CREATED_BY,REASON,METADATA_JSON) VALUES (:version_id,:family_id,:version_number,:title,:body,:digest,:memory_type,:memory_scope,:lifecycle_state,:classification,:source_ref,:source_digest,:owner_principal_id,:owner_agent_id,:workspace_id,:security_domain_id,:valid_until,:policy_version,:actor,:reason,:metadata)", {"version_id": version_id, "family_id": family_id, "version_number": number, "title": request.title, "body": request.body, "digest": digest, "memory_type": request.memory_type.upper(), "memory_scope": request.memory_scope.upper(), "lifecycle_state": _normal(lifecycle_state, LIFECYCLE_STATES, "lifecycle_state"), "classification": request.classification, "source_ref": request.source_ref, "source_digest": request.source_digest, "owner_principal_id": request.owner_principal_id, "owner_agent_id": request.owner_agent_id, "workspace_id": request.workspace_id, "security_domain_id": request.security_domain_id, "valid_until": request.valid_until, "policy_version": request.policy_version, "actor": actor, "reason": request.reason, "metadata": _json(metadata or {})})
     from .memory_quality import record_time, temporal_facts
     record_time(tx, version_id, temporal_facts(request.__dict__), actor=actor)
 

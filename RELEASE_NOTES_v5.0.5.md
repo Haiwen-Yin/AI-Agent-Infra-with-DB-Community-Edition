@@ -1,5 +1,26 @@
 # v5.0.5 release notes / 发布说明
 
+## 2026-11-12 maintenance / 维护修复
+
+External Agents can create/read independent private versioned Memory through
+`/api/gateway/memory` without joining a Channel. Fresh enrollment grants only
+OWNED Memory access. Current active Human primary owners can read with current
+read/Domain authority; former owners and sponsors alone cannot. Dashboard Agent
+management now exposes bounded business permission changes with reason, revision
+checks and retained history. Denied Knowledge writes return 403, business token
+scopes recheck RBAC, token expiry uses the database clock, and handled failures
+log safe correlation diagnostics. Existing shared-content review remains required.
+
+外部 Agent 可通过 `/api/gateway/memory` 写入、回读独立私有版本化记忆，无需加入
+频道；新注册只获得自身记忆权限。当前激活的人类主负责人凭读取和域权限查看，
+旧负责人及仅发起人不可查看。智能体管理增加业务权限入口，修改有原因、并发版本
+检查和历史记录。知识写入拒绝返回 403；令牌作用域核对实际 RBAC，有效期使用
+数据库时钟；已处理故障记录安全关联日志。共享内容仍需独立审核。
+
+VERSION remains 5.0.5; canonical filenames and the original release date stay
+unchanged. This maintenance excludes website, explainer and commercial materials.
+本次不变更版本号、规范文件名和原始发布日期，不调整官网、演示和商业材料。
+
 Update from v5.0.4; PostgreSQL adds a bounded native context-read migration.
 从 v5.0.4 升级；PostgreSQL 追加限定范围的原生上下文读迁移。已验证环境及边界见交付清单。
 

@@ -178,7 +178,8 @@ def capture_agent_knowledge_context(entity_id: str, agent_id: str, *, sharing_sc
     )
     if scope == "PRINCIPAL_PRIVATE":
         # Agent-private knowledge belongs to the producing Agent identity. The
-        # Human owner remains provenance/context, not an implicit reader.
+        # Current active Human primary-owner reads are checked dynamically;
+        # ownership never retargets the stored policy to that Human.
         target_principal = agent_id
         set_access_policy(entity_id, scope, target_principal, principal_id=target_principal, reason=reason, **policy_options)
     else:
@@ -271,13 +272,15 @@ def knowledge_access_predicate(entity_alias: str = "e", principal_expr: str = ":
     A SHARED marker alone does not identify any authorized recipient.
     Organization membership and closure are evaluated at read time.
     """
+    from .agent_permissions import owner_predicate
+    private_owner = owner_predicate("kap.PRINCIPAL_ID", principal_expr)
     entity_id = f"CAST({entity_alias}.ENTITY_ID AS VARCHAR(128))" if DATABASE_DIALECT == "postgresql" else f"{entity_alias}.ENTITY_ID"
     return f"""(/* SCOPE_CLAUSE: organization-aware knowledge policy */
       EXISTS (SELECT 1 FROM CX_KNOWLEDGE_ACCESS_POLICIES kap
        WHERE kap.ENTITY_ID={entity_id} AND kap.STATUS='ACTIVE'
          AND kap.VALID_FROM <= CURRENT_TIMESTAMP AND (kap.VALID_UNTIL IS NULL OR kap.VALID_UNTIL > CURRENT_TIMESTAMP)
          AND (kap.SCOPE_TYPE='PUBLIC_COMPANY'
-           OR (kap.SCOPE_TYPE='PRINCIPAL_PRIVATE' AND kap.PRINCIPAL_ID={principal_expr})
+           OR (kap.SCOPE_TYPE='PRINCIPAL_PRIVATE' AND (kap.PRINCIPAL_ID={principal_expr} OR {private_owner}))
            OR (kap.SCOPE_TYPE IN ('ORGANIZATION_SUBTREE','ORGANIZATION_LEVEL') AND EXISTS (
              SELECT 1 FROM CX_ORGANIZATION_MEMBERS kmem
              JOIN CX_ORGANIZATION_CLOSURE kcl ON kcl.DESCENDANT_ID=kmem.ORGANIZATION_ID

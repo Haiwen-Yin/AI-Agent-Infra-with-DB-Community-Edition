@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictBool
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -144,6 +144,11 @@ def _error_response(request: Request, status: int, code: str, message: str, retr
 
 @app.exception_handler(StarletteHTTPException)
 async def governed_http_error(request: Request, exc: StarletteHTTPException):
+    # Status/path/cause type are useful without logging bodies, credentials or
+    # database exception text. Correlation survives handled service failures.
+    logger.warning("HTTP failure correlation_id=%s status=%s path=%s cause=%s",
+                   _correlation_id(request), exc.status_code, request.url.path,
+                   type(exc.__cause__).__name__ if exc.__cause__ else "none")
     detail = exc.detail
     code = "HTTP_" + str(exc.status_code)
     message = "Request failed"
@@ -197,8 +202,8 @@ def _path_capability(path: str) -> Optional[str]:
         (("/api/agents/",), "agents"),
         (("/api/tasks", "/api/execution", "/ap/v1/agent/tasks"), "tasks"),
         (("/api/workspaces", "/api/work-contracts", "/api/handoffs", "/api/context/", "/api/context-publications", "/api/artifact-candidates", "/api/diagnostics/", "/api/agent-gateway/continuity/"), "workspaces"),
-        (("/api/knowledge",), "knowledge"),
-        (("/api/memory",), "memory"),
+        (("/api/knowledge", "/api/gateway/knowledge", "/api/agent-gateway/knowledge"), "knowledge"),
+        (("/api/memory", "/api/gateway/memory", "/api/agent-gateway/memory"), "memory"),
         (("/api/skills", "/api/skill", "/api/agent/skills"), "skills"),
         (("/api/specs",), "specs"),
         (("/api/branches", "/api/branch"), "branches"),
@@ -1470,6 +1475,20 @@ class PermissionOverrideBody(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class AgentPermissionBody(PermissionOverrideBody):
+    expected_permission_version: int = Field(ge=0)
+
+
+class GatewayMemoryBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=200000)
+    memory_type: str = Field(default="EPISODIC", max_length=32)
+    classification: str = Field(default="INTERNAL", max_length=32)
+    reason: str = Field(default="Agent private Memory", max_length=1600)
+    idempotency_key: str = Field(min_length=8, max_length=256)
+
+
 class ActionCardBody(BaseModel):
     action_type: str = Field(min_length=1, max_length=64)
     payload: Dict[str, Any] = Field(default_factory=dict)
@@ -2268,12 +2287,13 @@ def _set_session_cookie(response: Response, session: Dict[str, str], scope: str 
     )
 
 
-def _shell() -> FileResponse:
+def _shell() -> HTMLResponse:
     for path in (DIST_ROOT / "index.html", WEB_ROOT / "index.html"):
         if path.is_file():
-            # The shell contains the hashed UI bundle reference. Avoid keeping
-            # an old shell after a controlled platform upgrade.
-            return FileResponse(path, headers={"Cache-Control": "no-store"})
+            # A shared frontend rebuild may omit its build-time product tag.
+            # Bind the installed identity before the UI chooses its logo.
+            return HTMLResponse(product_identity.web_shell(path.read_text(encoding="utf-8")),
+                                headers={"Cache-Control": "no-store"})
     raise HTTPException(status_code=503, detail="Web assets are not built")
 
 
@@ -2330,12 +2350,12 @@ def readiness(response: Response) -> Dict[str, Any]:
 @app.get("/app")
 @app.get("/app/", include_in_schema=False)
 @app.get("/app/{page}")
-def shell(page: str = "monitor") -> FileResponse:
+def shell(page: str = "monitor") -> HTMLResponse:
     return _shell()
 
 
 @app.get("/register", include_in_schema=False)
-def registration_page() -> FileResponse:
+def registration_page() -> HTMLResponse:
     """Use one entry-independent registration surface for both consoles."""
     return _shell()
 
@@ -5433,6 +5453,30 @@ def agents(page_size: int = 20, cursor: str = "", session: Dict[str, Any] = Depe
         raise HTTPException(status_code=503, detail="Agent authorization scope is unavailable") from exc
 
 
+@app.get("/api/agents/{agent_id}/permissions")
+def agent_permissions_get(agent_id: str, session: Dict[str, Any] = Depends(require_action("agents.read"))):
+    from lib import agent_permissions
+    try:
+        return agent_permissions.inventory(str(session["principal_id"]), agent_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Agent permissions are unavailable") from exc
+
+
+@app.post("/api/agents/{agent_id}/permissions")
+def agent_permissions_set(agent_id: str, body: AgentPermissionBody,
+                          session: Dict[str, Any] = Depends(require_action("agents.read"))):
+    from lib import agent_permissions
+    try:
+        return agent_permissions.change(str(session["principal_id"]), agent_id, body.resource_action,
+                                        body.effect, body.data_scope, body.reason, body.expected_permission_version)
+    except agent_permissions.PermissionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Agent permission change was denied") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/api/monitor/agents-page")
 def monitor_agents_page(page_size: int = 20, cursor: str = "", session: Dict[str, Any] = Depends(require_action("agents.read"))) -> Dict[str, Any]:
     module = _optional_module("monitor_api")
@@ -6432,9 +6476,14 @@ def gateway_token(body: GatewayTokenBody) -> Dict[str, Any]:
     if not credential:
         raise HTTPException(status_code=401, detail="Agent credential is invalid")
     requested = body.scopes or ["channels.read", "channels.write"]
-    allowed = {"channels.read", "channels.write", "barriers.arrive", "actions.propose", "events.read", "compliance.evidence", "compliance.remediation", "embedding.probe", "embedding.generate", "database.endpoint", "skills.read", "tools.read", "memory.propose", "knowledge.read", "knowledge.write", "workspaces.read", "workspaces.write", "agents.operate"}
+    allowed = {"channels.read", "channels.write", "barriers.arrive", "actions.propose", "events.read", "compliance.evidence", "compliance.remediation", "embedding.probe", "embedding.generate", "database.endpoint", "skills.read", "tools.read", "memory.propose", "memory.read", "memory.write", "knowledge.read", "knowledge.write", "workspaces.read", "workspaces.write", "agents.operate"}
     if not set(requested) <= allowed:
         raise HTTPException(status_code=403, detail="Requested Agent scope is not allowed")
+    from lib import agent_permissions
+    try:
+        agent_permissions.require_business_scopes(body.agent_id, requested)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not instance_id:
         try:
             instance = agent_gateway_api.create_instance(
@@ -6456,7 +6505,7 @@ def gateway_token(body: GatewayTokenBody) -> Dict[str, Any]:
         # included; the endpoint resolver applies the enrollment-grant scope.
         issued["database_endpoint"] = platform_agent_pool.discover_agent_endpoint(body.agent_id)
         return issued
-    except agent_gateway_api.GatewayError as exc:
+    except (agent_gateway_api.GatewayError, PermissionError) as exc:
         raise HTTPException(status_code=403, detail="Agent token could not be issued") from exc
 
 
@@ -6811,6 +6860,46 @@ def gateway_memory_candidate(channel_id: str, body: MemoryCandidateBody, request
         raise HTTPException(status_code=503, detail="Memory candidate service unavailable") from exc
 
 
+@app.post("/api/gateway/memory")
+@app.post("/api/agent-gateway/memory")
+@_gateway_request_context
+def gateway_memory_create(body: GatewayMemoryBody, request: Request):
+    from lib import agent_memory
+    context = _gateway_context(request, "memory.write", operation="memory.write", attach_agent_database_context=False)
+    try:
+        return agent_memory.create(context, {"title": body.title, "body": body.content,
+                                            "memory_type": body.memory_type.upper(),
+                                            "classification": body.classification.upper(), "reason": body.reason}, body.idempotency_key)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Private Memory write was denied") from exc
+    except memory_lifecycle.MemoryLifecycleError as exc:
+        status = 409 if exc.code == "IDEMPOTENCY_CONFLICT" else 422
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Agent Memory service unavailable") from exc
+
+
+@app.get("/api/gateway/memory/{family_id}")
+@app.get("/api/agent-gateway/memory/{family_id}")
+@_gateway_request_context
+def gateway_memory_get(family_id: str, request: Request):
+    from lib import agent_memory
+    context = _gateway_context(request, "memory.read", operation="memory.read", attach_agent_database_context=False)
+    try:
+        result = agent_memory.get(context, family_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Memory is unavailable")
+        return {"memory": result}
+    except HTTPException:
+        raise
+    except (PermissionError, memory_lifecycle.MemoryLifecycleError) as exc:
+        raise HTTPException(status_code=404, detail="Memory is unavailable") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Agent Memory service unavailable") from exc
+
+
 @app.post("/api/gateway/knowledge")
 @_gateway_request_context
 def gateway_knowledge_create(body: GatewayKnowledgeBody, request: Request) -> Dict[str, Any]:
@@ -6841,6 +6930,8 @@ def gateway_knowledge_create(body: GatewayKnowledgeBody, request: Request) -> Di
             "entity_id": str(entity_id), "agent_id": str(context["agent_id"]),
             "sharing_scope": scope, "knowledge_context": knowledge_api.get_knowledge_context(str(entity_id)),
         }
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Agent knowledge creation was denied") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:

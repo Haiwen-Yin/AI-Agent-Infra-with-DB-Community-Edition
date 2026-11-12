@@ -54,6 +54,19 @@ def identity(root: Path | None = None) -> dict[str, Any]:
     }
 
 
+def web_shell(document: str, root: Path | None = None) -> str:
+    """Bind every SPA entry to the installed product, including shared UI bundles."""
+    payload = json.dumps(identity(root), ensure_ascii=False).replace("<", "\\u003c")
+    document = re.sub(
+        r'<script\b(?=[^>]*\bid=[\'\"]cx-product-identity[\'\"])[^>]*>.*?</script\s*>\n?',
+        '', document, flags=re.S | re.I,
+    )
+    if document.count('</head>') != 1:
+        raise ValueError('Web shell requires exactly one head boundary')
+    return document.replace('</head>',
+        '<script type="application/json" id="cx-product-identity">' + payload + '</script>\n</head>', 1)
+
+
 def release_product(manifest: dict[str, Any]) -> dict[str, Any]:
     """Validate archive identity without importing drivers or trusting its label."""
     version = str(manifest.get("version") or "")

@@ -47,6 +47,30 @@
 
 ## 外部 Agent 注册和协作
 
+独立私有记忆使用 `POST /api/gateway/memory` 和
+`GET /api/gateway/memory/{family_id}`，也支持 `/api/agent-gateway/memory`。
+申请 `memory.read` / `memory.write` 作用域，提交 `title`、`content`、可选的
+`memory_type`、`classification`、`reason`，以及必填的 8–256 字符 `idempotency_key`。
+不接受客户端指定归属、Agent、安全域或频道；这些信息绑定已认证实例。
+新注册只明确授予 OWNED 记忆读写，仍需激活和有效安全域成员资格，无需加入频道。
+创建返回 `family_id`、`version_id`、`version_number`、`lifecycle_state`；
+读取返回 `{"memory":{"family":...,"current":...}}`。同键同内容返回原始版本，
+同键不同内容返回 409；隔离内容保留审核证据，普通读取不可见。
+共享记忆继续走候选、独立审核、显式晋升流程。
+
+Dashboard“智能体管理 → 业务权限”使用 GET/POST
+`/api/agents/{agent_id}/permissions`，展示实际生效权限和直接授权。
+修改提交 `resource_action`、`effect`（`ALLOW`、`DENY`、`RESET`）、
+`data_scope: "OWNED"`、原因和读取时的 `expected_permission_version`。
+拥有 `agents.manage` 的当前负责人可管理自身记忆权限；权限管理员还可管理
+可见 Agent 的知识权限。旧覆盖记录到期保留，不覆盖历史。业务权限、安全域和
+原始来源权限分别检查。
+
+Agent 及具有读取和域权限的当前激活人类主负责人可读 Agent 私有记忆与知识；
+发起人、同组织人员和旧负责人不因这些关系获得私有读取权。
+知识仍使用 `/api/gateway/knowledge`，读取信封为 `{"knowledge":...}`，
+不是 `{"entity":...}`；不能用知识接口替代记忆。
+
 1. 授权的人用户使用 `POST /api/enrollment/grants` 创建范围受限的授权。在对应的 GET 路由读取授权。
 2. 外部运行时在 `POST /api/enrollment/redeem` 兑换一次性授权，私下存储任何一次性密钥或提供配置的公钥证明。
 3. 通过 `POST /api/gateway/activate` 完成凭据证明和激活。仅注册不授予模型、工具或数据访问权限。

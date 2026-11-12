@@ -64,7 +64,7 @@ _SENSITIVE_JSON_KEYS = frozenset({
 })
 _BOOTSTRAP_SCOPE_SET = frozenset({
     "channels.read", "channels.write", "barriers.arrive", "actions.propose",
-    "events.read",
+    "events.read", "memory.read", "memory.write", "memory.propose", "knowledge.read", "knowledge.write",
 })
 _RESPONSE_WRAPPER_FIELDS = frozenset({"status_code", "body"})
 
@@ -823,7 +823,8 @@ def validate_token_response(
 ) -> Dict[str, Any]:
     """Validate an instance-scoped bearer token without accepting its identity."""
     body = _response_body(response, "token response")
-    allowed = frozenset({"access_token", "agent_id", "instance_id", "scopes", "expires_at"})
+    allowed = frozenset({"access_token", "agent_id", "instance_id", "scopes", "expires_at",
+                         "expires_in", "lease_expires_at", "database_endpoint"})
     _reject_unknown(body, allowed, "token response")
     agent = _expected_identity(expected_agent_id, trusted_agent_id, "agent_id")
     instance = _expected_identity(expected_instance_id, trusted_instance_id, "instance_id")
@@ -836,7 +837,17 @@ def validate_token_response(
     expires_at = _optional_text(body.get("expires_at"), "response.expires_at", max_length=128)
     if not expires_at:
         raise FrameworkAdapterError("token response expiry is required")
-    return {"access_token": token, "agent_id": agent, "instance_id": instance, "scopes": scopes, "expires_at": expires_at}
+    result = {"access_token": token, "agent_id": agent, "instance_id": instance, "scopes": scopes, "expires_at": expires_at}
+    if "expires_in" in body:
+        ttl = _nonnegative_int(body["expires_in"], "response.expires_in")
+        if not ttl or ttl > 900:
+            raise FrameworkAdapterError("token lifetime is invalid")
+        result["expires_in"] = ttl
+    if "lease_expires_at" in body:
+        result["lease_expires_at"] = _optional_text(body["lease_expires_at"], "response.lease_expires_at", max_length=128)
+    # Database discovery has its own authenticated contract. Do not interpret
+    # or propagate endpoint payloads into framework message envelopes.
+    return result
 
 
 validate_access_token_response = validate_token_response

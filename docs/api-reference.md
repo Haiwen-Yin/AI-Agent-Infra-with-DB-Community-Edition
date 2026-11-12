@@ -70,6 +70,34 @@ existing sessions. Preconditions, request fields and recovery are in
 
 ## External Agent registration and collaboration
 
+Private Agent Memory uses `POST /api/gateway/memory` and
+`GET /api/gateway/memory/{family_id}` (also `/api/agent-gateway/memory`).
+Use `memory.read` / `memory.write` scopes and send `title`, `content`, optional
+`memory_type`, `classification`, `reason`, and a required 8–256 character
+`idempotency_key`. Owner, Agent, Domain and Channel fields are rejected: the
+server binds ownership and Domain from the authenticated instance. Registration
+explicitly grants only OWNED Memory read/write; activation and active Domain
+membership remain required. No Channel membership is required. Creation returns
+`family_id`, `version_id`, `version_number`, `lifecycle_state`; GET returns
+`{"memory":{"family":...,"current":...}}`. Identical retries reuse the original
+version; changed content with the same key returns 409. Quarantined content is
+retained for review and excluded from ordinary reads. Shared Memory continues
+through the existing candidate, independent review and promotion workflow.
+
+Dashboard **Agent management → Business permissions** uses GET/POST
+`/api/agents/{agent_id}/permissions`. Changes require `resource_action`, `effect`
+(`ALLOW`, `DENY`, `RESET`), `data_scope: "OWNED"`, reason and the returned
+`expected_permission_version`. Current owners with `agents.manage` can manage
+private Memory. Permission administrators can also manage a visible Agent's
+Knowledge access. Previous overrides remain as expired history. Effective
+permissions, Domain membership and original-source authority are independent checks.
+
+The Agent and its current active Human primary owner with read/Domain authority
+can read Agent-private Memory and Knowledge. Sponsors, organization peers and
+former owners gain no private access from those relationships. Knowledge uses
+`/api/gateway/knowledge`; its GET envelope is `{"knowledge":...}`, not
+`{"entity":...}`. Never use Knowledge to emulate Memory.
+
 1. An authorized Human creates a scoped grant with
    `POST /api/enrollment/grants`. Read grants at the corresponding GET route.
 2. The external runtime redeems the one-time grant at

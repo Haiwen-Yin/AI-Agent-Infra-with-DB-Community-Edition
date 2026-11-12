@@ -2400,6 +2400,8 @@ def redeem_enrollment(token: str, agent_id: str = "", *, runtime: str = "", envi
             {"agent_id": generated_agent_id, "grant_id": row["grant_id"]},
         )
         tx.execute("INSERT INTO CX_PRINCIPALS(PRINCIPAL_ID, PRINCIPAL_TYPE, STATUS) VALUES (:agent_id, 'AGENT', :status)", {"agent_id": generated_agent_id, "status": status})
+        from .agent_permissions import grant_enrollment_memory
+        grant_enrollment_memory(tx, generated_agent_id, row["owner_principal_id"])
         if _compliance_enabled():
             tx.execute(
                 "INSERT INTO CX_AGENT_POSTURES(POSTURE_ID, AGENT_ID, REGISTRATION_STATE, RUNTIME_STATE, POSTURE_STATE, "

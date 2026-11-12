@@ -16,6 +16,16 @@ change authorization behavior.
 
 ## Trust Boundary
 
+Independent private Memory uses `/api/gateway/memory`, not Knowledge or a
+Channel candidate. See [API reference](api-reference.md) for envelopes and scopes.
+Persist the returned `instance_id`; refresh tokens against that instance while
+its lease is active. Heartbeat renews the same instance without changing its ID.
+Use `expires_in` for the token duration; expiry timestamps use the database clock.
+Renew before expiry. A 401 requires reauthentication and lease reconciliation,
+not repeated registration. A 403 is a permission denial, 409 a conflict, and
+503 a service failure with a `correlation_id`. Do not retry denied Memory writes
+as Knowledge or repeatedly create instances.
+
 The Gateway, rather than the framework payload, is the authority for identity:
 
 - Enrollment binds a new Agent through a one-time user-issued Enrollment Token.
