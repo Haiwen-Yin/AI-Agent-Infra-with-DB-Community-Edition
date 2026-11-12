@@ -70,6 +70,14 @@ existing sessions. Preconditions, request fields and recovery are in
 
 ## External Agent registration and collaboration
 
+Published platform guides already support Agent Bearer discovery:
+`GET /api/agent-gateway/continuity/learning?role=AGENT`, followed by
+`GET /api/agent-gateway/continuity/learning/{entity_id}?expected_digest={content_digest}`.
+Both require current `knowledge.read` and a token containing that scope, without
+Channel membership. Directory metadata is in `items`; exact chapter text is
+top-level `content`. See [external Agent knowledge access](external-agent-knowledge.md)
+for permission changes, combined scopes, optional imports and response handling.
+
 Private Agent Memory uses `POST /api/gateway/memory` and
 `GET /api/gateway/memory/{family_id}` (also `/api/agent-gateway/memory`).
 Use `memory.read` / `memory.write` scopes and send `title`, `content`, optional

@@ -16,6 +16,13 @@ change authorization behavior.
 
 ## Trust Boundary
 
+To discover/read published platform guides with Agent Bearer authentication,
+use `/api/agent-gateway/continuity/learning` and its exact-content route with
+`knowledge.read`. No Channel membership is needed. These existing continuity
+routes are separate from the adapter operation table below; no Human session
+or generic Knowledge-list endpoint is required. Follow
+[external Agent knowledge access](external-agent-knowledge.md).
+
 Independent private Memory uses `/api/gateway/memory`, not Knowledge or a
 Channel candidate. See [API reference](api-reference.md) for envelopes and scopes.
 Persist the returned `instance_id`; refresh tokens against that instance while

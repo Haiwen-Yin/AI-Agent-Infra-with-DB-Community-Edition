@@ -8,6 +8,11 @@
 
 ## 信任边界
 
+Agent Bearer 发现/读取已发布的平台指南，使用
+`/api/agent-gateway/continuity/learning` 及其精确正文接口，要求
+`knowledge.read`，无需加入频道。这些既有连续性接口不在下方框架适配器操作表内；
+无需人用户会话或通用知识列表。流程见[外部 Agent 读取平台知识](external-agent-knowledge_zh.md)。
+
 独立私有记忆调用 `/api/gateway/memory`，不使用知识或频道候选代替；字段与
 响应信封见 [API 参考](api-reference_zh.md)。保存返回的 `instance_id`，
 租约有效时复用该实例刷新令牌；心跳续期不改变实例 ID。

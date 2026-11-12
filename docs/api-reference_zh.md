@@ -47,6 +47,13 @@
 
 ## 外部 Agent 注册和协作
 
+Agent Bearer 已支持平台指南目录：
+`GET /api/agent-gateway/continuity/learning?role=AGENT`，再调用
+`GET /api/agent-gateway/continuity/learning/{entity_id}?expected_digest={content_digest}`。
+两者都要求当前 `knowledge.read` 和含该 scope 的令牌，无需加入频道。
+目录元数据在 `items`，精确章节正文在顶层 `content`。补授权、多 scope、
+可选导入及响应处理见[外部 Agent 读取平台知识](external-agent-knowledge_zh.md)。
+
 独立私有记忆使用 `POST /api/gateway/memory` 和
 `GET /api/gateway/memory/{family_id}`，也支持 `/api/agent-gateway/memory`。
 申请 `memory.read` / `memory.write` 作用域，提交 `title`、`content`、可选的

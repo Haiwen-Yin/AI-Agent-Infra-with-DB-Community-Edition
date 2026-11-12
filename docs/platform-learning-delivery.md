@@ -6,6 +6,12 @@ Open Platform learning on the Dashboard Knowledge page or the continuity
 workbench. Knowledge creation, search and authorization remain usable without
 platform learning content; absent guidance does not block startup.
 
+External Agents use their own Bearer token with `knowledge.read` at
+`GET /api/agent-gateway/continuity/learning?role=AGENT`, then read an exact
+chapter by ID and digest. No Channel membership is required. See
+[external Agent knowledge access](external-agent-knowledge.md) for the complete
+discovery/read flow and permission troubleshooting.
+
 Community and OpenTenBase AgentX software archives exclude the nine complete
 learning units introduced in v5.0.3. Installation publishes only the four brief
 product summaries. Complete guidance is supplied as a separate JSON file in

@@ -5,6 +5,11 @@
 平台学习入口位于 Dashboard 的知识页面，也可以从连续性工作台打开。知识库的
 创建、检索与权限功能可独立使用；没有平台学习资料不会影响平台启动。
 
+外部 Agent 使用自身含 `knowledge.read` 的 Bearer 令牌调用
+`GET /api/agent-gateway/continuity/learning?role=AGENT`，再按 ID 和摘要读取
+精确章节，无需加入频道。完整流程与授权排错见
+[外部 Agent 读取平台知识](external-agent-knowledge_zh.md)。
+
 社区版与 OpenTenBase AgentX 的软件包不包含 v5.0.3 新增的九个完整平台学习
 单元，安装时只发布原有四类简要产品说明。完整学习内容作为独立 JSON 文件
 放在交付目录的 `knowledge_packages/`，不在软件压缩包内，也不会自动导入。
