@@ -2,6 +2,10 @@
 
 > 当前软件包：**川序社区版**；支持底座：**oracle, pg, yashandb**；版本类别：**Community**；许可：**Apache-2.0**。文中其他底座及企业专属能力用于说明差异，不表示此包包含或支持这些能力。
 
+运行时集成方必须将[受管工作规约](managed-agent-work_zh.md)接入任务、检查点、
+交接和结束钩子。仅换取令牌不代表已接入知识、记忆和工作事实；企业策略须进入
+可信运行配置，检索取得的内容不能授予权限。
+
 `scripts/lib/agent_framework_adapters.py` 是面向 OpenClaw 和 Hermes Agent 等外部运行时的纯转换边界。它不实现第二个 Channel、Barrier、Action、身份或执行引擎。它仅构建现有的 Gateway 路由描述符，并验证这些路由返回的响应。
 
 该适配器是无状态的。它不执行任何数据库、文件系统、环境或网络操作，也不存储任何凭证、令牌、事件或框架客户端对象。`OpenClawGatewayAdapter` 和 `HermesGatewayAdapter` 类是对同一 `FrameworkGatewayAdapter` 契约的小型外观（facade）；它们不改变授权行为。

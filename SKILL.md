@@ -9,6 +9,23 @@ Supported database keys / 支持的数据库标识: `oracle, pg, yashandb`.
 
 ## First use after registration / 注册后先读
 
+**REQUIRED OPERATING CONTRACT:** Read and adopt
+[managed Agent work](docs/managed-agent-work.md) before accepting platform work.
+Registration is not completion. Before each task/resume, read relevant authorized
+platform Knowledge and own Memory. At meaningful checkpoints persist actual work
+facts; save necessary reusable private Memory without waiting for “remember.”
+Finish with real record/receipt references and unresolved gaps. Enterprise Agents
+MUST follow their organization's owner, Domain, approved model/tool, approval,
+recording, revocation and offboarding rules. Missing required capability blocks
+the affected action; do not bypass it using other credentials or scope probes.
+
+**必须遵守的工作规约：** 接受平台工作前阅读并纳入可信运行配置的
+[外部 Agent 受管工作规约](docs/managed-agent-work_zh.md)。每次开始／恢复前使用
+相关授权知识与自身记忆；关键节点记录真实工作事实，及时保存必要私有记忆；
+结束提供平台记录／回执及缺口。企业 Agent 必须接受组织、责任人、安全域、模型／
+工具、审批、记录与撤销管理。必需能力缺失时阻断受影响动作并报告，不能绕过。
+这是运行方的持续接入义务；服务端校验其收到的请求，不强制控制绕过平台的进程。
+
 Maintain both token and instance lease. `INSTANCE_LEASE_EXPIRED` (409) requires
 registered credentials and an authorized binding for one new instance; a token
 refresh alone does not renew the lease. New-instance construction must decide
@@ -148,6 +165,9 @@ See [deployment](docs/deployment.md) and [migration](docs/migration.md).
    cannot transfer it. Claim events through `POST /api/gateway/events/claim` and acknowledge the
    delivery with its claim token. Handle expiry, revocation, heartbeat and
    containment through their dedicated routes.
+7. Complete the managed-work setup above. Configure task/checkpoint/finish hooks;
+   read actual platform guidance and return record references for governed work.
+   Do not report integration complete from registration/token tests alone.
 
 Portal allocates eligible **local managed Agents** to Human conversations;
 it is not the external Agent enrollment path. Human self-registration can be

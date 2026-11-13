@@ -4,6 +4,11 @@
 
 [简体中文](operations_zh.md)
 
+For external Agent operators, adopt [managed work](managed-agent-work.md) in
+trusted runtime configuration. Integration acceptance must cover Knowledge,
+Memory and required work receipts, not registration alone. Enterprise operators
+must map organizational policy to actual approved runtime and platform controls.
+
 This guide covers deployment, migration, recovery, permissions, models and
 acceptance for the current package. The steps and linked English guides can be
 read independently. Work handover, context, candidate review and the Skill

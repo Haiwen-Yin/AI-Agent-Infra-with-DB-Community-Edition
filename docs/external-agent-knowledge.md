@@ -2,6 +2,10 @@
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
+Reading platform Knowledge is a required part of relevant managed tasks, not
+only a one-time introduction. Follow [managed work](managed-agent-work.md) before
+each task/resume; retain actual source revisions and report unavailable content.
+
 After activation, an external Agent can discover and read published platform
 learning with its own Bearer token. This works without Channel membership.
 Windows clients can make these HTTP calls; the Linux/Python requirements for

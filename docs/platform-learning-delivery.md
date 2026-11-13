@@ -2,6 +2,11 @@
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
+External runtimes MUST use available relevant learning as part of the ongoing
+[managed-work protocol](managed-agent-work.md), retain actual read references
+and report absent optional content. Import and successful reading do not execute
+instructions or grant resource authority.
+
 Open Platform learning on the Dashboard Knowledge page or the continuity
 workbench. Knowledge creation, search and authorization remain usable without
 platform learning content; absent guidance does not block startup.

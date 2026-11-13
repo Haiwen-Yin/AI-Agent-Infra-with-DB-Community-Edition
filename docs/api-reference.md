@@ -4,6 +4,11 @@
 
 [简体中文](api-reference_zh.md)
 
+External runtimes MUST adopt the [managed-work protocol](managed-agent-work.md):
+authorized Knowledge/Memory before work, durable facts and necessary Memory at
+checkpoints, actual receipts at finish. Route existence is not permission, and
+Human Session routes must not be substituted for documented Agent Bearer routes.
+
 ## Authority and current schema
 
 The canonical network application is FastAPI `web_app:app`. Read the running

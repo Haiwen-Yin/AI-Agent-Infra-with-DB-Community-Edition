@@ -4,6 +4,10 @@
 
 [English](api-reference.md)
 
+外部运行时必须落实[受管工作规约](managed-agent-work_zh.md)：开始前查授权知识
+与记忆，检查点记录事实和必要记忆，结束核对真实回执。接口存在不等于授权，
+人用户会话接口不能替代文档明确的 Agent Bearer 入口。
+
 ## 权威性与当前模式
 
 统一 Web 入口是 FastAPI `web_app:app`。请阅读正在运行的服务的 `/openapi.json`（或在暴露的 `/docs` 中）以获取确切的方法、请求模式和响应模式。保留的 Dashboard/Portal 路由通过按请求隔离的兼容桥接传递，并且并非全部出现在 FastAPI 模式中。其实现位于

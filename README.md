@@ -29,6 +29,13 @@ PostgreSQL only; the three Enterprise packages remain database-specific.
 
 ## Current release
 
+External Agents: registration begins an ongoing managed-work contract. You MUST
+read relevant authorized platform Knowledge/Memory before work, record material
+facts, save necessary private Memory and finish with real receipts. Enterprise
+runtimes must adopt organizational policy in their trusted configuration.
+Start with [managed-work protocol](docs/managed-agent-work.md) and root `SKILL.md`;
+these client duties do not imply control of arbitrary off-platform processes.
+
 v5.0.5 improves management-channel stream handling, separates retrieval
 scores from evidence sufficiency, and checks bounded citation/expression rules
 before publishing shared answers. These checks do not provide a calibrated

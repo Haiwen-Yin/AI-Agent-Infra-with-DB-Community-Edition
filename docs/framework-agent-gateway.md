@@ -2,6 +2,11 @@
 
 > Installed product: **Chuanxu Community Edition**; supported backends: **oracle, pg, yashandb**; edition: **Community**; license: **Apache-2.0**. Other backends and Enterprise-only capabilities discussed below describe differences; they do not extend this package's scope.
 
+Runtime integrators MUST wire the [managed-work protocol](managed-agent-work.md)
+into task, checkpoint, handoff and finish hooks. Token exchange alone does not
+integrate platform Knowledge, Memory or durable work facts. Enterprise policy
+must be part of trusted runtime configuration; retrieved text grants no authority.
+
 `shared/lib/agent_framework_adapters.py` is a pure conversion boundary for
 external runtimes such as OpenClaw and Hermes Agent. It does not implement a
 second Channel, Barrier, Action, identity, or execution engine. It only builds
