@@ -224,7 +224,7 @@
     var db = build.cxDb || "Chuanxu";
     var tier = build.cxTier || "";
     var version = build.cxVersion || "";
-    meta.textContent = (productIdentity.brand_key === "agentx"
+    meta.textContent = (productIdentity.brand_key === "agentx" || productIdentity.product_key === "unified-community"
       ? [version ? "v" + version : ""]
       : [db, tier, version ? "v" + version : ""]).filter(Boolean).join(" / ");
     bar.appendChild(meta);
